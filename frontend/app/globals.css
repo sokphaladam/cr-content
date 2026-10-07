@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #e9edf3;
+  --color-panel: #ffffff;
+  --color-ink: #18202e;
+  --color-ink-soft: #5a6577;
+  --color-line: #d3d9e3;
+  --color-cobalt: #2f4fd8;
+  --color-cobalt-deep: #2340b8;
+  --color-caption: #ffd60a; /* same yellow the videos use for the spoken word */
+  --color-danger: #c0352b;
+  --color-ok: #1f8a4c;
+  --color-warn: #c79a00;
+
+  /* three-pane layout (library, editor, preview) from typical laptop width */
+  --breakpoint-wide: 73.75rem; /* 1180px */
+}
+
+@theme inline {
+  --font-display: var(--font-bricolage), var(--font-noto), sans-serif;
+  --font-sans: var(--font-noto), var(--font-noto-khmer), system-ui, sans-serif;
+  --font-khmer: var(--font-noto-khmer), var(--font-noto), sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-paper text-ink font-sans;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  :lang(km) {
+    font-family: var(--font-khmer);
+    line-height: 1.75;
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-cobalt);
+    outline-offset: 2px;
+  }
+  mark {
+    @apply bg-caption text-ink;
+    padding: 0 0.15em;
+  }
+}
+
+@layer components {
+  .field-input {
+    @apply w-full rounded-md border border-line bg-panel px-3 py-2 text-ink;
+  }
+  .field-input:focus {
+    @apply border-cobalt outline-none;
+    box-shadow: 0 0 0 3px rgb(47 79 216 / 0.18);
+  }
+  .field-label {
+    @apply text-[13px] font-semibold text-ink-soft;
+  }
+  .btn {
+    @apply inline-flex cursor-pointer items-center gap-2 rounded-md border border-line bg-panel px-4 py-3 text-[14.5px] leading-none font-semibold text-ink no-underline;
+  }
+  .btn:hover {
+    @apply border-ink-soft;
+  }
+  .btn:disabled {
+    @apply cursor-progress opacity-55;
+  }
+  .btn-primary {
+    @apply border-cobalt bg-cobalt text-white;
+  }
+  .btn-primary:hover {
+    @apply border-cobalt-deep bg-cobalt-deep;
+  }
+  .btn-ghost {
+    @apply bg-transparent;
+  }
+  .btn-small {
+    @apply px-3 py-[7px] text-[13px];
+  }
+  .btn-link {
+    @apply border-transparent bg-transparent text-cobalt;
+  }
+  .btn-link:hover {
+    @apply border-line;
+  }
+  .btn-danger {
+    @apply bg-transparent text-danger;
+  }
+  .btn-danger:hover {
+    @apply border-danger;
+  }
+  .spinner {
+    @apply inline-block size-[13px] animate-spin rounded-full border-2 border-current border-r-transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+  }
+}

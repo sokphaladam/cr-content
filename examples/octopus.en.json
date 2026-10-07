@@ -1,0 +1,13 @@
+{
+  "title": "Octopuses Are Basically Aliens",
+  "scenes": [
+    {"narration": "This animal has three hearts, blue blood, and nine brains.", "visual_query": "octopus underwater", "on_screen_text": "3 hearts?!"},
+    {"narration": "Meet the octopus. Two of its hearts pump blood to the gills, and the third pumps it to the rest of the body.", "visual_query": "octopus swimming", "on_screen_text": "Fact #1"},
+    {"narration": "Its blood is blue because it uses copper instead of iron to carry oxygen.", "visual_query": "deep blue ocean", "on_screen_text": "Fact #2"},
+    {"narration": "Each of its eight arms has its own mini brain, so an arm can keep exploring even when the main brain is busy.", "visual_query": "coral reef", "on_screen_text": "Fact #3"},
+    {"narration": "And it can change color in less than a second, even though scientists believe it is color blind.", "visual_query": "reef fish colorful", "on_screen_text": "Fact #4"},
+    {"narration": "Which fact surprised you most? Follow for more weird animal facts.", "visual_query": "ocean waves", "on_screen_text": ""}
+  ],
+  "caption": "Octopuses are way stranger than you think. Which fact blew your mind?",
+  "hashtags": ["octopus", "animalfacts", "ocean", "didyouknow", "science", "facts"]
+}

@@ -1,0 +1,11 @@
+{
+  "title": "អាថ៌កំបាំងអង្គរវត្ត",
+  "scenes": [
+    {"narration": "តើអ្នកដឹងទេ ថាអង្គរវត្ត ជាសំណង់សាសនា ធំជាងគេ នៅលើពិភពលោក?", "visual_query": "angkor wat temple", "on_screen_text": "អង្គរវត្ត"},
+    {"narration": "ប្រាសាទនេះ ត្រូវបានសាងសង់ នៅសតវត្សរ៍ទី១២ ក្រោមរជ្ជកាល ព្រះបាទសូរ្យវរ្ម័នទី២", "visual_query": "ancient temple stone", "on_screen_text": "សតវត្សរ៍ទី១២"},
+    {"narration": "ថ្មភក់រាប់លានដុំ ត្រូវបានដឹកជញ្ជូន តាមប្រឡាយទឹក ពីភ្នំគូលែន", "visual_query": "river jungle", "on_screen_text": "ថ្មរាប់លានដុំ"},
+    {"narration": "ចូលចិត្តវីដេអូនេះទេ? តាមដានយើង ដើម្បីដឹងរឿងប្លែកៗ ទៀត", "visual_query": "sunrise temple", "on_screen_text": ""}
+  ],
+  "caption": "អង្គរវត្ត មានអាថ៌កំបាំងច្រើនណាស់។ តើអ្នកធ្លាប់ទៅលេងទេ?",
+  "hashtags": ["អង្គរវត្ត", "cambodia", "angkorwat", "history", "khmer"]
+}

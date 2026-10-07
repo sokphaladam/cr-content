@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shorts Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Noto+Sans+Khmer:wght@400;600&family=Noto+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Shorts Studio home">
+      <span class="brand-mark" aria-hidden="true"></span>Shorts<span class="brand-hl">Studio</span>
+    </a>
+    <div class="keys" id="keys"></div>
+  </header>
+
+  <div class="shell">
+    <aside class="library" aria-label="Your videos">
+      <div class="library-head">
+        <h2>Your videos</h2>
+        <button class="btn btn-small" id="newBtn" type="button">New video</button>
+      </div>
+      <ul class="library-list" id="libraryList"></ul>
+    </aside>
+
+    <main class="workspace">
+      <!-- Step A: idea -->
+      <section id="createView" class="view">
+        <h1 class="display">What's the video about?</h1>
+        <form id="createForm" class="create-form">
+          <label class="sr-only" for="topic">Topic</label>
+          <textarea id="topic" rows="2" placeholder="3 weird facts about octopuses" required></textarea>
+
+          <div class="row">
+            <fieldset class="seg" aria-label="Language">
+              <legend class="field-label">Language</legend>
+              <label><input type="radio" name="lang" value="en" checked><span>English</span></label>
+              <label><input type="radio" name="lang" value="km"><span class="km">ខ្មែរ</span></label>
+            </fieldset>
+            <div class="field">
+              <label class="field-label" for="seconds">Length <output id="secondsOut">45 s</output></label>
+              <input type="range" id="seconds" min="15" max="90" step="5" value="45">
+            </div>
+            <div class="field">
+              <label class="field-label" for="sceneCount">Scenes <output id="sceneOut">6</output></label>
+              <input type="range" id="sceneCount" min="3" max="10" value="6">
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="style">Tone or audience <span class="opt">optional</span></label>
+            <input id="style" type="text" placeholder="Funny, for teenagers. Mention a local example.">
+          </div>
+
+          <div class="actions">
+            <button class="btn btn-primary" id="writeBtn" type="submit">Write script with Claude</button>
+            <button class="btn btn-ghost" id="blankBtn" type="button">Write it myself</button>
+          </div>
+          <p class="form-msg" id="createMsg" role="status"></p>
+        </form>
+      </section>
+
+      <!-- Step B: storyboard -->
+      <section id="editView" class="view" hidden>
+        <div class="edit-head">
+          <button class="btn btn-ghost btn-small" id="backBtn" type="button">Back to idea</button>
+          <div class="lang-switch">
+            <span class="lang-tag" id="editLang"></span>
+            <button class="btn btn-small" id="translateBtn" type="button"></button>
+          </div>
+        </div>
+        <p class="form-msg" id="translateMsg" role="status"></p>
+        <label class="sr-only" for="title">Title</label>
+        <input id="title" class="title-input" type="text" placeholder="Video title">
+
+        <ol class="scenes" id="scenes"></ol>
+        <button class="btn btn-ghost add-scene" id="addScene" type="button">Add scene</button>
+
+        <div class="post-fields">
+          <div class="field">
+            <label class="field-label" for="caption">Post caption</label>
+            <textarea id="caption" rows="2"></textarea>
+          </div>
+          <div class="field">
+            <label class="field-label" for="hashtags">Hashtags <span class="opt">separate with spaces</span></label>
+            <input id="hashtags" type="text">
+          </div>
+        </div>
+
+        <div class="render-bar">
+          <div class="field">
+            <label class="field-label" for="voice">Voice</label>
+            <div class="voice-row">
+              <select id="voice"></select>
+              <button class="btn btn-small listen-btn" id="listenVoice" type="button" aria-label="Listen to this voice">Listen</button>
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label" for="rate">Speed</label>
+            <select id="rate">
+              <option value="-10%">Slower</option>
+              <option value="+0%">Normal</option>
+              <option value="+5%" selected>Slightly fast</option>
+              <option value="+15%">Fast</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label" for="music">Music</label>
+            <select id="music"></select>
+          </div>
+          <button class="btn btn-primary" id="renderBtn" type="button">Render video</button>
+        </div>
+        <p class="form-msg" id="editMsg" role="status"></p>
+      </section>
+    </main>
+
+    <aside class="monitor" aria-label="Preview">
+      <div class="phone">
+        <div class="screen" id="screen">
+          <div class="screen-idle" id="screenIdle">
+            <p class="idle-line"><mark>Your video</mark> shows up here</p>
+          </div>
+          <div class="screen-progress" id="screenProgress" hidden>
+            <p class="progress-title" id="progressTitle"></p>
+            <ol class="steps" id="steps">
+              <li>Script</li><li>Voiceover</li><li>Footage</li><li>Captions</li><li>Final render</li>
+            </ol>
+            <pre class="log" id="log" aria-live="polite"></pre>
+          </div>
+          <video id="player" controls playsinline hidden></video>
+        </div>
+      </div>
+      <div class="post-card" id="postCard" hidden>
+        <pre id="postText"></pre>
+        <div class="post-actions">
+          <button class="btn btn-small" id="copyBtn" type="button">Copy caption</button>
+          <a class="btn btn-small btn-ghost" id="downloadBtn" download>Download mp4</a>
+          <button class="btn btn-small btn-danger" id="deleteBtn" type="button">Delete</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <template id="sceneTpl">
+    <li class="scene">
+      <div class="scene-num" aria-hidden="true"></div>
+      <div class="scene-media">
+        <button type="button" class="media-slot" aria-label="Choose background for this scene">
+          <span class="media-auto">Auto</span>
+        </button>
+      </div>
+      <div class="scene-body">
+        <label class="sr-only">Narration</label>
+        <textarea class="narration" rows="2" placeholder="What the voice says"></textarea>
+        <div class="scene-meta">
+          <label><span>Footage search</span><input class="visual" type="text" placeholder="e.g. octopus underwater"></label>
+          <label><span>Headline</span><input class="headline" type="text" placeholder="Optional"></label>
+        </div>
+        <div class="media-actions">
+          <button type="button" class="btn btn-small btn-ghost listen-btn scene-listen">Listen</button>
+          <button type="button" class="btn btn-small btn-ghost find-btn">Find footage</button>
+          <label class="btn btn-small btn-ghost upload-btn">Upload video or photo
+            <input type="file" class="upload-input sr-only" accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp">
+          </label>
+          <button type="button" class="btn btn-small btn-ghost clear-media" hidden>Use auto</button>
+          <span class="media-msg" role="status"></span>
+        </div>
+        <div class="picker" hidden>
+          <div class="picker-bar">
+            <div class="seg seg-small" role="group" aria-label="Media type">
+              <label><input type="radio" value="video" checked><span>Videos</span></label>
+              <label><input type="radio" value="photo"><span>Photos</span></label>
+            </div>
+            <input type="text" class="picker-q" aria-label="Search footage">
+            <button type="button" class="btn btn-small picker-go">Search</button>
+            <button type="button" class="btn btn-small btn-ghost ideas-btn">Ask Claude for ideas</button>
+          </div>
+          <div class="ideas"></div>
+          <ul class="results"></ul>
+          <p class="picker-credit">Free stock media. Click one to use it for this scene.</p>
+        </div>
+      </div>
+      <div class="scene-tools">
+        <button type="button" class="icon-btn up" aria-label="Move scene up">↑</button>
+        <button type="button" class="icon-btn down" aria-label="Move scene down">↓</button>
+        <button type="button" class="icon-btn remove" aria-label="Remove scene">×</button>
+      </div>
+    </li>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

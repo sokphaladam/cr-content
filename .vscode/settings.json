@@ -1,0 +1,8 @@
+{
+  // Console Ninja rewrites Next.js dev chunks but keeps the old Content-Length, so the browser
+  // truncates them and the UI never loads. Keep it off for Next.js in this project.
+  "console-ninja.toolsToEnableSupportAutomaticallyFor": {
+    "next.js": false,
+    "webpack": false
+  }
+}

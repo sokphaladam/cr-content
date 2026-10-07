@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Secrets (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Generated / local data (all recreated by the app)
+output/
+cache/
+uploads/
+drafts/
+*.tmp
+
+# Your own media: drop files in, they stay on this PC
+assets/music/*
+assets/footage/*
+assets/fonts/*
+!assets/*/.gitkeep
+
+# Editors and OS
+.vscode/*
+!.vscode/launch.json
+!.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log

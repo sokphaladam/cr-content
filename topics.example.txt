@@ -1,0 +1,4 @@
+# One topic per line. Run: python make.py --batch topics.example.txt
+3 weird facts about octopuses
+Why the Eiffel Tower grows in summer
+The deadliest volcano eruption in history

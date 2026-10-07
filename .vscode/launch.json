@@ -1,0 +1,71 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Web UI",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/app.py",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Example EN (no API key)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/make.py",
+      "args": [
+        "--script",
+        "examples/octopus.en.json"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Example KM (no API key)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/make.py",
+      "args": [
+        "--script",
+        "examples/angkor.km.json",
+        "--lang",
+        "km"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Topic (asks for topic)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/make.py",
+      "args": [
+        "${input:topic}",
+        "--lang",
+        "${input:lang}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "topic",
+      "type": "promptString",
+      "description": "Video topic",
+      "default": "3 weird facts about octopuses"
+    },
+    {
+      "id": "lang",
+      "type": "pickString",
+      "description": "Language",
+      "options": [
+        "en",
+        "km"
+      ],
+      "default": "en"
+    }
+  ]
+}
