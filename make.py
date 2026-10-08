@@ -8,6 +8,10 @@ Examples:
   python make.py --script output/<job>/script.json --to km   (translate, then render)
   python make.py --import examples/pasted-octopus.txt      (any pasted script format)
   python make.py --voices km
+  python make.py "summer love in Phnom Penh" --song --style "dreamy synth-pop" --seconds 40
+  python make.py --song-file output/<job>/song.json          (re-compose an edited song)
+  python make.py "..." --song --video                          (song + karaoke music video)
+  python make.py --music-video output/<job>                    (music video from a composed song)
 """
 import argparse
 import sys
@@ -37,11 +41,34 @@ def main() -> int:
     p.add_argument("--script-only", action="store_true", help="only write the script, to review/edit first")
     p.add_argument("--batch", type=Path, help="text file with one topic per line")
     p.add_argument("--voices", metavar="PREFIX", help="list available voices, e.g. 'km' or 'en-US'")
+    p.add_argument("--song", action="store_true",
+                   help="write and compose an original AI song about the topic (ElevenLabs Music)")
+    p.add_argument("--song-file", type=Path, metavar="JSON", help="compose from an existing song.json (no Claude call)")
+    p.add_argument("--vocal", default="", help="singer voice for --song, e.g. 'breathy female pop vocal'")
+    p.add_argument("--no-stems", action="store_true", help="skip vocal/instrumental stem separation")
+    p.add_argument("--video", action="store_true", help="with --song/--song-file: also render the music video")
+    p.add_argument("--music-video", type=Path, metavar="JOB_DIR",
+                   help="render a music video from an already composed song folder (output/<job>)")
     args = p.parse_args()
+
+    if args.music_video:
+        from crcontent.pipeline import make_music_video
+        make_music_video(args.music_video)
+        return 0
 
     if args.voices:
         from crcontent.tts import list_voices
         print("\n".join(list_voices(args.voices)))
+        return 0
+
+    if args.song or args.song_file:
+        if not args.topic and not args.song_file:
+            p.error("--song needs a topic (or use --song-file JSON)")
+        from crcontent.pipeline import make_music_video, make_song
+        mix = make_song(args.topic, song_path=args.song_file, lang=args.lang, seconds=args.seconds, style=args.style,
+                        vocal=args.vocal, stems=not args.no_stems, script_only=args.script_only)
+        if args.video and not args.script_only:
+            make_music_video(mix.parent)
         return 0
 
     from crcontent.pipeline import make_video

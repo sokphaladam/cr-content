@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Film, Plus } from "lucide-react";
+import { FileText, Film, Music, Plus } from "lucide-react";
 import { fileUrl, outputUrl, type DraftSummary, type VideoSummary } from "@/lib/api";
 import { isImagePath, langCode, relativeTime } from "@/lib/format";
 import { Button, Tabs } from "./ui";
@@ -139,8 +139,13 @@ export function Library({
                 onClick={() => onSelectVideo(v.name)}
                 title={v.title}
                 lang={v.lang}
-                meta={v.video ? relativeTime(v.created) : "script only"}
-                thumb={<Thumb src={v.thumb ? `${outputUrl(v.name, "thumbnail.jpg")}?v=${v.thumb_v}` : undefined} fallback={<Film className="size-4" />} />}
+                meta={v.video || v.audio ? `${v.kind === "song" ? "song, " : ""}${relativeTime(v.created)}` : "script only"}
+                thumb={
+                  <Thumb
+                    src={v.thumb ? `${outputUrl(v.name, "thumbnail.jpg")}?v=${v.thumb_v}` : undefined}
+                    fallback={v.kind === "song" ? <Music className="size-4" /> : <Film className="size-4" />}
+                  />
+                }
               />
             ))
           ))}

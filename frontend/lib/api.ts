@@ -17,14 +17,36 @@ export interface VideoScript {
   hashtags: string[];
 }
 
+export interface SongSection {
+  name: string; // "Verse 1", "Chorus"...
+  lyrics: string[]; // sung lines; [] = instrumental
+  styles: string[];
+  seconds: number;
+  visual_query: string;
+}
+
+export interface SongScript {
+  title: string;
+  genre: string;
+  mood: string;
+  bpm: number;
+  vocal: string; // description of the singing voice
+  styles: string[];
+  avoid: string[];
+  sections: SongSection[];
+  caption: string;
+  hashtags: string[];
+}
+
 export interface Options {
   langs: Record<Lang, { name: string; voices: string[] }>;
   music: string[];
-  keys: { anthropic: boolean; stock: "" | "pexels" | "pixabay" };
+  keys: { anthropic: boolean; stock: "" | "pexels" | "pixabay"; elevenlabs: boolean };
 }
 
 export interface Job {
   id: string;
+  kind?: "song" | "song_video";
   status: "queued" | "running" | "done" | "error";
   step: number;
   log: string[];
@@ -38,17 +60,39 @@ export interface VideoSummary {
   title: string;
   lang: Lang;
   created: string;
+  kind: "video" | "song";
   video: boolean;
+  audio: boolean; // song.mp3 exists
   thumb: boolean;
   thumb_v: number; // changes when the thumbnail is redrawn (cache buster)
 }
 
 export interface VideoDetail extends VideoSummary {
   script: VideoScript | null;
+  song: SongScript | null;
+  stems: { vocals?: string; instrumental?: string }; // files inside the output folder
   post: string;
   duration: number; // seconds
   thumb_text: string; // headline last used for the thumbnail
   thumb_at: number; // seconds into the video of the thumbnail frame
+  thumb_style: ThumbStyle;
+  thumb_emphasis: string; // word(s) highlighted in the headline ("" = automatic)
+  thumb_suggestions: ThumbSuggestions | null; // last "Suggest covers" result
+}
+
+export type ThumbStyle = "bold" | "box" | "stacked";
+
+export interface ThumbSuggestion {
+  text: string;
+  emphasis: string;
+  style: ThumbStyle;
+  at: number;
+  file: string; // preview image inside the video's output folder
+}
+
+export interface ThumbSuggestions {
+  items: ThumbSuggestion[];
+  note: string; // set when Claude wasn't available and headlines came from the script
 }
 
 export interface StockResult {
@@ -138,6 +182,12 @@ export const api = {
   },
   render: (body: { script: VideoScript; topic: string; lang: Lang; voice: string; rate: string; music: string; draft_id: string }) =>
     request<{ id: string }>("/api/render", { method: "POST", json: body, timeout: 0 }),
+  writeSong: (body: { topic: string; lang: Lang; seconds: number; style: string; vocal: string }) =>
+    request<SongScript>("/api/song/write", { method: "POST", json: body, timeout: 0 }),
+  composeSong: (body: { song: SongScript; topic: string; lang: Lang; stems: boolean }) =>
+    request<{ id: string }>("/api/song/compose", { method: "POST", json: body, timeout: 0 }),
+  musicVideo: (name: string) =>
+    request<{ id: string }>(`/api/videos/${encodeURIComponent(name)}/music-video`, { method: "POST", timeout: 0 }),
   drafts: () => request<DraftSummary[]>("/api/drafts"),
   draft: (id: string) => request<DraftData & { id: string }>(`/api/drafts/${encodeURIComponent(id)}`),
   createDraft: (d: DraftData) => request<{ id: string; updated: string }>("/api/drafts", { method: "POST", json: d }),
@@ -147,8 +197,10 @@ export const api = {
   job: (id: string) => request<Job>(`/api/jobs/${id}`),
   videos: () => request<VideoSummary[]>("/api/videos"),
   video: (name: string) => request<VideoDetail>(`/api/videos/${encodeURIComponent(name)}`),
-  makeThumbnail: (name: string, text: string, at: number) =>
-    request<VideoSummary>(`/api/videos/${encodeURIComponent(name)}/thumbnail`, { method: "POST", json: { text, at }, timeout: 60_000 }),
+  makeThumbnail: (name: string, cover: { text: string; at: number; style: ThumbStyle; emphasis: string }) =>
+    request<VideoSummary>(`/api/videos/${encodeURIComponent(name)}/thumbnail`, { method: "POST", json: cover, timeout: 60_000 }),
+  suggestThumbnails: (name: string) =>
+    request<ThumbSuggestions>(`/api/videos/${encodeURIComponent(name)}/thumbnail/suggest`, { method: "POST", timeout: 0 }),
   deleteVideo: (name: string) => request<unknown>(`/api/videos/${encodeURIComponent(name)}`, { method: "DELETE" }),
   /** Returns an mp3 blob for the voice preview. */
   speak: async (text: string, voice: string, rate: string): Promise<Blob> => {

@@ -78,6 +78,12 @@ the `Visual / On-screen text / Voiceover` layout. CLI: `python make.py --import 
 and hashtags in the other language with Claude, keeping every scene's background. Render it as a new video;
 the original stays in the library.
 
+**Thumbnail → Suggest covers** (on a rendered video) scores frames for sharpness, colour, contrast and exposure,
+asks Claude for 4 short click-worthy headlines (numbers, questions, bold claims), and renders each on a top frame
+in a different style (Bold / Box / Stacked) with its key word highlighted. Click one to use it, then fine-tune the
+headline, highlighted word, style or frame. Without Claude the headlines come from the script. New renders also
+pick the best-looking frame for the default cover automatically.
+
 Uploads are stored in `uploads/`, downloaded stock in `cache/stock/`. Past videos are in the left sidebar (preview, copy caption, download, delete).
 In VS Code: Run and Debug → **Web UI** → F5.
 
@@ -99,10 +105,35 @@ Each run creates `output/<time>-<lang>-<slug>/` with:
 |---|---|
 | `video.mp4` | 1080×1920, H.264, ready to upload |
 | `post.txt` | title, caption, hashtags to paste |
-| `thumbnail.jpg` | cover frame |
+| `thumbnail.jpg` | cover: best-looking frame + headline (`suggest/` holds cover ideas from the web UI) |
 | `script.json` | editable script, re-render with `--script` |
 
 Background music: drop royalty-free `.mp3` files into `assets/music/` (one is picked at random and ducked under the voice), or pass `--music file.mp3` / `--music none`.
+
+## AI songs and music videos
+
+Claude writes original lyrics, ElevenLabs Music composes and sings them, and the song becomes a vertical music video
+with footage cut on the beat and karaoke lyrics. In the web UI: **New video → Make a song**, compose, then
+**Make music video**. Needs `ELEVENLABS_API_KEY` in `.env` (an ElevenLabs plan with Music API access).
+
+```powershell
+.venv\Scripts\python make.py "summer love in Phnom Penh" --song --style "dreamy synth-pop" --seconds 40 --video
+.venv\Scripts\python make.py "..." --song --script-only           # write lyrics only, edit song.json, then:
+.venv\Scripts\python make.py --song-file output\<job>\song.json --video
+.venv\Scripts\python make.py --music-video output\<job>            # (re-)render the video of a composed song
+```
+
+For accurate lyric timing and beat detection, install the optional extras (an NVIDIA GPU makes timing much faster):
+
+```powershell
+.venv\Scripts\python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+.venv\Scripts\python -m pip install -r requirements-music.txt
+```
+
+Without them, lyrics are spread evenly over each section and cuts follow the song's bpm. Timing uses the
+vocals stem, so keep "split vocals and instrumental" on when composing. `WHISPER_MODEL` in `.env` overrides the
+alignment model (default `medium` on GPU, `base` on CPU). Describe a sound, not a real singer: lyrics and styles
+never name real artists, and `post.txt` notes the music is AI-generated.
 
 ## Layout
 
@@ -113,6 +144,10 @@ Background music: drop royalty-free `.mp3` files into `assets/music/` (one is pi
 | `crcontent/visuals.py` | Pexels search/download (cached), local footage, gradient fallback |
 | `crcontent/captions.py` | Word-highlight `.ass` captions and scene headlines |
 | `crcontent/render.py` | FFmpeg scene clips, concat, burn-in, music ducking |
+| `crcontent/lyrics.py` | Claude prompt + schema for original songs (sections, lyrics, sound) |
+| `crcontent/song.py` | ElevenLabs Music: compose + vocal/instrumental stems |
+| `crcontent/align.py` | Lyric timing (stable-ts forced alignment, even-spacing fallback) |
+| `crcontent/beats.py` | Beat detection and beat-synced shot plan |
 | `crcontent/web.py` + `web/` | FastAPI backend and the browser UI |
 | `crcontent/config.py` | Voices, fonts, sizes per language |
 

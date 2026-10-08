@@ -20,11 +20,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import drafts
+from .captions import THUMB_STYLES
 from .config import ASSETS_DIR, CACHE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT
-from .pipeline import make_thumbnail, make_video
+from .lyrics import SongScript, generate_song
+from .pipeline import make_music_video, make_song, make_thumbnail, make_video, suggest_thumbnails
 from .render import duration
 from .importer import import_script
 from .script import VideoScript, generate_script, suggest_queries, translate_script
+from .song import elevenlabs_key
 from .tts import list_voices, synthesize
 from .visuals import IMAGE_EXTS, VIDEO_EXTS, download_stock, project_path, search, stock_source
 
@@ -85,6 +88,7 @@ def options():
         "keys": {
             "anthropic": bool(os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-ant-")),
             "stock": stock_source(),
+            "elevenlabs": bool(elevenlabs_key()),
         },
     }
 
@@ -305,6 +309,110 @@ def render(req: RenderRequest):
     return {"id": job_id}
 
 
+# ---------- Songs (Claude lyrics -> ElevenLabs Music) ----------
+
+class SongWriteRequest(BaseModel):
+    topic: str
+    lang: str = "en"
+    seconds: int = 45
+    style: str = ""
+    vocal: str = ""
+
+
+class SongComposeRequest(BaseModel):
+    song: SongScript
+    topic: str = ""
+    lang: str = "en"
+    stems: bool = True
+
+
+@app.post("/api/song/write")
+def write_song(req: SongWriteRequest):
+    if req.lang not in LANGS:
+        raise HTTPException(400, f"Unknown language {req.lang}")
+    if not req.topic.strip():
+        raise HTTPException(400, "Enter what the song is about first.")
+    try:
+        song = generate_song(req.topic.strip(), lang=req.lang, seconds=max(10, min(180, req.seconds)),
+                             style=req.style, vocal=req.vocal)
+    except (anthropic.APIError, RuntimeError) as e:
+        raise _claude_error(e)
+    return song.model_dump()
+
+
+def _run_song(job_id: str, req: SongComposeRequest) -> None:
+    job = jobs[job_id]
+
+    def log(line: str) -> None:
+        with jobs_lock:
+            job["log"].append(line)
+            if line.startswith("[") and "/2]" in line:
+                job["step"] = int(line[1])
+
+    with jobs_lock:
+        job["status"] = "running"
+    try:
+        mix = make_song(req.topic or req.song.title, song=req.song, lang=req.lang, stems=req.stems, log=log)
+        with jobs_lock:
+            job.update(status="done", step=2, video=mix.parent.name)
+    except Exception as e:
+        traceback.print_exc()
+        with jobs_lock:
+            job.update(status="error", error=str(e).strip().splitlines()[-1] if str(e).strip() else repr(e))
+
+
+@app.post("/api/song/compose")
+def compose_song(req: SongComposeRequest):
+    if req.lang not in LANGS:
+        raise HTTPException(400, f"Unknown language {req.lang}")
+    if not elevenlabs_key():
+        raise HTTPException(400, "Songs need an ElevenLabs key. Add ELEVENLABS_API_KEY to .env, then restart the engine.")
+    if not req.song.sections:
+        raise HTTPException(400, "The song has no sections.")
+    if not any(line.strip() for s in req.song.sections for line in s.lyrics):
+        raise HTTPException(400, "Write some lyrics first.")
+    job_id = uuid.uuid4().hex[:10]
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "song", "status": "queued", "step": 0, "log": [], "title": req.song.title}
+    renderer.submit(_run_song, job_id, req)
+    return {"id": job_id}
+
+
+def _run_music_video(job_id: str, folder: Path) -> None:
+    job = jobs[job_id]
+
+    def log(line: str) -> None:
+        with jobs_lock:
+            job["log"].append(line)
+            if line.startswith("[") and "/4]" in line:
+                job["step"] = int(line[1])
+
+    with jobs_lock:
+        job["status"] = "running"
+    try:
+        make_music_video(folder, log=log)
+        with jobs_lock:
+            job.update(status="done", step=4, video=folder.name)
+    except Exception as e:
+        traceback.print_exc()
+        with jobs_lock:
+            job.update(status="error", error=str(e).strip().splitlines()[-1] if str(e).strip() else repr(e))
+
+
+@app.post("/api/videos/{name}/music-video")
+def music_video(name: str):
+    """Render (or re-render) a composed song as a vertical music video with karaoke lyrics."""
+    folder = _video_dir(name)
+    if not (folder / "song.json").exists() or not (folder / "song.mp3").exists():
+        raise HTTPException(400, "Compose the song first.")
+    job_id = uuid.uuid4().hex[:10]
+    title = json.loads((folder / "song.json").read_text(encoding="utf-8")).get("title", name)
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "song_video", "status": "queued", "step": 0, "log": [], "title": title}
+    renderer.submit(_run_music_video, job_id, folder)
+    return {"id": job_id}
+
+
 @app.get("/api/jobs/{job_id}")
 def job_status(job_id: str):
     with jobs_lock:
@@ -364,8 +472,10 @@ def _summary(folder: Path) -> dict:
     if (folder / "meta.json").exists():
         meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
     title = folder.name
-    if (folder / "script.json").exists():
-        title = json.loads((folder / "script.json").read_text(encoding="utf-8")).get("title", title)
+    for name in ("script.json", "song.json"):
+        if (folder / name).exists():
+            title = json.loads((folder / name).read_text(encoding="utf-8")).get("title", title)
+            break
     lang = meta.get("lang") or (folder.name.split("-")[2] if folder.name.count("-") >= 2 else "en")
     created = meta.get("created") or datetime.fromtimestamp(folder.stat().st_mtime).isoformat(timespec="seconds")
     return {
@@ -373,7 +483,9 @@ def _summary(folder: Path) -> dict:
         "title": title,
         "lang": lang,
         "created": created,
+        "kind": meta.get("kind", "video"),
         "video": (folder / "video.mp4").exists(),
+        "audio": (folder / "song.mp3").exists(),
         "thumb": (folder / "thumbnail.jpg").exists(),
         # changes whenever the thumbnail is redrawn, so the UI can bust the browser cache
         "thumb_v": int((folder / "thumbnail.jpg").stat().st_mtime) if (folder / "thumbnail.jpg").exists() else 0,
@@ -394,15 +506,24 @@ def video_detail(name: str):
     data["script"] = VideoScript.load(folder / "script.json").model_dump() if (folder / "script.json").exists() else None
     data["post"] = (folder / "post.txt").read_text(encoding="utf-8") if (folder / "post.txt").exists() else ""
     meta = json.loads((folder / "meta.json").read_text(encoding="utf-8")) if (folder / "meta.json").exists() else {}
-    data["duration"] = round(duration(folder / "video.mp4"), 2) if data["video"] else 0
+    data["song"] = SongScript.load(folder / "song.json").model_dump() if (folder / "song.json").exists() else None
+    data["stems"] = {k: meta[k] for k in ("vocals", "instrumental") if meta.get(k)}
+    data["duration"] = (round(duration(folder / "video.mp4"), 2) if data["video"]
+                        else meta.get("duration", 0))
     data["thumb_text"] = meta.get("thumb_text", data["title"])
     data["thumb_at"] = meta.get("thumb_at", min(1.0, data["duration"] / 2))
+    data["thumb_style"] = meta.get("thumb_style", "bold")
+    data["thumb_emphasis"] = meta.get("thumb_emphasis", "")
+    saved = folder / "suggest" / "suggestions.json"
+    data["thumb_suggestions"] = json.loads(saved.read_text(encoding="utf-8")) if saved.exists() else None
     return data
 
 
 class ThumbnailRequest(BaseModel):
     text: str = ""
     at: float = 1.0
+    style: str = "bold"  # one of captions.THUMB_STYLES
+    emphasis: str = ""  # word(s) to highlight; "" = pick automatically
 
 
 @app.post("/api/videos/{name}/thumbnail")
@@ -412,11 +533,28 @@ def video_thumbnail(name: str, req: ThumbnailRequest):
         raise HTTPException(404, "This video hasn't been rendered.")
     lang = _summary(folder)["lang"]
     try:
-        make_thumbnail(folder, req.text[:120], req.at, lang)
+        make_thumbnail(folder, req.text[:120], req.at, lang,
+                       req.style if req.style in THUMB_STYLES else "bold", req.emphasis[:60])
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(500, f"Couldn't make the thumbnail: {str(e).strip().splitlines()[-1]}")
     return _summary(folder)
+
+
+@app.post("/api/videos/{name}/thumbnail/suggest")
+def video_thumbnail_suggest(name: str):
+    """Claude-written headlines on the best-looking frames, rendered as preview covers to pick from."""
+    folder = _video_dir(name)
+    if not (folder / "video.mp4").exists():
+        raise HTTPException(404, "This video hasn't been rendered.")
+    if not (folder / "script.json").exists():
+        raise HTTPException(400, "This video has no script.json to write headlines from.")
+    try:
+        items, note = suggest_thumbnails(folder, _summary(folder)["lang"])
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(500, f"Couldn't suggest thumbnails: {str(e).strip().splitlines()[-1]}")
+    return {"items": items, "note": note}
 
 
 @app.get("/api/videos/{name}/thumbnail.jpg")
@@ -433,6 +571,14 @@ def download_video(name: str):
     if not (folder / "video.mp4").exists():
         raise HTTPException(404, "This video hasn't been rendered.")
     return FileResponse(folder / "video.mp4", media_type="video/mp4", filename=f"{name}.mp4")
+
+
+@app.get("/api/videos/{name}/song")
+def download_song(name: str):
+    folder = _video_dir(name)
+    if not (folder / "song.mp3").exists():
+        raise HTTPException(404, "This song hasn't been composed.")
+    return FileResponse(folder / "song.mp3", media_type="audio/mpeg", filename=f"{name}.mp3")
 
 
 @app.delete("/api/videos/{name}")

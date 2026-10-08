@@ -2,10 +2,11 @@
 
 import { CircleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type DraftSummary, type Job, type Options, type VideoDetail, type VideoSummary } from "@/lib/api";
+import { api, type DraftSummary, type Job, type Lang, type Options, type SongScript, type VideoDetail, type VideoSummary } from "@/lib/api";
 import { CreateForm } from "@/components/CreateForm";
 import { Library, type LibraryTab } from "@/components/Library";
 import { PreviewPane, type PreviewView } from "@/components/PreviewPane";
+import { SongEditor } from "@/components/SongEditor";
 import { Storyboard, toDraft, toDraftData, type Draft, type SaveState } from "@/components/Storyboard";
 import { TopBar } from "@/components/TopBar";
 import { Drawer, ToastProvider, useToast } from "@/components/ui";
@@ -49,6 +50,12 @@ function Studio() {
   const [jobTitle, setJobTitle] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Song being edited (not autosaved; composing writes song.json into its output folder)
+  const [song, setSongState] = useState<{ song: SongScript; lang: Lang; topic: string } | null>(null);
+  const setSong = useCallback(
+    (update: (s: SongScript) => SongScript) => setSongState((cur) => (cur ? { ...cur, song: update(cur.song) } : cur)),
+    [],
+  );
   const poll = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Autosave bookkeeping. Saves run one after another so a burst of edits can't create duplicate drafts.
@@ -166,7 +173,15 @@ function Studio() {
       setDetail(d);
       setPreviewView("video");
       // Editing a rendered video's script starts a new draft on the first change; the video stays as it is.
-      if (openScript && d.script) await openDraft(toDraft(d.script, d.lang, ""), true);
+      if (openScript && d.script) {
+        setSongState(null);
+        await openDraft(toDraft(d.script, d.lang, ""), true);
+      }
+      // A song opens in the song editor; composing again makes a new output folder.
+      if (openScript && d.song) {
+        await closeDraft();
+        setSongState({ song: d.song, lang: d.lang, topic: "" });
+      }
     } catch (e) {
       toast((e as Error).message, "error");
     }
@@ -175,6 +190,7 @@ function Studio() {
   async function selectDraft(id: string) {
     try {
       const d = await api.draft(id);
+      setSongState(null);
       await openDraft(toDraft(d.script, d.lang, d.topic, { id, voice: d.voice, rate: d.rate, music: d.music }), true);
       setSelectedVideo(null);
       setDetail(null);
@@ -207,13 +223,22 @@ function Studio() {
         const j = await api.job(id);
         setJob(j);
         if (j.status === "done") {
-          toast("Video ready. Your draft is still saved, so you can render another version.", "success");
+          toast(
+            j.kind === "song"
+              ? "Song ready. Make a music video from it, or edit the lyrics and compose again."
+              : j.kind === "song_video"
+                ? "Music video ready."
+                : "Video ready. Your draft is still saved, so you can render another version.",
+            "success",
+          );
           await loadVideos();
           await selectVideo(j.video ?? null, false);
           return;
         }
         if (j.status === "error") {
-          toast(`Rendering failed: ${j.error ?? "unknown error"}`, "error");
+          toast(`${j.kind === "song" ? "Composing" : "Rendering"} failed: ${j.error ?? "unknown error"}`, "error");
+          // keep the song editor/preview usable after a failed music-video render
+          if (j.kind === "song_video") setJob(null);
           return;
         }
       } catch (e) {
@@ -228,7 +253,7 @@ function Studio() {
   const rendering = job !== null && (job.status === "queued" || job.status === "running");
   const activeIndex = draft ? Math.max(0, draft.scenes.findIndex((s) => s.uid === activeUid)) : 0;
   const activeScene = draft ? (draft.scenes[activeIndex] ?? null) : null;
-  const hasPreview = !!draft || rendering || job?.status === "error" || !!detail?.video;
+  const hasPreview = !!draft || !!song || rendering || job?.status === "error" || !!detail?.video || !!detail?.audio;
 
   const library = (
     <Library
@@ -242,6 +267,7 @@ function Studio() {
       onSelectVideo={(name) => selectVideo(name, true)}
       onNew={async () => {
         await closeDraft();
+        setSongState(null);
         void selectVideo(null, false);
         setLibraryOpen(false);
       }}
@@ -263,6 +289,17 @@ function Studio() {
       onThumbnail={(summary) => {
         setDetail((d) => (d && d.name === summary.name ? { ...d, ...summary } : d));
         setVideos((vs) => vs?.map((v) => (v.name === summary.name ? summary : v)) ?? vs);
+      }}
+      onMakeMusicVideo={async (name) => {
+        try {
+          const { id } = await api.musicVideo(name);
+          setJobTitle(detail?.title ?? name);
+          setJob({ id, kind: "song_video", status: "queued", step: 0, log: [], title: detail?.title ?? name });
+          setPreviewOpen(true);
+          watch(id);
+        } catch (e) {
+          toast((e as Error).message, "error");
+        }
       }}
       onDeleteVideo={async (name) => {
         await api.deleteVideo(name);
@@ -290,9 +327,38 @@ function Studio() {
         </aside>
 
         <main className="min-h-0 min-w-0">
-          {!draft && (
+          {!draft && song && options && (
+            <SongEditor
+              song={song.song}
+              setSong={setSong}
+              lang={song.lang}
+              options={options}
+              composing={rendering && job?.kind === "song"}
+              onBack={() => setSongState(null)}
+              onCompose={async (stems) => {
+                try {
+                  const { id } = await api.composeSong({ song: song.song, topic: song.topic, lang: song.lang, stems });
+                  setSelectedVideo(null);
+                  setJobTitle(song.song.title);
+                  setJob({ id, kind: "song", status: "queued", step: 0, log: [], title: song.song.title });
+                  setPreviewOpen(true);
+                  watch(id);
+                  return null;
+                } catch (e) {
+                  return (e as Error).message;
+                }
+              }}
+            />
+          )}
+          {!draft && !song && (
             <CreateForm
               options={options}
+              onSong={(s, lang, topic) => {
+                setSongState({ song: s, lang, topic });
+                setSelectedVideo(null);
+                setDetail(null);
+                toast("Lyrics written. Check them, then compose the song.", "success");
+              }}
               onScript={async (script, lang, topic, notice) => {
                 await openDraft(toDraft(script, lang, topic), false);
                 setSelectedVideo(null);

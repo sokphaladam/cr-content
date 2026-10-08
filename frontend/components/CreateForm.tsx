@@ -1,8 +1,8 @@
 "use client";
 
-import { ClipboardPaste, PenLine, Sparkles } from "lucide-react";
+import { ClipboardPaste, Music, PenLine, Sparkles } from "lucide-react";
 import { useState } from "react";
-import { api, type Lang, type Options, type VideoScript } from "@/lib/api";
+import { api, type Lang, type Options, type SongScript, type VideoScript } from "@/lib/api";
 import { Button, Field, Message, Segmented, Tabs } from "./ui";
 
 const PLACEHOLDER: Record<Lang, string> = {
@@ -22,14 +22,16 @@ const PASTE_EXAMPLE = [
   "…",
 ].join("\n");
 
-type Mode = "topic" | "paste";
+type Mode = "topic" | "paste" | "song";
 
 export function CreateForm({
   options,
   onScript,
+  onSong,
 }: {
   options: Options | null;
   onScript: (script: VideoScript, lang: Lang, topic: string, notice?: string) => void;
+  onSong: (song: SongScript, lang: Lang, topic: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("topic");
   const [topic, setTopic] = useState("");
@@ -43,7 +45,23 @@ export function CreateForm({
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
 
+  const [vocal, setVocal] = useState("");
+
   const claudeMissing = options !== null && !options.keys.anthropic;
+
+  async function writeSong(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setMsg({ text: "Claude is writing your song. This usually takes 15–40 seconds." });
+    try {
+      const song = await api.writeSong({ topic: topic.trim(), lang, seconds, style, vocal });
+      onSong(song, lang, topic.trim());
+    } catch (err) {
+      setMsg({ text: (err as Error).message, error: true });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function write(e: React.FormEvent) {
     e.preventDefault();
@@ -107,12 +125,73 @@ export function CreateForm({
         <Tabs
           label="How to start"
           value={mode}
-          onChange={setMode}
+          onChange={(m) => {
+            setMode(m);
+            setMsg({ text: "" });
+          }}
           items={[
             { value: "topic", label: "Start from a topic" },
             { value: "paste", label: "Paste a script" },
+            { value: "song", label: "Make a song" },
           ]}
         />
+
+        {mode === "song" && (
+          <form onSubmit={writeSong} className="grid gap-5 rounded-xl border border-line bg-panel p-5 sm:p-6">
+            <Field label="What the song is about" htmlFor="song-topic">
+              <textarea
+                id="song-topic"
+                rows={2}
+                required
+                lang={lang}
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                placeholder="Summer love on the Phnom Penh riverside"
+                className="field-input resize-y py-3 text-lg leading-snug font-medium"
+              />
+            </Field>
+
+            <div className="grid items-end gap-5 sm:grid-cols-[auto_1fr]">
+              <div className="grid gap-1.5">
+                <span className="field-label">Language</span>
+                <Segmented
+                  name="song-lang"
+                  value={lang}
+                  onChange={setLang}
+                  options={[
+                    { value: "en", label: "English" },
+                    { value: "km", label: "ខ្មែរ", lang: "km" },
+                  ]}
+                />
+              </div>
+              <Field label={<>Length <output className="ml-1 font-semibold text-ink">{seconds} s</output></>} htmlFor="song-seconds">
+                <input id="song-seconds" type="range" min={15} max={120} step={5} value={seconds} onChange={(e) => setSeconds(+e.target.value)} className="h-10 w-full accent-cobalt" />
+              </Field>
+            </div>
+
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field label="Genre and sound" hint="optional" htmlFor="song-style">
+                <input id="song-style" className="field-input" value={style} onChange={(e) => setStyle(e.target.value)} placeholder="Dreamy synth-pop, 80s drums" />
+              </Field>
+              <Field label="Singer voice" hint="optional" htmlFor="song-vocal">
+                <input id="song-vocal" className="field-input" value={vocal} onChange={(e) => setVocal(e.target.value)} placeholder="Breathy female pop vocal" />
+              </Field>
+            </div>
+            <p className="m-0 text-[13px] text-ink-soft">
+              Describe a sound, not a real singer. Names of real artists get turned into a description of their style, because ElevenLabs won&apos;t imitate real voices.
+            </p>
+
+            <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
+              <Button type="submit" variant="primary" loading={busy} disabled={claudeMissing} icon={<Music className="size-4" />}>
+                {busy ? "Writing…" : "Write lyrics with Claude"}
+              </Button>
+            </div>
+            <Message
+              text={msg.text || (claudeMissing ? "Claude isn't connected, so it can't write lyrics yet. Add your key to .env and restart the engine." : "")}
+              error={msg.error}
+            />
+          </form>
+        )}
 
         {mode === "topic" && (
           <form onSubmit={write} className="grid gap-5 rounded-xl border border-line bg-panel p-5 sm:p-6">

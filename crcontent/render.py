@@ -30,8 +30,12 @@ def duration(path: Path) -> float:
     return float(json.loads(out)["format"]["duration"])
 
 
-def render_scene(footage: Path | None, voice: Path, length: float, out: Path) -> None:
-    """One scene: background cropped to 9:16 and looped/trimmed to the narration length."""
+def render_scene(footage: Path | None, voice: Path | None, length: float, out: Path, start: float = 0.0) -> None:
+    """One scene: background cropped to 9:16 and looped/trimmed to the narration length.
+
+    voice=None renders a silent track (music videos add the song in finalize); `start` skips into a video
+    clip, so one clip can fill several shots without repeating the same frames.
+    """
     fit = (f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},"
            f"setsar=1,fps={FPS},format=yuv420p")
     if footage and footage.suffix.lower() in IMAGE_EXTS:
@@ -44,7 +48,7 @@ def render_scene(footage: Path | None, voice: Path, length: float, out: Path) ->
               f":d=1:s={WIDTH}x{HEIGHT}:fps={FPS},setsar=1,format=yuv420p,eq=brightness=-0.06[v]")
     elif footage:
         # slight darken so white captions always stay readable
-        video_in = ["-stream_loop", "-1", "-i", str(footage)]
+        video_in = ["-stream_loop", "-1", *(["-ss", f"{start:.3f}"] if start > 0 else []), "-i", str(footage)]
         vf = f"[0:v]{fit},eq=brightness=-0.06:saturation=1.1[v]"
     else:
         c0, c1, c2 = random.choice(GRADIENT_PALETTES)
@@ -52,7 +56,8 @@ def render_scene(footage: Path | None, voice: Path, length: float, out: Path) ->
                     f"gradients=s={WIDTH}x{HEIGHT}:r={FPS}:c0={c0}:c1={c1}:c2={c2}:n=3:speed=0.015"]
         vf = f"[0:v]{fit}[v]"
 
-    run(["ffmpeg", "-y", "-hide_banner", *video_in, "-i", str(voice),
+    audio_in = ["-i", str(voice)] if voice else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+    run(["ffmpeg", "-y", "-hide_banner", *video_in, *audio_in,
          "-filter_complex", f"{vf};[1:a]aresample=44100,apad[a]",
          "-map", "[v]", "-map", "[a]", "-t", f"{length:.3f}",
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -69,15 +74,20 @@ def concat(clips: list[Path], workdir: Path, out_name: str) -> Path:
 
 
 def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
-             music: Path | None, music_volume: float = 0.25) -> None:
+             music: Path | None, music_volume: float = 0.25, soundtrack: Path | None = None) -> None:
     """Burn captions, add ducked background music, and write a web-optimized mp4.
 
+    soundtrack replaces the video's own audio entirely (a music video's song); music is then ignored.
     Runs inside workdir with relative names so the subtitles filter avoids Windows drive-letter escaping.
     """
     # complex (HarfBuzz) shaping is required for Khmer subscripts/vowel reordering; "auto" picks simple
     vf = f"ass={ass_name}:fontsdir=fonts:shaping=complex"
     cmd = ["ffmpeg", "-y", "-hide_banner", "-i", video_name]
-    if music:
+    if soundtrack:
+        cmd += ["-i", str(soundtrack.resolve()),
+                "-filter_complex", f"[0:v]{vf}[v];[1:a]aresample=44100,aformat=channel_layouts=stereo[a]",
+                "-map", "[v]", "-map", "[a]"]
+    elif music:
         cmd += ["-stream_loop", "-1", "-i", str(music.resolve())]
         audio = (f"[0:a]asplit=2[voice][key];"
                  f"[1:a]aresample=44100,aformat=channel_layouts=stereo,volume={music_volume}[bg];"
@@ -92,12 +102,15 @@ def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
 
 
 def thumbnail(video: Path, at: float, out: Path, workdir: Path, ass_name: str | None = None) -> None:
-    """One frame of `video` as a JPEG cover, darkened, with the headline from `ass_name` (in workdir) on top.
+    """One frame of `video` as a JPEG cover, graded, with the headline from `ass_name` (in workdir) on top.
 
     Runs inside workdir with relative names, like finalize(), so the ass filter avoids drive-letter escaping.
     """
-    vf = f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},setsar=1"
+    # punchier than the video itself: covers are seen tiny in a feed, so lift contrast/colour and sharpen
+    vf = (f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},setsar=1,"
+          f"eq=contrast=1.08:saturation=1.3,unsharp=5:5:0.8")
     if ass_name:
-        vf += f",eq=brightness=-0.08,ass={ass_name}:fontsdir=fonts:shaping=complex"
+        # darker edges pull the eye to the headline and keep it readable on busy frames
+        vf += f",eq=brightness=-0.05,vignette=angle=PI/4.5,ass={ass_name}:fontsdir=fonts:shaping=complex"
     run(["ffmpeg", "-y", "-hide_banner", "-ss", f"{at:.2f}", "-i", str(video.resolve()),
          "-frames:v", "1", "-vf", vf, "-q:v", "2", str(out.resolve())], cwd=workdir)

@@ -1,12 +1,80 @@
 "use client";
 
-import { Check, Copy, Download, ImageIcon, Trash2 } from "lucide-react";
+import { Check, Copy, Download, Film, ImageIcon, Music, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { API_BASE, api, fileUrl, outputUrl, type Job, type Lang, type Scene, type VideoDetail, type VideoSummary } from "@/lib/api";
+import { API_BASE, api, fileUrl, outputUrl, type Job, type Lang, type Scene, type ThumbStyle, type ThumbSuggestion, type ThumbSuggestions, type VideoDetail, type VideoSummary } from "@/lib/api";
 import { isImagePath } from "@/lib/format";
 import { Button, IconButton, Segmented, buttonClass, useToast } from "./ui";
 
 const STEPS = ["Script", "Voiceover", "Footage", "Captions", "Final render"];
+const SONG_STEPS = ["Lyrics", "Compose"];
+const MUSIC_VIDEO_STEPS = ["Lyric timing", "Beats and footage", "Captions", "Final render"];
+const stepsFor = (job: Job | null) => (job?.kind === "song" ? SONG_STEPS : job?.kind === "song_video" ? MUSIC_VIDEO_STEPS : STEPS);
+
+function SongPlayer({ detail }: { detail: VideoDetail }) {
+  return (
+    <div className="flex h-full flex-col justify-end gap-4 bg-gradient-to-b from-[#2a1b4a] via-[#1b2a4a] to-black p-5">
+      <Music className="size-10 text-white/40" />
+      <div className="grid gap-1">
+        <p lang={detail.lang} className="m-0 font-display text-2xl leading-tight font-extrabold">{detail.title}</p>
+        {detail.song && (
+          <p className="m-0 text-[13px] text-white/60">
+            {detail.song.genre}, {detail.song.bpm} bpm
+          </p>
+        )}
+      </div>
+      <audio key={detail.name} src={outputUrl(detail.name, "song.mp3")} controls className="w-full" />
+    </div>
+  );
+}
+
+function SongCard({ detail, onDelete, onMakeVideo }: { detail: VideoDetail; onDelete: (name: string) => void; onMakeVideo: (name: string) => void }) {
+  return (
+    <section className="grid gap-3 rounded-xl border border-line bg-panel p-3.5">
+      <div className="grid gap-1.5">
+        <Button variant={detail.video ? "secondary" : "primary"} icon={<Film className="size-4" />} onClick={() => onMakeVideo(detail.name)}>
+          {detail.video ? "Re-render music video" : "Make music video"}
+        </Button>
+        <p className="m-0 text-xs text-ink-soft">Footage cut on the beat with karaoke lyrics. Takes a few minutes.</p>
+      </div>
+      <h3 className="m-0 text-sm font-semibold">Lyrics</h3>
+      <div lang={detail.lang} className="grid max-h-[260px] gap-3 overflow-auto text-[13px] leading-relaxed">
+        {detail.song?.sections.map((s, i) => (
+          <div key={i}>
+            <p className="m-0 text-xs font-semibold text-ink-soft">
+              {s.name} · {s.seconds}s
+            </p>
+            {s.lyrics.filter((l) => l.trim()).length ? (
+              s.lyrics.filter((l) => l.trim()).map((l, j) => <p key={j} className="m-0">{l}</p>)
+            ) : (
+              <p className="m-0 text-ink-soft italic">instrumental</p>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-1">
+        <a className={buttonClass("ghost", "sm")} href={`${API_BASE}/api/videos/${encodeURIComponent(detail.name)}/song`}>
+          <Download className="size-3.5" /> Song
+        </a>
+        {detail.stems.vocals && (
+          <a className={buttonClass("ghost", "sm")} href={outputUrl(detail.name, detail.stems.vocals)} download>
+            <Download className="size-3.5" /> Vocals
+          </a>
+        )}
+        {detail.stems.instrumental && (
+          <a className={buttonClass("ghost", "sm")} href={outputUrl(detail.name, detail.stems.instrumental)} download>
+            <Download className="size-3.5" /> Instrumental
+          </a>
+        )}
+        {!detail.video && (
+          <Button size="sm" variant="danger" className="ml-auto" icon={<Trash2 className="size-3.5" />} onClick={() => onDelete(detail.name)}>
+            Delete
+          </Button>
+        )}
+      </div>
+    </section>
+  );
+}
 
 /** 9:16 phone frame; children are positioned inside the screen. Uses container units so overlays scale with it. */
 function Phone({ children }: { children: React.ReactNode }) {
@@ -82,7 +150,7 @@ function Progress({ job, title }: { job: Job | null; title: string }) {
     <div className="flex h-full flex-col gap-3.5 px-5 pt-7 pb-4">
       <p className="m-0 font-display text-[17px] leading-tight font-bold">{title}</p>
       <ol className="m-0 grid list-none gap-2 p-0">
-        {STEPS.map((label, i) => {
+        {stepsFor(job).map((label, i) => {
           const n = i + 1;
           const done = finished || n < step;
           const active = !finished && n === step;
@@ -156,29 +224,50 @@ function PostCard({ detail, onDelete }: { detail: VideoDetail; onDelete: (name: 
   );
 }
 
-/** Cover image: pick a frame and a headline, then redraw thumbnail.jpg on the engine. */
+const THUMB_STYLES: { value: ThumbStyle; label: string }[] = [
+  { value: "bold", label: "Bold" },
+  { value: "box", label: "Box" },
+  { value: "stacked", label: "Stacked" },
+];
+
+/** Cover image: get ideas (Claude headline x best frame x style) or pick a frame and headline, then redraw thumbnail.jpg. */
 function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (summary: VideoSummary) => void }) {
   const toast = useToast();
   // an older engine doesn't send the thumbnail fields: fall back to sensible defaults
   const duration = detail.duration ?? 0;
-  const initial = { text: detail.thumb_text ?? detail.title, at: detail.thumb_at ?? Math.min(1, duration / 2), v: detail.thumb_v ?? 0 };
+  const initial = {
+    text: detail.thumb_text ?? detail.title,
+    at: detail.thumb_at ?? Math.min(1, duration / 2),
+    style: detail.thumb_style ?? ("bold" as ThumbStyle),
+    emphasis: detail.thumb_emphasis ?? "",
+    v: detail.thumb_v ?? 0,
+  };
   const [text, setText] = useState(initial.text);
   const [at, setAt] = useState(initial.at);
+  const [style, setStyle] = useState(initial.style);
+  const [emphasis, setEmphasis] = useState(initial.emphasis);
   const [saved, setSaved] = useState(initial);
   const [busy, setBusy] = useState(false);
+  const [ideas, setIdeas] = useState<ThumbSuggestions | null>(detail.thumb_suggestions ?? null);
+  const [ideasV, setIdeasV] = useState(0); // cache buster for re-rendered preview images
+  const [suggesting, setSuggesting] = useState(false);
   const frame = useRef<HTMLVideoElement>(null);
-  const changed = text !== saved.text || at !== saved.at;
+  const changed = text !== saved.text || at !== saved.at || style !== saved.style || emphasis !== saved.emphasis;
   const pickingFrame = at !== saved.at;
 
   useEffect(() => {
     if (frame.current) frame.current.currentTime = at;
   }, [at, pickingFrame]);
 
-  async function generate() {
+  async function generate(cover = { text, at, style, emphasis }) {
     setBusy(true);
     try {
-      const summary = await api.makeThumbnail(detail.name, text, at);
-      setSaved({ text, at, v: summary.thumb_v });
+      const summary = await api.makeThumbnail(detail.name, cover);
+      setText(cover.text);
+      setAt(cover.at);
+      setStyle(cover.style);
+      setEmphasis(cover.emphasis);
+      setSaved({ ...cover, v: summary.thumb_v });
       onChange(summary);
       toast("Thumbnail updated", "success");
     } catch (e) {
@@ -188,8 +277,60 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
     }
   }
 
+  async function suggest() {
+    setSuggesting(true);
+    try {
+      setIdeas(await api.suggestThumbnails(detail.name));
+      setIdeasV(Date.now());
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  const isCurrent = (i: ThumbSuggestion) =>
+    i.text === saved.text && i.at === saved.at && i.style === saved.style && i.emphasis === saved.emphasis;
+
   return (
     <section aria-label="Thumbnail" className="mx-auto grid w-full max-w-[300px] gap-3 rounded-xl border border-line bg-panel p-3.5">
+      <div className="grid gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="field-label">Cover ideas</span>
+          <Button size="sm" variant={ideas ? "ghost" : "primary"} icon={<Sparkles className="size-3.5" />} loading={suggesting} onClick={suggest}>
+            {ideas ? "New ideas" : "Suggest covers"}
+          </Button>
+        </div>
+        {suggesting && !ideas && <p className="m-0 text-[12.5px] text-ink-soft">Finding the best frames and writing headlines…</p>}
+        {ideas && (
+          <>
+            <div className={`grid grid-cols-4 gap-1.5 ${suggesting ? "opacity-50" : ""}`}>
+              {ideas.items.map((idea) => (
+                <button
+                  key={idea.file}
+                  type="button"
+                  disabled={busy || suggesting}
+                  onClick={() => generate({ text: idea.text, at: idea.at, style: idea.style, emphasis: idea.emphasis })}
+                  title={`Use “${idea.text}” (${idea.style}, ${idea.at.toFixed(1)} s)`}
+                  aria-label={`Use cover: ${idea.text}`}
+                  className={`relative aspect-[9/16] cursor-pointer overflow-hidden rounded-md bg-ink outline outline-offset-1 transition hover:brightness-110 disabled:cursor-wait ${
+                    isCurrent(idea) ? "outline-2 outline-cobalt" : "outline-1 outline-line"
+                  }`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element -- local engine file */}
+                  <img src={`${outputUrl(detail.name, idea.file)}?v=${ideasV}`} alt="" className="h-full w-full object-cover" />
+                  {isCurrent(idea) && (
+                    <span className="absolute top-1 right-1 grid size-4 place-items-center rounded-full bg-cobalt text-white">
+                      <Check className="size-3" />
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <p className="m-0 text-[12px] text-ink-soft">{ideas.note || "Click one to use it, then fine-tune below."}</p>
+          </>
+        )}
+      </div>
       <div className="flex gap-3">
         <div className="relative aspect-[9/16] w-[84px] shrink-0 overflow-hidden rounded-md bg-ink">
           {pickingFrame ? (
@@ -228,6 +369,24 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
         </div>
       </div>
       <div className="grid gap-1">
+        <label className="field-label" htmlFor="thumb-emphasis">
+          Highlight
+        </label>
+        <input
+          id="thumb-emphasis"
+          lang={detail.lang}
+          maxLength={60}
+          value={emphasis}
+          onChange={(e) => setEmphasis(e.target.value)}
+          placeholder="Auto: a number or the key word"
+          className="field-input h-8 text-[13px]"
+        />
+      </div>
+      <div className="grid justify-items-start gap-1">
+        <span className="field-label">Style</span>
+        <Segmented name="thumb-style" size="sm" value={style} options={THUMB_STYLES} onChange={setStyle} />
+      </div>
+      <div className="grid gap-1">
         <label className="field-label flex justify-between" htmlFor="thumb-at">
           Frame <span className="font-normal text-ink-soft tabular-nums">{at.toFixed(1)} s</span>
         </label>
@@ -243,7 +402,7 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
         />
       </div>
       <div className="flex items-center gap-1.5">
-        <Button size="sm" variant={changed ? "primary" : "secondary"} icon={<ImageIcon className="size-3.5" />} loading={busy} onClick={generate}>
+        <Button size="sm" variant={changed ? "primary" : "secondary"} icon={<ImageIcon className="size-3.5" />} loading={busy} onClick={() => generate()}>
           {detail.thumb ? "Regenerate" : "Generate"}
         </Button>
         {detail.thumb && (
@@ -272,6 +431,7 @@ export function PreviewPane({
   onView,
   onDeleteVideo,
   onThumbnail,
+  onMakeMusicVideo,
 }: {
   scene: Scene | null;
   sceneIndex: number;
@@ -285,16 +445,19 @@ export function PreviewPane({
   onView: (v: PreviewView) => void;
   onDeleteVideo: (name: string) => void;
   onThumbnail: (summary: VideoSummary) => void;
+  onMakeMusicVideo: (name: string) => void;
 }) {
   const showProgress = rendering || job?.status === "error";
   const canToggle = !!scene && !!detail?.video && !showProgress;
   const showVideo = !showProgress && !!detail?.video && (view === "video" || !scene);
+  const isSong = !showProgress && !scene && detail?.kind === "song" && detail.audio;
+  const showSong = isSong && !showVideo;
 
   return (
     <div className="grid content-start gap-4 p-5">
       <div className="flex h-8 items-center justify-between">
         <h2 className="m-0 font-display text-base font-bold">
-          {showProgress ? "Rendering" : showVideo ? "Video" : "Preview"}
+          {showProgress ? (job?.kind === "song" ? "Composing" : "Rendering") : showVideo ? (isSong ? "Music video" : "Video") : showSong ? "Song" : "Preview"}
         </h2>
         {canToggle && (
           <Segmented
@@ -321,6 +484,8 @@ export function PreviewPane({
             playsInline
             className="block h-full w-full bg-black object-cover"
           />
+        ) : showSong && detail ? (
+          <SongPlayer detail={detail} />
         ) : scene ? (
           <ScenePreview scene={scene} index={sceneIndex} total={sceneCount} lang={lang} />
         ) : (
@@ -336,6 +501,7 @@ export function PreviewPane({
         <p className="m-0 text-center text-xs text-ink-soft">Approximate look of the scene you&apos;re editing. Click a scene to preview it.</p>
       )}
       {showVideo && detail && <ThumbnailCard key={`thumb-${detail.name}`} detail={detail} onChange={onThumbnail} />}
+      {isSong && detail && <SongCard key={`song-${detail.name}`} detail={detail} onDelete={onDeleteVideo} onMakeVideo={onMakeMusicVideo} />}
       {showVideo && detail && <PostCard key={`post-${detail.name}`} detail={detail} onDelete={onDeleteVideo} />}
     </div>
   );
