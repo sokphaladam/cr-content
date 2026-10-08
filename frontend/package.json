@@ -7,7 +7,6 @@
     "dev:web": "next dev",
     "dev:engine": "node scripts/engine.mjs",
     "build": "next build",
-    "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {

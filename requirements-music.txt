@@ -7,3 +7,4 @@
 #   pip install -r requirements-music.txt
 stable-ts>=2.17   # Whisper forced alignment: when each lyric word is sung
 librosa>=0.10     # beat detection for cut timing
+demucs>=4.0       # separates the vocals from the music before timing your own songs (no vocals stem)

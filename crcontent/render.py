@@ -17,7 +17,9 @@ GRADIENT_PALETTES = [
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    # stdin=DEVNULL: ffmpeg reads stdin for key commands; it must never touch ours (the desktop app's keep-alive pipe)
+    proc = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg failed ({proc.returncode}):\n{' '.join(cmd)}\n{proc.stderr[-2000:]}")
 
@@ -25,27 +27,29 @@ def run(cmd: list[str], cwd: Path | None = None) -> None:
 def duration(path: Path) -> float:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
-        capture_output=True, text=True, check=True,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True,
     ).stdout
     return float(json.loads(out)["format"]["duration"])
 
 
-def render_scene(footage: Path | None, voice: Path | None, length: float, out: Path, start: float = 0.0) -> None:
-    """One scene: background cropped to 9:16 and looped/trimmed to the narration length.
+def render_scene(footage: Path | None, voice: Path | None, length: float, out: Path, start: float = 0.0,
+                 size: tuple[int, int] = (WIDTH, HEIGHT)) -> None:
+    """One scene: background cropped to `size` (9:16 by default) and looped/trimmed to the narration length.
 
     voice=None renders a silent track (music videos add the song in finalize); `start` skips into a video
     clip, so one clip can fill several shots without repeating the same frames.
     """
-    fit = (f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},"
+    W, H = size
+    fit = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
            f"setsar=1,fps={FPS},format=yuv420p")
     if footage and footage.suffix.lower() in IMAGE_EXTS:
         # still photo: slow "Ken Burns" push-in so the scene doesn't look frozen
         frames = round(length * FPS)
         video_in = ["-framerate", str(FPS), "-loop", "1", "-i", str(footage)]
-        vf = (f"[0:v]scale={WIDTH * 2}:{HEIGHT * 2}:force_original_aspect_ratio=increase,"
-              f"crop={WIDTH * 2}:{HEIGHT * 2},"
+        vf = (f"[0:v]scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase,"
+              f"crop={W * 2}:{H * 2},"
               f"zoompan=z='min(1+{0.18 / max(frames, 1):.6f}*on,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-              f":d=1:s={WIDTH}x{HEIGHT}:fps={FPS},setsar=1,format=yuv420p,eq=brightness=-0.06[v]")
+              f":d=1:s={W}x{H}:fps={FPS},setsar=1,format=yuv420p,eq=brightness=-0.06[v]")
     elif footage:
         # slight darken so white captions always stay readable
         video_in = ["-stream_loop", "-1", *(["-ss", f"{start:.3f}"] if start > 0 else []), "-i", str(footage)]
@@ -53,7 +57,7 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
     else:
         c0, c1, c2 = random.choice(GRADIENT_PALETTES)
         video_in = ["-f", "lavfi", "-i",
-                    f"gradients=s={WIDTH}x{HEIGHT}:r={FPS}:c0={c0}:c1={c1}:c2={c2}:n=3:speed=0.015"]
+                    f"gradients=s={W}x{H}:r={FPS}:c0={c0}:c1={c1}:c2={c2}:n=3:speed=0.015"]
         vf = f"[0:v]{fit}[v]"
 
     audio_in = ["-i", str(voice)] if voice else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
@@ -101,13 +105,15 @@ def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
     run(cmd, cwd=workdir)
 
 
-def thumbnail(video: Path, at: float, out: Path, workdir: Path, ass_name: str | None = None) -> None:
+def thumbnail(video: Path, at: float, out: Path, workdir: Path, ass_name: str | None = None,
+              size: tuple[int, int] = (WIDTH, HEIGHT)) -> None:
     """One frame of `video` as a JPEG cover, graded, with the headline from `ass_name` (in workdir) on top.
 
     Runs inside workdir with relative names, like finalize(), so the ass filter avoids drive-letter escaping.
     """
     # punchier than the video itself: covers are seen tiny in a feed, so lift contrast/colour and sharpen
-    vf = (f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},setsar=1,"
+    W, H = size
+    vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,"
           f"eq=contrast=1.08:saturation=1.3,unsharp=5:5:0.8")
     if ass_name:
         # darker edges pull the eye to the headline and keep it readable on busy frames

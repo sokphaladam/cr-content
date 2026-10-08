@@ -2,10 +2,11 @@
 
 import { CircleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type DraftSummary, type Job, type Lang, type Options, type SongScript, type VideoDetail, type VideoSummary } from "@/lib/api";
+import { api, type Aspect, type DraftSummary, type Job, type Lang, type Options, type SongScript, type VideoDetail, type VideoSummary } from "@/lib/api";
 import { CreateForm } from "@/components/CreateForm";
 import { Library, type LibraryTab } from "@/components/Library";
 import { PreviewPane, type PreviewView } from "@/components/PreviewPane";
+import { LyricsTiming } from "@/components/LyricsTiming";
 import { SongEditor } from "@/components/SongEditor";
 import { Storyboard, toDraft, toDraftData, type Draft, type SaveState } from "@/components/Storyboard";
 import { TopBar } from "@/components/TopBar";
@@ -20,7 +21,7 @@ async function withRetry<T>(fn: () => Promise<T>, tries = 4): Promise<T> {
       return await fn();
     } catch (e) {
       if (i >= tries) throw e;
-      await new Promise((r) => setTimeout(r, 1000 * i));
+      await new Promise((r) => setTimeout(r, 1000 * Math.min(i, 3)));
     }
   }
 }
@@ -56,6 +57,11 @@ function Studio() {
     (update: (s: SongScript) => SongScript) => setSongState((cur) => (cur ? { ...cur, song: update(cur.song) } : cur)),
     [],
   );
+  // Song whose lyric timing is open in the editor (its output folder); the version remounts it after a re-sync.
+  // It keeps its own copy of the song's details so the preview can show a rendered version meanwhile.
+  const [timing, setTiming] = useState<{ name: string; version: number; title: string; lang: Lang; aspect: Aspect; sections: string[]; idea: string } | null>(
+    null,
+  );
   const poll = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Autosave bookkeeping. Saves run one after another so a burst of edits can't create duplicate drafts.
@@ -85,16 +91,33 @@ function Studio() {
   }, []);
 
   useEffect(() => {
-    api
-      .options()
-      .then(setOptions)
-      .catch((e: Error) => setEngineError(e.message));
-    void loadVideos();
-    void loadDrafts();
+    // The engine may still be starting (the desktop app launches it alongside the window), so wait for it first.
+    withRetry(api.options, 12)
+      .then((o) => {
+        setOptions(o);
+        void loadVideos();
+        void loadDrafts();
+      })
+      .catch((e: Error) => {
+        setEngineError(e.message);
+        setVideos([]);
+        setDrafts([]);
+      });
     return () => {
       if (poll.current) clearTimeout(poll.current);
     };
   }, [loadVideos, loadDrafts]);
+
+  // Desktop app: the native "Save as" dialog reports how each download went.
+  useEffect(() => {
+    const onDownload = (e: Event) => {
+      const { success, name } = (e as CustomEvent<{ success: boolean; name: string | null }>).detail;
+      if (success) toast(name ? `Saved ${name}` : "Download saved", "success");
+      else toast("Download failed. Try again.", "error");
+    };
+    window.addEventListener("desktop-download", onDownload);
+    return () => window.removeEventListener("desktop-download", onDownload);
+  }, [toast]);
 
   /** Queue a save of `body`. Runs after earlier saves so ids are never created twice. */
   const enqueueSave = useCallback(
@@ -162,6 +185,23 @@ function Studio() {
     setActiveUid(null);
   }, [flush]);
 
+  /** Open a song's lyric timing editor; `reload` remounts it with fresh timing (after a sync). */
+  async function openTiming(name: string, reload = false) {
+    const d = await api.video(name);
+    await closeDraft();
+    setSongState(null);
+    setTiming((t) => ({
+      name,
+      version: t?.name === name ? t.version + (reload ? 1 : 0) : 0,
+      title: d.title,
+      lang: d.lang,
+      aspect: d.aspect,
+      sections: d.song?.sections.map((s) => s.name) ?? [],
+      idea: d.idea ?? "",
+    }));
+    return d;
+  }
+
   async function selectVideo(name: string | null, openScript: boolean) {
     setSelectedVideo(name);
     if (!name) {
@@ -177,8 +217,15 @@ function Studio() {
         setSongState(null);
         await openDraft(toDraft(d.script, d.lang, ""), true);
       }
-      // A song opens in the song editor; composing again makes a new output folder.
-      if (openScript && d.song) {
+      // Your own song opens in the lyric timing editor; a composed song in the song editor (composing again
+      // makes a new output folder). A music video keeps whatever is open: its song is one click away.
+      const isSong = d.kind === "song" && !!d.song;
+      if (openScript && isSong && d.source === "upload") {
+        await openTiming(d.name);
+      } else if (openScript && d.kind !== "music_video") {
+        setTiming(null);
+      }
+      if (openScript && d.song && d.kind === "song" && d.source !== "upload") {
         await closeDraft();
         setSongState({ song: d.song, lang: d.lang, topic: "" });
       }
@@ -191,6 +238,7 @@ function Studio() {
     try {
       const d = await api.draft(id);
       setSongState(null);
+      setTiming(null);
       await openDraft(toDraft(d.script, d.lang, d.topic, { id, voice: d.voice, rate: d.rate, music: d.music }), true);
       setSelectedVideo(null);
       setDetail(null);
@@ -228,15 +276,31 @@ function Studio() {
               ? "Song ready. Make a music video from it, or edit the lyrics and compose again."
               : j.kind === "song_video"
                 ? "Music video ready."
-                : "Video ready. Your draft is still saved, so you can render another version.",
+                : j.kind === "lyrics_sync"
+                  ? "Lyrics synced. Play the song to check the timing, then make the music video."
+                  : "Video ready. Your draft is still saved, so you can render another version.",
             "success",
           );
-          await loadVideos();
+          await Promise.all([loadVideos(), loadDrafts()]);
           await selectVideo(j.video ?? null, false);
+          if (j.kind === "lyrics_sync" && j.video) {
+            await openTiming(j.video, true);
+            setLibraryTab("drafts");
+            setJob(null);
+          }
           return;
         }
         if (j.status === "error") {
-          toast(`${j.kind === "song" ? "Composing" : "Rendering"} failed: ${j.error ?? "unknown error"}`, "error");
+          toast(
+            `${j.kind === "song" ? "Composing" : j.kind === "lyrics_sync" ? "Lyric sync" : "Rendering"} failed: ${j.error ?? "unknown error"}`,
+            "error",
+          );
+          if (j.kind === "lyrics_sync" && j.video) {
+            // the song was saved; open it so the timing can be fixed by hand or synced again
+            await Promise.all([loadVideos(), loadDrafts()]);
+            await selectVideo(j.video, false);
+            await openTiming(j.video, true);
+          }
           // keep the song editor/preview usable after a failed music-video render
           if (j.kind === "song_video") setJob(null);
           return;
@@ -253,7 +317,7 @@ function Studio() {
   const rendering = job !== null && (job.status === "queued" || job.status === "running");
   const activeIndex = draft ? Math.max(0, draft.scenes.findIndex((s) => s.uid === activeUid)) : 0;
   const activeScene = draft ? (draft.scenes[activeIndex] ?? null) : null;
-  const hasPreview = !!draft || !!song || rendering || job?.status === "error" || !!detail?.video || !!detail?.audio;
+  const hasPreview = !!draft || !!song || !!timing || rendering || job?.status === "error" || !!detail?.video || !!detail?.audio;
 
   const library = (
     <Library
@@ -261,13 +325,18 @@ function Studio() {
       onTab={setLibraryTab}
       drafts={drafts}
       videos={videos}
-      selectedDraft={draft?.id ?? null}
+      selectedDraft={draft?.id ?? timing?.name ?? (detail?.kind === "song" ? detail.name : null)}
       selectedVideo={selectedVideo}
       onSelectDraft={selectDraft}
+      onSelectSong={(name) => {
+        setLibraryOpen(false);
+        void selectVideo(name, true);
+      }}
       onSelectVideo={(name) => selectVideo(name, true)}
       onNew={async () => {
         await closeDraft();
         setSongState(null);
+        setTiming(null);
         void selectVideo(null, false);
         setLibraryOpen(false);
       }}
@@ -290,9 +359,18 @@ function Studio() {
         setDetail((d) => (d && d.name === summary.name ? { ...d, ...summary } : d));
         setVideos((vs) => vs?.map((v) => (v.name === summary.name ? summary : v)) ?? vs);
       }}
-      onMakeMusicVideo={async (name) => {
+      onOpenTiming={async (name) => {
         try {
-          const { id } = await api.musicVideo(name);
+          await openTiming(name);
+          setPreviewOpen(false);
+        } catch (e) {
+          toast((e as Error).message, "error");
+        }
+      }}
+      onSelectVideo={(name) => void selectVideo(name, false)}
+      onMakeMusicVideo={async (name, idea) => {
+        try {
+          const { id } = await api.musicVideo(name, idea);
           setJobTitle(detail?.title ?? name);
           setJob({ id, kind: "song_video", status: "queued", step: 0, log: [], title: detail?.title ?? name });
           setPreviewOpen(true);
@@ -303,9 +381,10 @@ function Studio() {
       }}
       onDeleteVideo={async (name) => {
         await api.deleteVideo(name);
-        toast("Video deleted");
+        toast(detail?.kind === "song" ? "Song deleted. Its music videos are still in Videos." : "Video deleted");
+        if (timing?.name === name) setTiming(null);
         await selectVideo(null, false);
-        await loadVideos();
+        await Promise.all([loadVideos(), loadDrafts()]);
       }}
     />
   );
@@ -327,6 +406,44 @@ function Studio() {
         </aside>
 
         <main className="min-h-0 min-w-0">
+          {!draft && !song && timing && (
+            <LyricsTiming
+              key={`${timing.name}-${timing.version}`}
+              name={timing.name}
+              title={timing.title}
+              lang={timing.lang}
+              aspect={timing.aspect}
+              sections={timing.sections}
+              idea={timing.idea}
+              busy={rendering}
+              onBack={() => setTiming(null)}
+              onResync={async () => {
+                try {
+                  const { id } = await api.resyncLyrics(timing.name);
+                  setJobTitle(timing.title);
+                  setJob({ id, kind: "lyrics_sync", status: "queued", step: 0, log: [], title: timing.title });
+                  setPreviewOpen(true);
+                  watch(id);
+                  return null;
+                } catch (e) {
+                  return (e as Error).message;
+                }
+              }}
+              onMakeVideo={async (idea) => {
+                try {
+                  const { id } = await api.musicVideo(timing.name, idea);
+                  setTiming((t) => (t ? { ...t, idea } : t));
+                  setJobTitle(timing.title);
+                  setJob({ id, kind: "song_video", status: "queued", step: 0, log: [], title: timing.title });
+                  setPreviewOpen(true);
+                  watch(id);
+                  return null;
+                } catch (e) {
+                  return (e as Error).message;
+                }
+              }}
+            />
+          )}
           {!draft && song && options && (
             <SongEditor
               song={song.song}
@@ -350,9 +467,17 @@ function Studio() {
               }}
             />
           )}
-          {!draft && !song && (
+          {!draft && !song && !timing && (
             <CreateForm
               options={options}
+              onImportSong={(id, title) => {
+                setSelectedVideo(null);
+                setDetail(null);
+                setJobTitle(title);
+                setJob({ id, kind: "lyrics_sync", status: "queued", step: 0, log: [], title });
+                setPreviewOpen(true);
+                watch(id);
+              }}
               onSong={(s, lang, topic) => {
                 setSongState({ song: s, lang, topic });
                 setSelectedVideo(null);

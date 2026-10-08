@@ -1,8 +1,8 @@
 "use client";
 
-import { ClipboardPaste, Music, PenLine, Sparkles } from "lucide-react";
+import { ClipboardPaste, Music, PenLine, Sparkles, Upload } from "lucide-react";
 import { useState } from "react";
-import { api, type Lang, type Options, type SongScript, type VideoScript } from "@/lib/api";
+import { api, type Aspect, type Lang, type Options, type SongScript, type VideoScript } from "@/lib/api";
 import { Button, Field, Message, Segmented, Tabs } from "./ui";
 
 const PLACEHOLDER: Record<Lang, string> = {
@@ -24,16 +24,122 @@ const PASTE_EXAMPLE = [
 
 type Mode = "topic" | "paste" | "song";
 
+const LYRICS_EXAMPLE = ["[Verse 1]", "I walked along the river in the rain", "The city lights were calling out your name", "", "[Chorus]", "Stay with me tonight", "…"].join("\n");
+
+/** Your own finished song: audio + lyrics in, then lyric timing runs as a job. */
+function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string) => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [title, setTitle] = useState("");
+  const [lyrics, setLyrics] = useState("");
+  const [lang, setLang] = useState<Lang>("en");
+  const [aspect, setAspect] = useState<Aspect>("16:9");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!file) return;
+    setBusy(true);
+    setMsg({ text: "Uploading your song…" });
+    try {
+      const name = title.trim() || file.name.replace(/\.[^.]+$/, "");
+      const { id } = await api.importSong({ file, title: name, lyrics, lang, aspect });
+      setMsg({ text: "" });
+      onImported(id, name);
+    } catch (err) {
+      setMsg({ text: (err as Error).message, error: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="grid gap-5 rounded-xl border border-line bg-panel p-5 sm:p-6">
+      <Field label="Song file" hint="mp3, wav, m4a, flac" htmlFor="own-file">
+        <input
+          id="own-file"
+          type="file"
+          required
+          accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,audio/*"
+          onChange={(e) => {
+            const f = e.target.files?.[0] ?? null;
+            setFile(f);
+            if (f && !title) setTitle(f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "));
+          }}
+          className="field-input h-auto py-2 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-ink/[0.06] file:px-3 file:py-1.5 file:font-semibold"
+        />
+      </Field>
+
+      <div className="grid items-end gap-5 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+        <Field label="Title" htmlFor="own-title">
+          <input id="own-title" lang={lang} className="field-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Song title" />
+        </Field>
+        <div className="grid gap-1.5">
+          <span className="field-label">Language</span>
+          <Segmented
+            name="own-lang"
+            value={lang}
+            onChange={setLang}
+            options={[
+              { value: "en", label: "English" },
+              { value: "km", label: "ខ្មែរ", lang: "km" },
+            ]}
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <span className="field-label">Video shape</span>
+          <Segmented
+            name="own-aspect"
+            value={aspect}
+            onChange={setAspect}
+            options={[
+              { value: "16:9", label: "16:9 YouTube" },
+              { value: "9:16", label: "9:16 vertical" },
+            ]}
+          />
+        </div>
+      </div>
+
+      <Field label="Lyrics" hint="one sung line per row; [Verse] / [Chorus] headings optional" htmlFor="own-lyrics">
+        <textarea
+          id="own-lyrics"
+          rows={12}
+          required
+          lang={lang}
+          value={lyrics}
+          onChange={(e) => setLyrics(e.target.value)}
+          placeholder={LYRICS_EXAMPLE}
+          className="field-input resize-y py-2.5 leading-relaxed"
+        />
+      </Field>
+      <p className="m-0 text-[13px] text-ink-soft">
+        The app listens to your song and lines each lyric up with the singing, then shows you the timing to check before it makes the video. Footage is
+        picked for each part of the song and cut on the beat.
+      </p>
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
+        <Button type="submit" variant="primary" loading={busy} disabled={!file || !lyrics.trim()} icon={<Upload className="size-4" />}>
+          {busy ? "Uploading…" : "Upload and sync lyrics"}
+        </Button>
+      </div>
+      <Message {...msg} />
+    </form>
+  );
+}
+
 export function CreateForm({
   options,
   onScript,
   onSong,
+  onImportSong,
 }: {
   options: Options | null;
   onScript: (script: VideoScript, lang: Lang, topic: string, notice?: string) => void;
   onSong: (song: SongScript, lang: Lang, topic: string) => void;
+  onImportSong: (jobId: string, title: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("topic");
+  const [songSource, setSongSource] = useState<"own" | "ai">("own");
   const [topic, setTopic] = useState("");
   const [lang, setLang] = useState<Lang>("en");
   const [seconds, setSeconds] = useState(45);
@@ -132,11 +238,25 @@ export function CreateForm({
           items={[
             { value: "topic", label: "Start from a topic" },
             { value: "paste", label: "Paste a script" },
-            { value: "song", label: "Make a song" },
+            { value: "song", label: "Music video" },
           ]}
         />
 
         {mode === "song" && (
+          <Segmented
+            name="song-source"
+            value={songSource}
+            onChange={setSongSource}
+            options={[
+              { value: "own", label: "Use my song (mp3 + lyrics)" },
+              { value: "ai", label: "Compose with AI" },
+            ]}
+          />
+        )}
+
+        {mode === "song" && songSource === "own" && <OwnSongForm onImported={onImportSong} />}
+
+        {mode === "song" && songSource === "ai" && (
           <form onSubmit={writeSong} className="grid gap-5 rounded-xl border border-line bg-panel p-5 sm:p-6">
             <Field label="What the song is about" htmlFor="song-topic">
               <textarea

@@ -30,3 +30,10 @@ assets/fonts/*
 Thumbs.db
 desktop.ini
 *.log
+
+# Desktop app (Tauri)
+/node_modules/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/engine-dist/
+build/

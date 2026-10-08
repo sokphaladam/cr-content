@@ -1,0 +1,13 @@
+{
+  "name": "shorts-studio-desktop",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "build:engine": "python scripts/build_engine.py",
+    "build": "npm run build:engine && tauri build --config src-tauri/tauri.bundle.json",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

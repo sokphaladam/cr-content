@@ -1,15 +1,18 @@
 "use client";
 
-import { Check, Copy, Download, Film, ImageIcon, Music, Sparkles, Trash2 } from "lucide-react";
+import { Check, Copy, Download, Film, ImageIcon, ListMusic, Music, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { API_BASE, api, fileUrl, outputUrl, type Job, type Lang, type Scene, type ThumbStyle, type ThumbSuggestion, type ThumbSuggestions, type VideoDetail, type VideoSummary } from "@/lib/api";
-import { isImagePath } from "@/lib/format";
+import { isImagePath, relativeTime } from "@/lib/format";
 import { Button, IconButton, Segmented, buttonClass, useToast } from "./ui";
+import { VideoIdea } from "./VideoIdea";
 
 const STEPS = ["Script", "Voiceover", "Footage", "Captions", "Final render"];
 const SONG_STEPS = ["Lyrics", "Compose"];
 const MUSIC_VIDEO_STEPS = ["Lyric timing", "Beats and footage", "Captions", "Final render"];
-const stepsFor = (job: Job | null) => (job?.kind === "song" ? SONG_STEPS : job?.kind === "song_video" ? MUSIC_VIDEO_STEPS : STEPS);
+const SYNC_STEPS = ["Read lyrics", "Lyric timing"];
+const stepsFor = (job: Job | null) =>
+  job?.kind === "song" ? SONG_STEPS : job?.kind === "song_video" ? MUSIC_VIDEO_STEPS : job?.kind === "lyrics_sync" ? SYNC_STEPS : STEPS;
 
 function SongPlayer({ detail }: { detail: VideoDetail }) {
   return (
@@ -17,10 +20,8 @@ function SongPlayer({ detail }: { detail: VideoDetail }) {
       <Music className="size-10 text-white/40" />
       <div className="grid gap-1">
         <p lang={detail.lang} className="m-0 font-display text-2xl leading-tight font-extrabold">{detail.title}</p>
-        {detail.song && (
-          <p className="m-0 text-[13px] text-white/60">
-            {detail.song.genre}, {detail.song.bpm} bpm
-          </p>
+        {detail.song && (detail.song.genre || detail.song.bpm > 0) && (
+          <p className="m-0 text-[13px] text-white/60">{[detail.song.genre, detail.song.bpm > 0 ? `${detail.song.bpm} bpm` : ""].filter(Boolean).join(", ")}</p>
         )}
       </div>
       <audio key={detail.name} src={outputUrl(detail.name, "song.mp3")} controls className="w-full" />
@@ -28,21 +29,71 @@ function SongPlayer({ detail }: { detail: VideoDetail }) {
   );
 }
 
-function SongCard({ detail, onDelete, onMakeVideo }: { detail: VideoDetail; onDelete: (name: string) => void; onMakeVideo: (name: string) => void }) {
+function SongCard({
+  detail,
+  onDelete,
+  onMakeVideo,
+  onOpenTiming,
+  onSelectVideo,
+}: {
+  detail: VideoDetail;
+  onDelete: (name: string) => void;
+  onMakeVideo: (name: string, idea: string) => void;
+  onOpenTiming: (name: string) => void;
+  onSelectVideo: (name: string) => void;
+}) {
+  const own = detail.source === "upload";
+  const versions = detail.versions ?? [];
+  const [idea, setIdea] = useState(detail.idea ?? "");
   return (
     <section className="grid gap-3 rounded-xl border border-line bg-panel p-3.5">
       <div className="grid gap-1.5">
-        <Button variant={detail.video ? "secondary" : "primary"} icon={<Film className="size-4" />} onClick={() => onMakeVideo(detail.name)}>
-          {detail.video ? "Re-render music video" : "Make music video"}
+        <Button variant="secondary" icon={<ListMusic className="size-4" />} onClick={() => onOpenTiming(detail.name)}>
+          Edit lyric timing
         </Button>
-        <p className="m-0 text-xs text-ink-soft">Footage cut on the beat with karaoke lyrics. Takes a few minutes.</p>
+        <VideoIdea id={`idea-${detail.name}`} value={idea} onChange={setIdea} />
+        <Button variant={versions.length ? "secondary" : "primary"} icon={<Film className="size-4" />} onClick={() => onMakeVideo(detail.name, idea)}>
+          {versions.length ? "Make a new version" : "Make music video"}
+        </Button>
+        <p className="m-0 text-xs text-ink-soft">
+          {detail.aspect === "16:9" ? "16:9 landscape" : "9:16 vertical"}. Footage cut on the beat with karaoke lyrics, using the timing as it is now. Takes a few
+          minutes{own ? ", longer for a full song" : ""}. Earlier versions are kept.
+        </p>
       </div>
+      {versions.length > 0 && (
+        <div className="grid gap-1">
+          <h3 className="m-0 text-sm font-semibold">Music videos ({versions.length})</h3>
+          <ul className="m-0 grid list-none gap-0.5 p-0">
+            {versions.map((v, i) => (
+              <li key={v.name}>
+                <button
+                  type="button"
+                  onClick={() => onSelectVideo(v.name)}
+                  className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg border-0 bg-transparent p-1.5 text-left hover:bg-ink/[0.04]"
+                >
+                  <span
+                    className={`grid h-9 shrink-0 place-items-center overflow-hidden rounded bg-ink/[0.08] bg-cover bg-center text-ink-soft ${v.aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"}`}
+                    style={v.thumb ? { backgroundImage: `url('${outputUrl(v.name, "thumbnail.jpg")}?v=${v.thumb_v}')` } : undefined}
+                  >
+                    {!v.thumb && <Film className="size-3.5" />}
+                  </span>
+                  <span className="min-w-0 text-[13px]">
+                    <span className="block font-semibold text-ink">Version {versions.length - i}</span>
+                    <span className="block text-xs text-ink-soft">{relativeTime(v.created)}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <h3 className="m-0 text-sm font-semibold">Lyrics</h3>
       <div lang={detail.lang} className="grid max-h-[260px] gap-3 overflow-auto text-[13px] leading-relaxed">
         {detail.song?.sections.map((s, i) => (
           <div key={i}>
             <p className="m-0 text-xs font-semibold text-ink-soft">
-              {s.name} · {s.seconds}s
+              {s.name}
+              {s.seconds > 0 ? ` · ${s.seconds}s` : ""}
             </p>
             {s.lyrics.filter((l) => l.trim()).length ? (
               s.lyrics.filter((l) => l.trim()).map((l, j) => <p key={j} className="m-0">{l}</p>)
@@ -57,30 +108,40 @@ function SongCard({ detail, onDelete, onMakeVideo }: { detail: VideoDetail; onDe
           <Download className="size-3.5" /> Song
         </a>
         {detail.stems.vocals && (
-          <a className={buttonClass("ghost", "sm")} href={outputUrl(detail.name, detail.stems.vocals)} download>
+          <a className={buttonClass("ghost", "sm")} href={`${API_BASE}/api/videos/${encodeURIComponent(detail.name)}/stem/vocals`}>
             <Download className="size-3.5" /> Vocals
           </a>
         )}
         {detail.stems.instrumental && (
-          <a className={buttonClass("ghost", "sm")} href={outputUrl(detail.name, detail.stems.instrumental)} download>
+          <a className={buttonClass("ghost", "sm")} href={`${API_BASE}/api/videos/${encodeURIComponent(detail.name)}/stem/instrumental`}>
             <Download className="size-3.5" /> Instrumental
           </a>
         )}
-        {!detail.video && (
-          <Button size="sm" variant="danger" className="ml-auto" icon={<Trash2 className="size-3.5" />} onClick={() => onDelete(detail.name)}>
-            Delete
-          </Button>
-        )}
+        <Button
+          size="sm"
+          variant="danger"
+          className="ml-auto"
+          title={versions.length ? "Deletes the song and its timing. Its music videos stay in Videos." : undefined}
+          icon={<Trash2 className="size-3.5" />}
+          onClick={() => onDelete(detail.name)}
+        >
+          Delete song
+        </Button>
       </div>
     </section>
   );
 }
 
-/** 9:16 phone frame; children are positioned inside the screen. Uses container units so overlays scale with it. */
-function Phone({ children }: { children: React.ReactNode }) {
+/** 9:16 phone frame (or a 16:9 screen for landscape music videos); children are positioned inside the screen.
+ * Uses container units so overlays scale with it. */
+function Phone({ children, landscape = false }: { children: React.ReactNode; landscape?: boolean }) {
   return (
-    <div className="mx-auto aspect-[9/16] w-full max-w-[300px] shrink-0 rounded-[32px] bg-ink p-2 shadow-[0_24px_48px_-24px_rgb(24_32_46/0.55)]">
-      <div className="@container relative h-full w-full overflow-hidden rounded-[25px] bg-[#222b3b] text-white">{children}</div>
+    <div
+      className={`mx-auto w-full shrink-0 bg-ink shadow-[0_24px_48px_-24px_rgb(24_32_46/0.55)] ${
+        landscape ? "aspect-video rounded-xl p-1.5" : "aspect-[9/16] max-w-[300px] rounded-[32px] p-2"
+      }`}
+    >
+      <div className={`@container relative h-full w-full overflow-hidden bg-[#222b3b] text-white ${landscape ? "rounded-lg" : "rounded-[25px]"}`}>{children}</div>
     </div>
   );
 }
@@ -313,7 +374,7 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
                   onClick={() => generate({ text: idea.text, at: idea.at, style: idea.style, emphasis: idea.emphasis })}
                   title={`Use “${idea.text}” (${idea.style}, ${idea.at.toFixed(1)} s)`}
                   aria-label={`Use cover: ${idea.text}`}
-                  className={`relative aspect-[9/16] cursor-pointer overflow-hidden rounded-md bg-ink outline outline-offset-1 transition hover:brightness-110 disabled:cursor-wait ${
+                  className={`relative ${detail.aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"} cursor-pointer overflow-hidden rounded-md bg-ink outline outline-offset-1 transition hover:brightness-110 disabled:cursor-wait ${
                     isCurrent(idea) ? "outline-2 outline-cobalt" : "outline-1 outline-line"
                   }`}
                 >
@@ -332,7 +393,7 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
         )}
       </div>
       <div className="flex gap-3">
-        <div className="relative aspect-[9/16] w-[84px] shrink-0 overflow-hidden rounded-md bg-ink">
+        <div className={`relative shrink-0 overflow-hidden rounded-md bg-ink ${detail.aspect === "16:9" ? "aspect-video w-[132px]" : "aspect-[9/16] w-[84px]"}`}>
           {pickingFrame ? (
             <video
               ref={frame}
@@ -432,6 +493,8 @@ export function PreviewPane({
   onDeleteVideo,
   onThumbnail,
   onMakeMusicVideo,
+  onOpenTiming,
+  onSelectVideo,
 }: {
   scene: Scene | null;
   sceneIndex: number;
@@ -445,7 +508,9 @@ export function PreviewPane({
   onView: (v: PreviewView) => void;
   onDeleteVideo: (name: string) => void;
   onThumbnail: (summary: VideoSummary) => void;
-  onMakeMusicVideo: (name: string) => void;
+  onMakeMusicVideo: (name: string, idea: string) => void;
+  onOpenTiming: (name: string) => void;
+  onSelectVideo: (name: string) => void;
 }) {
   const showProgress = rendering || job?.status === "error";
   const canToggle = !!scene && !!detail?.video && !showProgress;
@@ -457,7 +522,7 @@ export function PreviewPane({
     <div className="grid content-start gap-4 p-5">
       <div className="flex h-8 items-center justify-between">
         <h2 className="m-0 font-display text-base font-bold">
-          {showProgress ? (job?.kind === "song" ? "Composing" : "Rendering") : showVideo ? (isSong ? "Music video" : "Video") : showSong ? "Song" : "Preview"}
+          {showProgress ? (job?.kind === "song" ? "Composing" : job?.kind === "lyrics_sync" ? "Syncing lyrics" : "Rendering") : showVideo ? (detail?.kind === "music_video" ? "Music video" : "Video") : showSong ? "Song" : "Preview"}
         </h2>
         {canToggle && (
           <Segmented
@@ -473,7 +538,7 @@ export function PreviewPane({
         )}
       </div>
 
-      <Phone>
+      <Phone landscape={!showProgress && !scene && detail?.aspect === "16:9"}>
         {showProgress ? (
           <Progress job={job} title={jobTitle} />
         ) : showVideo && detail ? (
@@ -501,7 +566,28 @@ export function PreviewPane({
         <p className="m-0 text-center text-xs text-ink-soft">Approximate look of the scene you&apos;re editing. Click a scene to preview it.</p>
       )}
       {showVideo && detail && <ThumbnailCard key={`thumb-${detail.name}`} detail={detail} onChange={onThumbnail} />}
-      {isSong && detail && <SongCard key={`song-${detail.name}`} detail={detail} onDelete={onDeleteVideo} onMakeVideo={onMakeMusicVideo} />}
+      {showVideo && detail?.kind === "music_video" && (
+        <section className="grid gap-1.5 rounded-xl border border-line bg-panel p-3.5">
+          {detail.song_folder ? (
+            <>
+              <Button variant="secondary" icon={<ListMusic className="size-4" />} onClick={() => onOpenTiming(detail.song_folder)}>
+                Edit lyric timing
+              </Button>
+              {detail.idea && (
+                <p className="m-0 text-xs text-ink-soft">
+                  Made with the idea: <span className="text-ink">{detail.idea}</span>
+                </p>
+              )}
+              <p className="m-0 text-xs text-ink-soft">This video stays as it is. Fix the timing, then make a new version from the song.</p>
+            </>
+          ) : (
+            <p className="m-0 text-xs text-ink-soft">The song this video was made from has been deleted, so its timing can&apos;t be edited.</p>
+          )}
+        </section>
+      )}
+      {isSong && detail && (
+        <SongCard key={`song-${detail.name}`} detail={detail} onDelete={onDeleteVideo} onMakeVideo={onMakeMusicVideo} onOpenTiming={onOpenTiming} onSelectVideo={onSelectVideo} />
+      )}
       {showVideo && detail && <PostCard key={`post-${detail.name}`} detail={detail} onDelete={onDeleteVideo} />}
     </div>
   );

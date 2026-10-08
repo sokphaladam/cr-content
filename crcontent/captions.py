@@ -65,29 +65,39 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(lines) + "\n"
 
 
-def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: float = 0.8) -> str:
+def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: float = 0.8,
+                      size: tuple[int, int] = (WIDTH, HEIGHT)) -> str:
     """Lyrics as karaoke: each sung line shown whole, words turning yellow as they're sung.
 
     lines: align.LyricLine items (absolute word times). A line appears `lead_in` s before its first word and
-    stays until the next line starts or `hold` s after its last word.
+    stays until the next line starts or `hold` s after its last word. Landscape frames put the lyrics in the
+    lower third with the upcoming line dimmed underneath, like a lyric video; vertical frames centre one line.
     """
-    size = round(profile.font_size * (0.85 if profile.code == "km" else 0.8))
+    W, H = size
+    landscape = W > H
+    font = round(profile.font_size * (0.85 if profile.code == "km" else 0.8))
+    if landscape:
+        font = round(font * 0.82)
+    small = round(font * 0.72)
     header = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: {WIDTH}
-PlayResY: {HEIGHT}
+PlayResX: {W}
+PlayResY: {H}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Lyric,{profile.font_name},{size},{WHITE},{WHITE},&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,6,3,5,80,80,0,1
+Style: Lyric,{profile.font_name},{font},{WHITE},{WHITE},&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,6,3,5,80,80,0,1
+Style: LyricNext,{profile.font_name},{small},&H60FFFFFF&,&H60FFFFFF&,&H60000000&,&HA0000000&,-1,0,0,0,100,100,0,0,1,4,2,5,80,80,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events: list[str] = []
-    pos = f"{{\\pos({WIDTH // 2},{round(HEIGHT * 0.62)})}}"
+    y = round(H * (0.78 if landscape else 0.62))
+    pos = f"{{\\pos({W // 2},{y})}}"
+    next_pos = f"{{\\pos({W // 2},{y + round(font * 1.35)})}}"
     prev_end = 0.0
     for li, line in enumerate(lines):
         words = [w for w in line.words if _esc(w.text)]
@@ -107,6 +117,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             end = words[wi + 1].start if wi + 1 < len(words) else line_end
             if end > w.start:
                 events.append(f"Dialogue: 0,{_ts(w.start)},{_ts(end)},Lyric,,0,0,0,,{text(wi + 1)}")
+        if landscape and li + 1 < len(lines) and next_start - line_end < 2.5 and _esc(lines[li + 1].text):
+            events.append(f"Dialogue: 0,{_ts(show)},{_ts(line_end)},LyricNext,,0,0,0,,{next_pos}{_esc(lines[li + 1].text)}")
         prev_end = line_end
     return header + "\n".join(events) + "\n"
 
@@ -146,12 +158,14 @@ def _wrap(words: list[str], max_chars: int) -> list[list[str]]:
     return lines
 
 
-def build_thumbnail_ass(text: str, profile: LangProfile, style: str = "bold", emphasis: str = "") -> str:
+def build_thumbnail_ass(text: str, profile: LangProfile, style: str = "bold", emphasis: str = "",
+                        size: tuple[int, int] = (WIDTH, HEIGHT)) -> str:
     """Cover headline sized to fill the width, with the key word(s) in `emphasis` picked out.
 
     bold: white, heavy outline, key word yellow.  box: black on yellow boxes, key word red.
     stacked: a word or two per line, key word yellow and bigger.
     """
+    W, H = size
     style = style if style in THUMB_STYLES else "bold"
     words = _esc(text).split()
     if profile.code != "km":
@@ -165,12 +179,12 @@ def build_thumbnail_ass(text: str, profile: LangProfile, style: str = "bold", em
         lines = [[w] for w in words] if style == "stacked" else _wrap(words, 12)
         longest = max((sum(len(w) for w in line) for line in lines), default=1)
         # code points include stacked subscripts and vowel signs, so a "letter" is narrower than it counts
-        size = round(max(110, min(profile.font_size * 2.6, WIDTH * 0.86 / max(longest * 0.34, 1))))
+        size = round(max(110, min(profile.font_size * 2.6, W * 0.86 / max(longest * 0.34, 1))))
     else:
         lines = _wrap(words, 8 if style == "stacked" else 10)
         longest = max((len(" ".join(line)) for line in lines), default=1)
         # Arial Bold caps average ~0.64 em wide
-        size = round(max(100, min(240, WIDTH * 0.88 / (longest * 0.64))))
+        size = round(max(100, min(240, W * 0.88 / (longest * 0.64))))
 
     grow = r"\fscx115\fscy115" if style == "stacked" else ""
     on, off = f"{{\\c{accent}{grow}}}", f"{{\\c{base}\\fscx100\\fscy100}}"
@@ -194,11 +208,11 @@ def build_thumbnail_ass(text: str, profile: LangProfile, style: str = "bold", em
         outline = max(8, size // 11)
         thumb_style = f"Thumb,{profile.font_name},{size},{WHITE},{WHITE},{BLACK},&H80000000&,-1,0,0,0,100,100,0,0,1,{outline},{outline - 2},5,60,60,0,1"
     # upper-middle: clear of the like/comment buttons and caption bar that cover the bottom of Shorts/TikTok
-    y = round(HEIGHT * (0.40 if style == "stacked" else 0.36))
+    y = round(H * (0.40 if style == "stacked" else 0.36)) if H > W else H // 2
     return f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: {WIDTH}
-PlayResY: {HEIGHT}
+PlayResX: {W}
+PlayResY: {H}
 WrapStyle: 2
 ScaledBorderAndShadow: yes
 
@@ -208,5 +222,5 @@ Style: {thumb_style}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,9:00:00.00,Thumb,,0,0,0,,{{\\pos({WIDTH // 2},{y})}}{body}
+Dialogue: 0,0:00:00.00,9:00:00.00,Thumb,,0,0,0,,{{\\pos({W // 2},{y})}}{body}
 """

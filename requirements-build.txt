@@ -1,0 +1,2 @@
+# Building the desktop app's engine (npm run build in the project root)
+pyinstaller>=6.0

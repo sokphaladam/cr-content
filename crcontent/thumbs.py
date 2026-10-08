@@ -49,7 +49,7 @@ def best_frames(video: Path, count: int = 4, samples: int = 32) -> list[float]:
         ["ffmpeg", "-v", "error", "-i", str(video), "-an", "-vf",
          f"fps={rate:.5f},scale={SAMPLE_W}:{SAMPLE_H}:force_original_aspect_ratio=increase,"
          f"crop={SAMPLE_W}:{SAMPLE_H}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
-        capture_output=True, check=True)
+        stdin=subprocess.DEVNULL, capture_output=True, check=True)
     size = SAMPLE_W * SAMPLE_H * 3
     scored = []
     for k in range(len(proc.stdout) // size):

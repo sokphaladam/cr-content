@@ -18,6 +18,37 @@ Requires FFmpeg on PATH. Keys:
 - `ANTHROPIC_API_KEY`: Claude writes the scripts. Not needed with `--script`.
 - `PIXABAY_API_KEY` (or `PEXELS_API_KEY`): free stock footage. Without one you get animated gradient backgrounds, or clips from `assets/footage/`. Pixabay key: sign up, then see https://pixabay.com/api/docs/
 
+## Desktop app (Tauri)
+
+The same UI in a native window. A small Rust shell (`src-tauri/`) opens the window and starts the Python engine
+on a free port next to it. The engine stops when the app closes, even if the app crashes.
+
+```powershell
+npm install                  # project root, first time only (Tauri CLI); also run npm install in frontend/
+npm run dev                  # desktop app with hot reload: Next.js dev server + engine from .venv
+```
+
+In dev the app uses this project folder for drafts, output and `.env`, the same as the web UI.
+
+**Installer** (needs Rust, plus `.venv\Scripts\pip install -r requirements-build.txt`):
+
+```powershell
+npm run build                # → src-tauri\target\release\bundle\nsis\Shorts Studio_<version>_x64-setup.exe
+```
+
+This freezes the engine with PyInstaller (`scripts/build_engine.py` → `src-tauri/engine-dist/`), exports the UI to
+static files (`frontend/out/`), and bundles both. The installed app keeps its data in
+`%APPDATA%\com.crcontent.shorts-studio\`: `.env` (created from `.env.example` on first run, put your API keys there
+and restart), `drafts/`, `output/`, `uploads/`, `cache/`, `assets/music|fonts|footage/`, and `engine.log` for
+troubleshooting. FFmpeg must still be on PATH. The music-video extras (torch / stable-ts / librosa) aren't bundled,
+so the installed app uses even lyric spacing and bpm-based cuts.
+
+| Part | Where |
+|---|---|
+| Window, engine start/stop | `src-tauri/src/main.rs` |
+| App name, window, bundle settings | `src-tauri/tauri.conf.json` (+ `tauri.bundle.json` for installer resources) |
+| Engine URL in the UI | `window.__ENGINE_URL__`, set by the Rust side, read in `frontend/lib/api.ts` |
+
 ## Web UI (Next.js)
 
 ```powershell
@@ -110,6 +141,38 @@ Each run creates `output/<time>-<lang>-<slug>/` with:
 
 Background music: drop royalty-free `.mp3` files into `assets/music/` (one is picked at random and ducked under the voice), or pass `--music file.mp3` / `--music none`.
 
+## Music video from your own song
+
+Have a finished song? **New video → Music video → Use my song**: pick the mp3 (or wav/m4a/flac), paste the lyrics
+(one sung line per row, `[Verse]` / `[Chorus]` headings optional), choose **16:9** (YouTube) or **9:16**, and upload.
+Other `[square bracket]` lines, like `[Soft synth swell]` or `[Drums drop out]`, are sound notes: they're never shown
+as lyrics, and Claude reads them when picking footage.
+
+1. Claude reads the lyrics and picks a stock-footage search for each part of the song (without Claude: general scenery).
+2. Whisper times every lyric from what's actually sung. Demucs strips the music first so the words are heard
+   clearly; the song is transcribed in short overlapping chunks (one long pass often stops halfway), and the heard
+   words are matched to your lyrics in order, allowing for mishearings, so a repeated chorus lines up with the
+   right repeat. Lines it couldn't make out (soft, reverb-heavy singing) are aligned again on their own, between
+   the lines around them, and if that fails they're taken from a forced alignment of the whole song. Lines no
+   method could confirm are marked to check by ear. The result is the same every time you sync.
+3. The **lyric timing** editor opens: play the song and watch the line above the player. Nudge a line with − / +,
+   type its start and end (`1:23.45`), or pause where it really starts and press **Start here** / **End here**.
+   Open a line's word timing to time each word (type it, or click the target while the song plays). Add a missing
+   line at the playhead or after any line, delete lines (with undo), and fix the text. Changes save automatically
+   (`lyrics.json` in the song's output folder).
+4. **Make music video**: footage cut on the beat (tempo detected from the song), karaoke lyrics (16:9 shows the next
+   line dimmed underneath), the whole song as the soundtrack. Full-length songs take several minutes.
+   Optionally write a **Video idea** first ("a woman driving through neon Tokyo at night, rain on the windshield"):
+   Claude plans the footage search for every section around it (without Claude, the idea's words are searched). The
+   idea is remembered on the song for the next version, and each version records the idea it was made with.
+
+Songs live under **Drafts**: their lyrics and timing stay editable. Every **Make music video** creates a new version in
+its own `output/<time>-<lang>-mv-<title>/` folder, listed under the song and in **Videos**; earlier versions are kept.
+A music video's **Edit lyric timing** opens the song it was made from. Deleting a song keeps its videos.
+
+Needs the music extras below; without them the lyrics are spaced evenly and you set the timing by hand.
+The first sync downloads the Whisper and Demucs models (about 2 GB, once).
+
 ## AI songs and music videos
 
 Claude writes original lyrics, ElevenLabs Music composes and sings them, and the song becomes a vertical music video
@@ -131,7 +194,7 @@ For accurate lyric timing and beat detection, install the optional extras (an NV
 ```
 
 Without them, lyrics are spread evenly over each section and cuts follow the song's bpm. Timing uses the
-vocals stem, so keep "split vocals and instrumental" on when composing. `WHISPER_MODEL` in `.env` overrides the
+vocals stem, so keep "split vocals and instrumental" on when composing (your own songs are separated with Demucs). `WHISPER_MODEL` in `.env` overrides the
 alignment model (default `medium` on GPU, `base` on CPU). Describe a sound, not a real singer: lyrics and styles
 never name real artists, and `post.txt` notes the music is AI-generated.
 
@@ -146,7 +209,7 @@ never name real artists, and `post.txt` notes the music is AI-generated.
 | `crcontent/render.py` | FFmpeg scene clips, concat, burn-in, music ducking |
 | `crcontent/lyrics.py` | Claude prompt + schema for original songs (sections, lyrics, sound) |
 | `crcontent/song.py` | ElevenLabs Music: compose + vocal/instrumental stems |
-| `crcontent/align.py` | Lyric timing (stable-ts forced alignment, even-spacing fallback) |
+| `crcontent/align.py` | Lyric timing (stable-ts forced alignment + repair of stray words, even-spacing fallback) |
 | `crcontent/beats.py` | Beat detection and beat-synced shot plan |
 | `crcontent/web.py` + `web/` | FastAPI backend and the browser UI |
 | `crcontent/config.py` | Voices, fonts, sizes per language |

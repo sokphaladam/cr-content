@@ -1,5 +1,14 @@
 // Typed client for the Python engine (crcontent/web.py). The browser calls it directly.
-export const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
+
+declare global {
+  interface Window {
+    /** Set by the desktop app (src-tauri), which starts the engine on a free port. */
+    __ENGINE_URL__?: string;
+  }
+}
+
+const desktopEngine = typeof window !== "undefined" ? window.__ENGINE_URL__ : undefined;
+export const API_BASE = (desktopEngine ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
 
 export type Lang = "en" | "km";
 
@@ -44,9 +53,11 @@ export interface Options {
   keys: { anthropic: boolean; stock: "" | "pexels" | "pixabay"; elevenlabs: boolean };
 }
 
+export type Aspect = "16:9" | "9:16";
+
 export interface Job {
   id: string;
-  kind?: "song" | "song_video";
+  kind?: "song" | "song_video" | "lyrics_sync";
   status: "queued" | "running" | "done" | "error";
   step: number;
   log: string[];
@@ -60,7 +71,10 @@ export interface VideoSummary {
   title: string;
   lang: Lang;
   created: string;
-  kind: "video" | "song";
+  kind: "video" | "song" | "music_video";
+  source: "" | "upload"; // "upload" = your own song (mp3 + lyrics)
+  aspect: Aspect;
+  song_folder: string; // music video: the song it was made from ("" if that song was deleted)
   video: boolean;
   audio: boolean; // song.mp3 exists
   thumb: boolean;
@@ -71,6 +85,8 @@ export interface VideoDetail extends VideoSummary {
   script: VideoScript | null;
   song: SongScript | null;
   stems: { vocals?: string; instrumental?: string }; // files inside the output folder
+  versions: VideoSummary[]; // song: the music videos made from it, newest first
+  idea: string; // song: the last video idea used; music video: the idea it was made with
   post: string;
   duration: number; // seconds
   thumb_text: string; // headline last used for the thumbnail
@@ -120,12 +136,36 @@ export interface DraftData {
 }
 
 export interface DraftSummary {
-  id: string;
+  kind: "script" | "song";
+  id: string; // script: draft id; song: its output folder name
   title: string;
   lang: Lang;
   updated: string;
   scenes: number;
   cover: string; // first scene background (project path) or ""
+  // songs only
+  source?: "" | "upload";
+  versions?: number; // music videos made from it
+  thumb?: string; // output folder of the newest version with a thumbnail
+  thumb_v?: number;
+}
+
+export interface TimedWord {
+  text: string;
+  start: number; // seconds into the song
+  end: number;
+}
+
+export interface TimedLine {
+  section: number; // index into song.sections
+  text: string;
+  words: TimedWord[];
+  check?: boolean; // the automatic sync isn't sure about this line: worth checking by ear
+}
+
+export interface LyricsTiming {
+  lines: TimedLine[] | null; // null = not timed yet
+  timing: "" | "whisper" | "even" | "edited";
 }
 
 export class ApiError extends Error {}
@@ -146,7 +186,9 @@ async function request<T>(path: string, init: RequestInit & { json?: unknown; ti
     });
   } catch (e) {
     if ((e as Error).name === "TimeoutError") throw new ApiError("The video engine didn't answer in time. Try again.");
-    throw new ApiError("Can't reach the video engine. Start it with: npm run dev (in frontend/), or python app.py");
+    throw new ApiError(desktopEngine
+      ? "Can't reach the video engine. Restart the app; if it keeps happening, see engine.log in the app's data folder."
+      : "Can't reach the video engine. Start it with: npm run dev (in frontend/), or python app.py");
   }
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -186,8 +228,22 @@ export const api = {
     request<SongScript>("/api/song/write", { method: "POST", json: body, timeout: 0 }),
   composeSong: (body: { song: SongScript; topic: string; lang: Lang; stems: boolean }) =>
     request<{ id: string }>("/api/song/compose", { method: "POST", json: body, timeout: 0 }),
-  musicVideo: (name: string) =>
-    request<{ id: string }>(`/api/videos/${encodeURIComponent(name)}/music-video`, { method: "POST", timeout: 0 }),
+  importSong: (body: { file: File; title: string; lyrics: string; lang: Lang; aspect: Aspect }) => {
+    const form = new FormData();
+    form.append("file", body.file);
+    form.append("title", body.title);
+    form.append("lyrics", body.lyrics);
+    form.append("lang", body.lang);
+    form.append("aspect", body.aspect);
+    return request<{ id: string }>("/api/song/import", { method: "POST", body: form, timeout: 0 });
+  },
+  lyrics: (name: string) => request<LyricsTiming>(`/api/videos/${encodeURIComponent(name)}/lyrics`),
+  saveLyrics: (name: string, lines: TimedLine[]) =>
+    request<LyricsTiming>(`/api/videos/${encodeURIComponent(name)}/lyrics`, { method: "PUT", json: { lines } }),
+  resyncLyrics: (name: string) =>
+    request<{ id: string }>(`/api/videos/${encodeURIComponent(name)}/lyrics/sync`, { method: "POST", timeout: 0 }),
+  musicVideo: (name: string, idea = "") =>
+    request<{ id: string }>(`/api/videos/${encodeURIComponent(name)}/music-video`, { method: "POST", json: { idea }, timeout: 0 }),
   drafts: () => request<DraftSummary[]>("/api/drafts"),
   draft: (id: string) => request<DraftData & { id: string }>(`/api/drafts/${encodeURIComponent(id)}`),
   createDraft: (d: DraftData) => request<{ id: string; updated: string }>("/api/drafts", { method: "POST", json: d }),

@@ -7,13 +7,14 @@ import threading
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
 import anthropic
 import requests
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,9 +22,11 @@ from pydantic import BaseModel
 
 from . import drafts
 from .captions import THUMB_STYLES
-from .config import ASSETS_DIR, CACHE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT
+from .config import ASSETS_DIR, CACHE_DIR, CODE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT
 from .lyrics import SongScript, generate_song
-from .pipeline import make_music_video, make_song, make_thumbnail, make_video, suggest_thumbnails
+from .align import lines_from_json, load_lines, save_lines
+from .pipeline import (AUDIO_EXTS, import_song, make_music_video, make_song, make_thumbnail, make_video,
+                       song_versions, split_song_renders, suggest_thumbnails, sync_lyrics)
 from .render import duration
 from .importer import import_script
 from .script import VideoScript, generate_script, suggest_queries, translate_script
@@ -31,17 +34,21 @@ from .song import elevenlabs_key
 from .tts import list_voices, synthesize
 from .visuals import IMAGE_EXTS, VIDEO_EXTS, download_stock, project_path, search, stock_source
 
-WEB_DIR = ROOT / "web"
+WEB_DIR = CODE_DIR / "web"
 UPLOAD_DIR = ROOT / "uploads"
 MAX_UPLOAD_MB = 300
-for d in (OUTPUT_DIR, UPLOAD_DIR, CACHE_DIR, DRAFTS_DIR):
-    d.mkdir(exist_ok=True)
+for d in (OUTPUT_DIR, UPLOAD_DIR, CACHE_DIR, DRAFTS_DIR, *(ASSETS_DIR / k for k in ("music", "footage", "fonts"))):
+    d.mkdir(parents=True, exist_ok=True)
+try:
+    split_song_renders()  # songs are drafts now: move music videos rendered inside a song folder into their own
+except Exception:
+    traceback.print_exc()
 
 app = FastAPI(title="cr-content")
-# The Next.js UI (frontend/, port 3000) calls this API directly from the browser.
+# The Next.js UI (frontend/, port 3000, or the desktop app's webview) calls this API directly.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1):3000|https?://tauri\.localhost|tauri://localhost)$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -181,12 +188,7 @@ def pick_footage(req: PickRequest):
     return _media_info(path)
 
 
-@app.post("/api/upload")
-def upload(file: UploadFile = File(...)):
-    ext = Path(file.filename or "").suffix.lower()
-    if ext not in IMAGE_EXTS | VIDEO_EXTS:
-        raise HTTPException(400, "Use a photo (jpg, png, webp) or a video (mp4, mov, webm).")
-    dest = UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}{ext}"
+def _save_upload(file: UploadFile, dest: Path) -> None:
     size = 0
     with open(dest, "wb") as out:
         while chunk := file.file.read(1 << 20):
@@ -196,6 +198,15 @@ def upload(file: UploadFile = File(...)):
                 dest.unlink(missing_ok=True)
                 raise HTTPException(413, f"That file is over {MAX_UPLOAD_MB} MB.")
             out.write(chunk)
+
+
+@app.post("/api/upload")
+def upload(file: UploadFile = File(...)):
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in IMAGE_EXTS | VIDEO_EXTS:
+        raise HTTPException(400, "Use a photo (jpg, png, webp) or a video (mp4, mov, webm).")
+    dest = UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}{ext}"
+    _save_upload(file, dest)
     return _media_info(dest)
 
 
@@ -378,7 +389,7 @@ def compose_song(req: SongComposeRequest):
     return {"id": job_id}
 
 
-def _run_music_video(job_id: str, folder: Path) -> None:
+def _run_music_video(job_id: str, folder: Path, idea: str = "") -> None:
     job = jobs[job_id]
 
     def log(line: str) -> None:
@@ -390,18 +401,22 @@ def _run_music_video(job_id: str, folder: Path) -> None:
     with jobs_lock:
         job["status"] = "running"
     try:
-        make_music_video(folder, log=log)
+        final = make_music_video(folder, log=log, idea=idea)
         with jobs_lock:
-            job.update(status="done", step=4, video=folder.name)
+            job.update(status="done", step=4, video=final.parent.name)
     except Exception as e:
         traceback.print_exc()
         with jobs_lock:
             job.update(status="error", error=str(e).strip().splitlines()[-1] if str(e).strip() else repr(e))
 
 
+class MusicVideoRequest(BaseModel):
+    idea: str = ""  # your idea for the video; the footage follows it
+
+
 @app.post("/api/videos/{name}/music-video")
-def music_video(name: str):
-    """Render (or re-render) a composed song as a vertical music video with karaoke lyrics."""
+def music_video(name: str, req: MusicVideoRequest | None = None):
+    """Render the song as a music video with karaoke lyrics; each render is a new version, earlier ones stay."""
     folder = _video_dir(name)
     if not (folder / "song.json").exists() or not (folder / "song.mp3").exists():
         raise HTTPException(400, "Compose the song first.")
@@ -409,8 +424,140 @@ def music_video(name: str):
     title = json.loads((folder / "song.json").read_text(encoding="utf-8")).get("title", name)
     with jobs_lock:
         jobs[job_id] = {"id": job_id, "kind": "song_video", "status": "queued", "step": 0, "log": [], "title": title}
-    renderer.submit(_run_music_video, job_id, folder)
+    renderer.submit(_run_music_video, job_id, folder, (req.idea if req else "")[:1000])
     return {"id": job_id}
+
+
+# ---------- Your own songs (upload mp3 + lyrics -> lyric timing -> music video) ----------
+
+def _job_logger(job: dict, steps: int):
+    def log(line: str) -> None:
+        with jobs_lock:
+            job["log"].append(line)
+            if line.startswith("[") and f"/{steps}]" in line:
+                job["step"] = int(line[1])
+    return log
+
+
+def _fail(job: dict, e: Exception) -> None:
+    traceback.print_exc()
+    with jobs_lock:
+        job.update(status="error", error=str(e).strip().splitlines()[-1] if str(e).strip() else repr(e))
+
+
+def _run_import(job_id: str, audio: Path, title: str, lyrics: str, lang: str, aspect: str) -> None:
+    job = jobs[job_id]
+    log = _job_logger(job, 2)
+    with jobs_lock:
+        job["status"] = "running"
+    try:
+        folder = import_song(audio, title, lyrics, lang, aspect, log=log)
+        with jobs_lock:
+            job["video"] = folder.name  # the song exists now, even if timing fails below
+        sync_lyrics(folder, log=log)
+        with jobs_lock:
+            job.update(status="done", step=2)
+    except Exception as e:
+        _fail(job, e)
+    finally:
+        audio.unlink(missing_ok=True)
+
+
+@app.post("/api/song/import")
+def import_own_song(file: UploadFile = File(...), title: str = Form(""), lyrics: str = Form(...),
+                    lang: str = Form("en"), aspect: str = Form("16:9")):
+    """Your finished song: the audio plus its lyrics. Lyric timing runs as a job; then check it and render."""
+    if lang not in LANGS:
+        raise HTTPException(400, f"Unknown language {lang}")
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in AUDIO_EXTS:
+        raise HTTPException(400, "Use an audio file: mp3, wav, m4a, flac or ogg.")
+    if not lyrics.strip():
+        raise HTTPException(400, "Paste the song's lyrics.")
+    audio = UPLOAD_DIR / f"song-{uuid.uuid4().hex[:12]}{ext}"
+    _save_upload(file, audio)
+    title = title.strip() or Path(file.filename or "song").stem
+    job_id = uuid.uuid4().hex[:10]
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "lyrics_sync", "status": "queued", "step": 0, "log": [], "title": title}
+    renderer.submit(_run_import, job_id, audio, title, lyrics, lang, aspect)
+    return {"id": job_id}
+
+
+def _run_sync(job_id: str, folder: Path) -> None:
+    job = jobs[job_id]
+    log = _job_logger(job, 2)
+    with jobs_lock:
+        job["status"] = "running"
+    try:
+        log("[1/2] Loading the song")
+        sync_lyrics(folder, log=log)
+        with jobs_lock:
+            job.update(status="done", step=2, video=folder.name)
+    except Exception as e:
+        _fail(job, e)
+
+
+@app.post("/api/videos/{name}/lyrics/sync")
+def resync_lyrics(name: str):
+    """Time the lyrics against the song again (replaces any hand corrections)."""
+    folder = _video_dir(name)
+    if not (folder / "song.json").exists() or not (folder / "song.mp3").exists():
+        raise HTTPException(400, "This isn't a song.")
+    job_id = uuid.uuid4().hex[:10]
+    title = json.loads((folder / "song.json").read_text(encoding="utf-8")).get("title", name)
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "lyrics_sync", "status": "queued", "step": 0, "log": [], "title": title}
+    renderer.submit(_run_sync, job_id, folder)
+    return {"id": job_id}
+
+
+@app.get("/api/videos/{name}/lyrics")
+def get_lyrics(name: str):
+    folder = _video_dir(name)
+    lines = load_lines(folder / "lyrics.json")
+    meta = json.loads((folder / "meta.json").read_text(encoding="utf-8")) if (folder / "meta.json").exists() else {}
+    return {"lines": [asdict(l) for l in lines] if lines is not None else None, "timing": meta.get("timing", "")}
+
+
+class TimedWord(BaseModel):
+    text: str
+    start: float
+    end: float
+
+
+class TimedLine(BaseModel):
+    section: int = 0
+    text: str
+    words: list[TimedWord]
+    check: bool = False  # still to be checked by ear
+
+
+class LyricsRequest(BaseModel):
+    lines: list[TimedLine]
+
+
+@app.put("/api/videos/{name}/lyrics")
+def put_lyrics(name: str, req: LyricsRequest):
+    """Save hand-corrected lyric timing; the next music-video render uses it."""
+    folder = _video_dir(name)
+    total = float(json.loads((folder / "meta.json").read_text(encoding="utf-8")).get("duration") or 1e9) \
+        if (folder / "meta.json").exists() else 1e9
+    data = []
+    for line in req.lines:
+        words = [w for w in line.words if w.text.strip()]
+        if not words:
+            continue
+        data.append({"section": line.section, "text": line.text, "check": line.check,
+                     "words": [{"text": w.text, "start": max(0.0, min(w.start, total)),
+                                "end": max(0.0, min(max(w.end, w.start + 0.05), total))} for w in words]})
+    lines = lines_from_json(data)
+    save_lines(lines, folder / "lyrics.json")
+    meta_path = folder / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    meta["timing"] = "edited"
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"lines": [asdict(l) for l in lines], "timing": "edited"}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -425,7 +572,23 @@ def job_status(job_id: str):
 
 @app.get("/api/drafts")
 def list_drafts():
-    return drafts.list_drafts()
+    """Script drafts and songs (a song's lyrics and timing stay editable until you make a music video from it)."""
+    items = [{"kind": "script", **d} for d in drafts.list_drafts()]
+    for folder in OUTPUT_DIR.iterdir():
+        meta = _read_meta(folder) if folder.is_dir() else {}
+        if meta.get("kind") != "song":
+            continue
+        summary = _summary(folder)
+        versions = song_versions(folder)
+        edited = [p.stat().st_mtime for p in (folder / "lyrics.json", folder / "song.json") if p.exists()]
+        updated = datetime.fromtimestamp(max(edited)).isoformat(timespec="seconds") if edited else summary["created"]
+        latest = next((v for v in versions if (v / "thumbnail.jpg").exists()), None)
+        items.append({"kind": "song", "id": folder.name, "title": summary["title"], "lang": summary["lang"],
+                      "updated": max([updated] + [_read_meta(v).get("created", "") for v in versions]),
+                      "scenes": 0, "cover": "", "source": summary["source"], "versions": len(versions),
+                      "thumb": latest.name if latest else "",
+                      "thumb_v": int((latest / "thumbnail.jpg").stat().st_mtime) if latest else 0})
+    return sorted(items, key=lambda x: x["updated"], reverse=True)
 
 
 @app.post("/api/drafts")
@@ -467,10 +630,15 @@ def _video_dir(name: str) -> Path:
     return folder
 
 
+def _read_meta(folder: Path) -> dict:
+    try:
+        return json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 def _summary(folder: Path) -> dict:
-    meta = {}
-    if (folder / "meta.json").exists():
-        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+    meta = _read_meta(folder)
     title = folder.name
     for name in ("script.json", "song.json"):
         if (folder / name).exists():
@@ -484,6 +652,10 @@ def _summary(folder: Path) -> dict:
         "lang": lang,
         "created": created,
         "kind": meta.get("kind", "video"),
+        "source": meta.get("source", ""),  # "upload" = your own song
+        "aspect": meta.get("aspect", "9:16"),
+        # music video: the song folder it was made from ("" once that song is deleted)
+        "song_folder": meta.get("song", "") if meta.get("song") and (OUTPUT_DIR / meta["song"]).is_dir() else "",
         "video": (folder / "video.mp4").exists(),
         "audio": (folder / "song.mp3").exists(),
         "thumb": (folder / "thumbnail.jpg").exists(),
@@ -494,7 +666,8 @@ def _summary(folder: Path) -> dict:
 
 @app.get("/api/videos")
 def videos():
-    folders = [f for f in OUTPUT_DIR.iterdir() if f.is_dir()]
+    # songs are listed with the drafts; their music videos are here
+    folders = [f for f in OUTPUT_DIR.iterdir() if f.is_dir() and _read_meta(f).get("kind") != "song"]
     items = [_summary(f) for f in folders]
     return sorted(items, key=lambda v: v["created"], reverse=True)
 
@@ -508,6 +681,8 @@ def video_detail(name: str):
     meta = json.loads((folder / "meta.json").read_text(encoding="utf-8")) if (folder / "meta.json").exists() else {}
     data["song"] = SongScript.load(folder / "song.json").model_dump() if (folder / "song.json").exists() else None
     data["stems"] = {k: meta[k] for k in ("vocals", "instrumental") if meta.get(k)}
+    data["versions"] = [_summary(f) for f in song_versions(folder)] if meta.get("kind") == "song" else []
+    data["idea"] = meta.get("idea", "")  # song: last idea used for a music video; music video: the one it was made with
     data["duration"] = (round(duration(folder / "video.mp4"), 2) if data["video"]
                         else meta.get("duration", 0))
     data["thumb_text"] = meta.get("thumb_text", data["title"])
@@ -579,6 +754,16 @@ def download_song(name: str):
     if not (folder / "song.mp3").exists():
         raise HTTPException(404, "This song hasn't been composed.")
     return FileResponse(folder / "song.mp3", media_type="audio/mpeg", filename=f"{name}.mp3")
+
+
+@app.get("/api/videos/{name}/stem/{kind}")
+def download_stem(name: str, kind: str):
+    folder = _video_dir(name)
+    meta = json.loads((folder / "meta.json").read_text(encoding="utf-8")) if (folder / "meta.json").exists() else {}
+    file = folder / meta[kind] if kind in ("vocals", "instrumental") and meta.get(kind) else None
+    if not file or not file.is_file() or file.resolve().parent != folder:
+        raise HTTPException(404, "This stem doesn't exist.")
+    return FileResponse(file, media_type="audio/mpeg", filename=f"{name}-{kind}{file.suffix}")
 
 
 @app.delete("/api/videos/{name}")

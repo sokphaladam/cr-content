@@ -1,5 +1,6 @@
 """Write an original song (lyrics + structure + sound) with Claude as validated, structured JSON."""
 import json
+import re
 from pathlib import Path
 
 import anthropic
@@ -161,3 +162,233 @@ def fit_length(song: SongScript, seconds: int) -> None:
     if song.sections:
         last = song.sections[-1]
         last.seconds = max(MIN_SECTION_SEC, min(MAX_SECTION_SEC, last.seconds + seconds - song.seconds))
+
+
+# ---------- Your own song: lyrics you paste for an mp3 you upload ----------
+
+_HEADER = re.compile(r"^\s*[\[(]\s*([^\])]{1,40}?)\s*[\])]\s*:?\s*$|^\s*([A-Za-z][\w -]{0,30}?(?:\s*\d+)?)\s*:\s*$")
+_SECTION_WORDS = ("verse", "chorus", "pre-chorus", "prechorus", "hook", "bridge", "intro", "outro", "refrain",
+                  "interlude", "drop", "breakdown", "post-chorus", "instrumental", "solo", "rap")
+
+
+_SECTION_NAME = re.compile(r"^(?:(?:final|last|first|second|third|double|short|extended|big)\s+)?(?:%s)\b"
+                           % "|".join(re.escape(w) for w in _SECTION_WORDS), re.IGNORECASE)
+# "Guitar Solo", "Piano Interlude", "Beat Drop 2": a short name that ends with the section word
+_NAMED_SECTION = re.compile(r"^[\w\'-]+(?:\s+[\w\'-]+){0,2}?\s+(?:%s)(?:\s*\d+)?$"
+                            % "|".join(re.escape(w) for w in _SECTION_WORDS), re.IGNORECASE)
+_NOTE = re.compile(r"^\s*\[([^\]]*)\]?\s*$")
+_INLINE_NOTE = re.compile(r"\s*\[[^\]]*\]\s*")
+
+
+def _header_name(line: str) -> str | None:
+    """'[Chorus]', '(Verse 2)', 'Bridge:', '[Final Chorus]' -> the section name; None for anything else."""
+    m = _HEADER.match(line)
+    if not m:
+        return None
+    name = (m.group(1) or m.group(2) or "").strip()
+    # "(oh-oh)", "And she said:" or "[Drums drop out, floating vocals]" aren't headers: a header starts with
+    # the section's name
+    if not (_SECTION_NAME.match(name) or _NAMED_SECTION.match(name)):
+        return None
+    return name[:1].upper() + name[1:]
+
+
+_PAREN_NOTE = re.compile(r"^\s*\(([^()]*)\)\s*$")
+# words that make a whole-line (parenthesis) a sound direction rather than a sung backing line like "(oh-oh)"
+_SOUND_WORDS = re.compile(
+    r"\b(drums?|bass|synths?|guitars?|piano|rhodes|keys|strings|pads?|organ|horns?|brass|beat|loop|kick|snare|"
+    r"hi-?hats?|vocals?|harmon(y|ies)|falsetto|choir|ad-?libs?|reverb|echo(es|ing)?|delay|phaser|filter(ed)?|"
+    r"fades?|fading|tape|vinyl|instrumental|solo|bars?|build(s|ing)?|drops?|sweep|swell|riser|breakdown|"
+    r"tempo|half-?time|key change|outro|intro|spoken|whisper(ed|s)?|hum(s|ming)?|silence|sfx|full band)\b",
+    re.IGNORECASE)
+
+
+def _note(line: str) -> str | None:
+    """'[Warbly Rhodes, tape hiss]' or '(Drums drop out, reverb vocals)' -> the production note inside; None for a sung
+    line.
+
+    Song generators (and the people who write for them) put sound directions in square brackets, or in parentheses;
+    they're never sung. A line in parentheses only counts when it describes sound, so a sung "(oh-oh)" or
+    "(where my love)" stays a lyric.
+    """
+    m = _NOTE.match(line)
+    if m:
+        return m.group(1).strip()
+    m = _PAREN_NOTE.match(line)
+    if m and _SOUND_WORDS.search(m.group(1)):
+        return m.group(1).strip()
+    return None
+
+
+def move_notes(song: "SongScript") -> bool:
+    """Sound directions that ended up among the sung lines (songs added before they were recognised) become the
+    section's styles. Returns True when something moved."""
+    moved = False
+    for section in song.sections:
+        notes = [n for n in (_note(" ".join(l.split())) for l in section.lyrics) if n is not None]
+        if notes:
+            section.lyrics = [l for l in section.lyrics if _note(" ".join(l.split())) is None]
+            section.styles += [n for n in notes if n]
+            moved = True
+    return moved
+
+
+def parse_lyrics(text: str) -> list[SongSection]:
+    """Pasted lyrics -> sections. [Verse 1] / Chorus: style headers start sections; without headers,
+    blank lines separate them. Other [square bracket] lines are production notes: they become the section's
+    styles, never lyrics. Times are filled in later from the audio."""
+    sections: list[SongSection] = []
+    current: SongSection | None = None
+    has_headers = any(_header_name(" ".join(l.split())) for l in text.splitlines())
+
+    def start(name: str) -> SongSection:
+        section = SongSection(name=name, lyrics=[], seconds=0, visual_query="")
+        sections.append(section)
+        return section
+
+    for raw in text.splitlines():
+        line = " ".join(raw.split())
+        name = _header_name(line) if line else None
+        note = None if name or not line else _note(line)
+        if name:
+            current = start(name)
+        elif not line:
+            if not has_headers:
+                current = None  # blank line = next section
+        elif note is not None:
+            if note:
+                current = current or start(f"Part {len(sections) + 1}")
+                current.styles.append(note)
+        else:
+            line = _INLINE_NOTE.sub(" ", line).strip()  # "Hold on [whispered]" -> "Hold on"
+            if not line:
+                continue
+            if current is None:
+                current = start(f"Part {len(sections) + 1}")
+            current.lyrics.append(line)
+    # keep instrumental parts (intro, solo, break): they still get their own footage
+    return [s for s in sections if s.lyrics or s.styles or has_headers]
+
+
+DESCRIBE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "genre": {"type": "string"},
+        "mood": {"type": "string"},
+        "visual_queries": {"type": "array", "items": {"type": "string"}},
+        "caption": {"type": "string"},
+        "hashtags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["genre", "mood", "visual_queries", "caption", "hashtags"],
+    "additionalProperties": False,
+}
+
+
+def _sections_text(song: SongScript) -> str:
+    """The lyrics by section, with any sound notes, as Claude reads them."""
+    return "\n\n".join(f"[{i + 1}. {s.name}]\n" + (f"(sound: {'; '.join(s.styles)})\n" if s.styles else "")
+                       + ("\n".join(s.lyrics) or "(instrumental)")
+                       for i, s in enumerate(song.sections))
+
+
+def describe_song(song: SongScript, lang: str, client: anthropic.Anthropic | None = None) -> None:
+    """Fill in footage searches per section, plus mood, caption and hashtags, by having Claude read the lyrics."""
+    client = client or make_client()
+    prompt = (
+        f"Song title: {song.title}\nLanguage: {LANGS[lang].name}\n\nLyrics by section:\n{_sections_text(song)}\n\n"
+        f"This is the user's own finished song; we are making a music video for it from stock footage.\n"
+        f"- visual_queries: exactly {len(song.sections)} items, one per section in order. Each is an ENGLISH stock "
+        f"video search of 2-4 concrete words that a site like Pexels really has, matching that section's imagery "
+        f"and mood. Keep a consistent look across the song (same setting/colour palette), vary the shots.\n"
+        f"- genre and mood: a few words each, guessed from the lyrics.\n"
+        f"- caption: a 1-2 sentence social post caption in {LANGS[lang].name} for the music video.\n"
+        f"- hashtags: 5-8 without the # sign."
+    )
+    response = client.beta.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=4000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": DESCRIBE_SCHEMA}},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if response.stop_reason == "refusal":
+        raise RuntimeError("Claude declined to describe these lyrics.")
+    data = json.loads(next(b.text for b in response.content if b.type == "text"))
+    queries = [q.strip() for q in data["visual_queries"] if q.strip()]
+    for i, s in enumerate(song.sections):
+        s.visual_query = queries[i] if i < len(queries) else (queries[-1] if queries else "")
+    song.genre, song.mood = data["genre"], data["mood"]
+    song.caption = data["caption"]
+    song.hashtags = [h.lstrip("#").replace(" ", "") for h in data["hashtags"]]
+
+
+IDEA_SCHEMA = {
+    "type": "object",
+    "properties": {"visual_queries": {"type": "array", "items": {"type": "string"}}},
+    "required": ["visual_queries"],
+    "additionalProperties": False,
+}
+
+
+def plan_footage(song: SongScript, lang: str, idea: str, client: anthropic.Anthropic | None = None) -> list[str]:
+    """One stock-footage search per section that carries out the user's own idea for the video (setting, story,
+    look), fitted to what each section sings about."""
+    client = client or make_client()
+    prompt = (
+        f"Song title: {song.title}\nLanguage: {LANGS[lang].name}\n\nLyrics by section:\n{_sections_text(song)}\n\n"
+        f"We are making a music video for this song from stock footage. The user's idea for the video:\n"
+        f"<idea>\n{idea.strip()}\n</idea>\n\n"
+        f"- visual_queries: exactly {len(song.sections)} items, one per section in order. Each is an ENGLISH stock "
+        f"video search of 2-4 concrete words that a site like Pexels really has. Follow the user's idea (its setting, "
+        f"characters, story and look) through the whole song, and let each section's lyrics and energy pick the "
+        f"moment: quieter shots for verses and instrumental parts, the most striking shots for choruses. Vary the "
+        f"shots; never repeat a search."
+    )
+    response = client.beta.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=4000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": IDEA_SCHEMA}},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if response.stop_reason == "refusal":
+        raise RuntimeError("Claude declined this video idea.")
+    queries = [q.strip() for q in json.loads(next(b.text for b in response.content if b.type == "text"))["visual_queries"]
+               if q.strip()]
+    if not queries:
+        raise RuntimeError("no footage searches came back")
+    return [queries[i] if i < len(queries) else queries[-1] for i in range(len(song.sections))]
+
+
+def idea_queries(song: SongScript, lang: str, idea: str, log=print) -> list[str]:
+    """Footage searches for the idea: Claude's plan, or without Claude the idea's own words for every section."""
+    try:
+        return plan_footage(song, lang, idea)
+    except Exception as e:  # no key, no credits, offline
+        log(f"      ! Claude couldn't plan footage for your idea ({e.__class__.__name__}); searching for the idea itself")
+        words = " ".join(idea.split()[:6])
+        return [words] * len(song.sections)
+
+
+# when Claude isn't available: calm, broadly fitting footage that rotates per section
+FALLBACK_QUERIES = ("city lights night", "ocean waves sunset", "clouds sky timelapse", "forest sunlight",
+                    "rain window", "road trip drive", "stars night sky", "flowers field")
+
+
+def own_song(title: str, lyrics: str, lang: str, log=print) -> SongScript:
+    """SongScript for an uploaded song: sections from the pasted lyrics, footage ideas from Claude when possible."""
+    sections = parse_lyrics(lyrics)
+    if not sections:
+        raise ValueError("Paste the song's lyrics first.")
+    song = SongScript(title=title.strip() or "Untitled song", genre="", mood="", bpm=0, vocal="", styles=[], avoid=[],
+                      sections=sections, caption="", hashtags=[])
+    try:
+        describe_song(song, lang)
+        log(f"      -> {len(sections)} sections; footage: " + ", ".join(s.visual_query for s in sections))
+    except Exception as e:  # no key, no credits, offline: generic footage is still a usable video
+        log(f"      ! Claude couldn't suggest footage ({e.__class__.__name__}); using general scenery")
+        for i, s in enumerate(song.sections):
+            s.visual_query = FALLBACK_QUERIES[i % len(FALLBACK_QUERIES)]
+    return song

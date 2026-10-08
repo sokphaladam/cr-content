@@ -77,6 +77,7 @@ export function Library({
   selectedDraft,
   selectedVideo,
   onSelectDraft,
+  onSelectSong,
   onSelectVideo,
   onNew,
 }: {
@@ -87,6 +88,7 @@ export function Library({
   selectedDraft: string | null;
   selectedVideo: string | null;
   onSelectDraft: (id: string) => void;
+  onSelectSong: (name: string) => void;
   onSelectVideo: (name: string) => void;
   onNew: () => void;
 }) {
@@ -112,19 +114,31 @@ export function Library({
           (drafts === null ? (
             <li className="p-4 text-[13px] text-ink-soft">Loading…</li>
           ) : drafts.length === 0 ? (
-            <Empty icon={<FileText className="size-5" />} text="Scripts you write or paste are saved here automatically." />
+            <Empty icon={<FileText className="size-5" />} text="Scripts you write or paste, and songs you add, are saved here automatically." />
           ) : (
-            drafts.map((d) => (
-              <Row
-                key={d.id}
-                current={d.id === selectedDraft}
-                onClick={() => onSelectDraft(d.id)}
-                title={d.title}
-                lang={d.lang}
-                meta={`${d.scenes} scene${d.scenes === 1 ? "" : "s"}, ${relativeTime(d.updated)}`}
-                thumb={<Thumb src={d.cover && isImagePath(d.cover) ? fileUrl(d.cover) : undefined} fallback={<FileText className="size-4" />} />}
-              />
-            ))
+            drafts.map((d) =>
+              d.kind === "song" ? (
+                <Row
+                  key={d.id}
+                  current={d.id === selectedDraft}
+                  onClick={() => onSelectSong(d.id)}
+                  title={d.title}
+                  lang={d.lang}
+                  meta={`song, ${d.versions ? `${d.versions} video${d.versions === 1 ? "" : "s"}` : "no video yet"}, ${relativeTime(d.updated)}`}
+                  thumb={<Thumb src={d.thumb ? `${outputUrl(d.thumb, "thumbnail.jpg")}?v=${d.thumb_v ?? 0}` : undefined} fallback={<Music className="size-4" />} />}
+                />
+              ) : (
+                <Row
+                  key={d.id}
+                  current={d.id === selectedDraft}
+                  onClick={() => onSelectDraft(d.id)}
+                  title={d.title}
+                  lang={d.lang}
+                  meta={`${d.scenes} scene${d.scenes === 1 ? "" : "s"}, ${relativeTime(d.updated)}`}
+                  thumb={<Thumb src={d.cover && isImagePath(d.cover) ? fileUrl(d.cover) : undefined} fallback={<FileText className="size-4" />} />}
+                />
+              ),
+            )
           ))}
         {tab === "videos" &&
           (videos === null ? (
@@ -139,11 +153,11 @@ export function Library({
                 onClick={() => onSelectVideo(v.name)}
                 title={v.title}
                 lang={v.lang}
-                meta={v.video || v.audio ? `${v.kind === "song" ? "song, " : ""}${relativeTime(v.created)}` : "script only"}
+                meta={v.video || v.audio ? `${v.kind === "music_video" ? "music video, " : v.kind === "song" ? "song, " : ""}${relativeTime(v.created)}` : "script only"}
                 thumb={
                   <Thumb
                     src={v.thumb ? `${outputUrl(v.name, "thumbnail.jpg")}?v=${v.thumb_v}` : undefined}
-                    fallback={v.kind === "song" ? <Music className="size-4" /> : <Film className="size-4" />}
+                    fallback={v.kind !== "video" ? <Music className="size-4" /> : <Film className="size-4" />}
                   />
                 }
               />
