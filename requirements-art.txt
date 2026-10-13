@@ -1,0 +1,7 @@
+# AI scene art drawn on this computer (anime / cinematic / flat 2D looks) and 3D camera moves over the pictures.
+# Needs an NVIDIA GPU (8 GB+; 12 GB recommended). Install a CUDA build of torch first:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+# Each look downloads its model (~7 GB) into <data folder>/models the first time it's used.
+diffusers>=0.32
+transformers>=4.46
+accelerate>=1.0

@@ -10,6 +10,7 @@ import re
 import subprocess
 import tempfile
 import traceback
+import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -272,6 +273,44 @@ def _same(a: str, b: str) -> bool:
     return min(len(a), len(b)) >= 3 and difflib.SequenceMatcher(None, a, b).ratio() >= 0.75
 
 
+def _fill_gaps(tokens: list[tuple[int, str]], times: list[tuple[float, float] | None],
+               pace: float = 0.4) -> list[tuple[float, float]]:
+    """Words with no time of their own (`None`) get one between the timed words around them, by length.
+    tokens: (line index, word) per entry of `times`."""
+    times = list(times)
+    n = len(times)
+    # spread unmatched words between the matched ones around them, by length
+    i = 0
+    while i < n:
+        if times[i] is not None:
+            i += 1
+            continue
+        k = i
+        while k < n and times[k] is None:
+            k += 1
+        run = list(range(i, k))
+        left = times[i - 1][1] if i > 0 else None
+        right = times[k][0] if k < n else None
+        if left is None and right is None:
+            left, right = 0.0, pace * len(run)
+        elif left is None:
+            left = max(0.0, right - pace * len(run))
+        elif right is None:
+            right = left + pace * len(run)
+        # a long gap (instrumental) between matches: keep these words next to the line they belong to
+        same_left = i > 0 and tokens[i - 1][0] == tokens[i][0]
+        same_right = k < n and tokens[k][0] == tokens[k - 1][0]
+        if right - left > pace * len(run) * 3:
+            if same_right and not same_left:
+                left = right - pace * len(run)
+            else:
+                right = left + pace * len(run)
+        for w, idx in zip(_weighted([tokens[x][1] for x in run], left, max(right, left + 0.05)), run):
+            times[idx] = (w.start, w.end)
+        i = k
+    return times
+
+
 def match_lyrics(lines: list[tuple[int, str]], heard: list[Word]) -> tuple[list[LyricLine], set[int]]:
     """Time the lyrics from what Whisper heard: match lyric words to heard words in order (longest common sequence,
     allowing mishearings), so a repeated chorus lines up with the right repeat. Matched words take the heard times;
@@ -302,37 +341,7 @@ def match_lyrics(lines: list[tuple[int, str]], heard: list[Word]) -> tuple[list[
         if len(a[i]) <= 3 and (i - 1) not in anchor and (i + 1) not in anchor:
             del anchor[i]
 
-    pace = 0.4
-    times: list[tuple[float, float] | None] = [(anchor[i].start, anchor[i].end) if i in anchor else None for i in range(n)]
-    # spread unmatched words between the matched ones around them, by length
-    i = 0
-    while i < n:
-        if times[i] is not None:
-            i += 1
-            continue
-        k = i
-        while k < n and times[k] is None:
-            k += 1
-        run = list(range(i, k))
-        left = times[i - 1][1] if i > 0 else None
-        right = times[k][0] if k < n else None
-        if left is None and right is None:
-            left, right = 0.0, pace * len(run)
-        elif left is None:
-            left = max(0.0, right - pace * len(run))
-        elif right is None:
-            right = left + pace * len(run)
-        # a long gap (instrumental) between matches: keep these words next to the line they belong to
-        same_left = i > 0 and tokens[i - 1][0] == tokens[i][0]
-        same_right = k < n and tokens[k][0] == tokens[k - 1][0]
-        if right - left > pace * len(run) * 3:
-            if same_right and not same_left:
-                left = right - pace * len(run)
-            else:
-                right = left + pace * len(run)
-        for w, idx in zip(_weighted([tokens[x][1] for x in run], left, max(right, left + 0.05)), run):
-            times[idx] = (w.start, w.end)
-        i = k
+    times = _fill_gaps(tokens, [(anchor[i].start, anchor[i].end) if i in anchor else None for i in range(n)])
 
     out, weak, pos = [], set(), 0
     for li, (section, text) in enumerate(lines):
@@ -340,6 +349,87 @@ def match_lyrics(lines: list[tuple[int, str]], heard: list[Word]) -> tuple[list[
         idxs = range(pos, pos + len(toks))
         words = [Word(tok, times[x][0], max(times[x][1], times[x][0] + 0.05)) for tok, x in zip(toks, idxs)]
         if sum(x in anchor for x in idxs) * 2 < len(toks):
+            weak.add(li)
+        out.append(LyricLine(section, text, words[0].start, words[-1].end, words))
+        pos += len(toks)
+    return out, weak
+
+
+def _letters(text: str) -> str:
+    """Letters, marks and digits only, lowercased: what two spellings of the same sung words have in common."""
+    return "".join(c for c in text.lower() if unicodedata.category(c)[0] in "LMN")
+
+
+def load_timestamps(path: Path) -> list[Word] | None:
+    """The song generator's own word timings (timestamps.json: [{"word", "start_ms", "end_ms"}]), or None."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        words = [Word(str(d.get("word") or d.get("text") or ""), float(d["start_ms"]) / 1000, float(d["end_ms"]) / 1000)
+                 for d in data]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return sorted((w for w in words if _letters(w.text)), key=lambda w: w.start) or None
+
+
+MIN_COVERAGE = 0.6  # share of the lyrics' letters that must be found in the sung words to trust them
+
+
+def known_timing(lines: list[tuple[int, str]], sung: list[Word]) -> tuple[list[LyricLine], set[int]] | None:
+    """Time the lyrics from words whose times are already known (the song generator reports when it sang each word).
+
+    Matching works letter by letter rather than word by word, so it doesn't matter how either side splits words
+    (Khmer phrases, "gonna" / "gon na", punctuation), and ad-libs or repeats the singer added are simply skipped.
+    Every lyric word takes the time of the sung letters it matched; words with no match are spread between their
+    neighbours. Returns None when too little of the lyrics was found (the song isn't singing these lyrics).
+    The same input always gives the same timing.
+    """
+    heard: list[tuple[float, float]] = []  # per sung letter: (start, end)
+    sung_text = []
+    for w in sung:
+        letters = _letters(w.text)
+        span = max(w.end - w.start, 0.01)
+        for k, c in enumerate(letters):
+            sung_text.append(c)
+            heard.append((w.start + span * k / len(letters), w.start + span * (k + 1) / len(letters)))
+    tokens = [(li, tok) for li, (_, text) in enumerate(lines) for tok in text.split()]
+    owner: list[int] = []  # per lyric letter: index of its token
+    lyric_text = []
+    for ti, (_, tok) in enumerate(tokens):
+        for c in _letters(tok):
+            lyric_text.append(c)
+            owner.append(ti)
+    if not lyric_text or not sung_text:
+        return None
+    matcher = difflib.SequenceMatcher(None, "".join(lyric_text), "".join(sung_text), autojunk=False)
+    hit: dict[int, list[tuple[float, float]]] = {}
+    found = 0
+    for a, b, size in matcher.get_matching_blocks():
+        if size < 2:  # a lone letter in common is chance, not the same word
+            continue
+        found += size
+        for k in range(size):
+            hit.setdefault(owner[a + k], []).append(heard[b + k])
+    if found < MIN_COVERAGE * len(lyric_text):
+        return None
+
+    times: list[tuple[float, float] | None] = []
+    for ti, (_, tok) in enumerate(tokens):
+        spans = hit.get(ti)
+        # a word counts as found when most of its letters were
+        if spans and len(spans) * 2 >= len(_letters(tok)):
+            times.append((spans[0][0], max(spans[-1][1], spans[0][0] + 0.05)))
+        else:
+            times.append(None)
+    times = _fill_gaps(tokens, times)
+
+    out, weak, pos = [], set(), 0
+    for li, (section, text) in enumerate(lines):
+        toks = text.split()
+        idxs = range(pos, pos + len(toks))
+        words = [Word(tok, times[x][0], max(times[x][1], times[x][0] + 0.05)) for tok, x in zip(toks, idxs)]
+        if sum(x in hit for x in idxs) * 2 < len(toks):
             weak.add(li)
         out.append(LyricLine(section, text, words[0].start, words[-1].end, words))
         pos += len(toks)
@@ -547,8 +637,17 @@ def repair(lines: list[LyricLine]) -> list[LyricLine]:
 
 
 def align_lyrics(audio: Path, song: SongScript, lang: str, total: float, log=print,
-                 isolate_vocals: bool = False) -> tuple[list[LyricLine], str]:
-    """Best available timing for the lyrics; returns (lines, method) where method is 'whisper' or 'even'."""
+                 isolate_vocals: bool = False, known: list[Word] | None = None) -> tuple[list[LyricLine], str]:
+    """Best available timing for the lyrics; returns (lines, method) where method is 'exact' (from `known`, the
+    word timings the song generator reported), 'whisper' or 'even'."""
+    lines = _lines(song)
+    if known and lines:
+        found = known_timing(lines, known)
+        if found:
+            timed, weak = found
+            log(f"      timed from the song's own word timings ({len(lines) - len(weak)}/{len(lines)} lines matched)")
+            return _flag(repair(timed), weak, total), "exact"
+        log("      the song's word timings don't match these lyrics (edited after composing?); listening instead")
     try:
         if isolate_vocals and demucs_available():
             log("      separating the vocals from the music first (Demucs)")

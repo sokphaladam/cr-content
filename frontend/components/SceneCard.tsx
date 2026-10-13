@@ -1,27 +1,28 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ImageIcon, Pause, Play, Search, Sparkles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Clapperboard, Film, ImageIcon, Palette, Pause, Play, Search, Sparkles, Trash2, Type, Upload, X } from "lucide-react";
 import { useId, useRef, useState } from "react";
-import { api, fileUrl, type Lang, type Scene, type StockResult } from "@/lib/api";
+import { api, fileUrl, type ArtStatus, type ArtStyle, type BRoll, type Lang, type Scene, type StockResult, type TextOverlay } from "@/lib/api";
 import { isImagePath } from "@/lib/format";
+import { ScenePicture } from "./ArtControls";
 import { Button, Chip, IconButton, Segmented, Spinner } from "./ui";
 
 export type DraftScene = Scene & { uid: string };
 
-function MediaSlot({ media, onClick }: { media: string; onClick: () => void }) {
+function MediaSlot({ media, onClick, ai = false }: { media: string; onClick: () => void; ai?: boolean }) {
   const video = useRef<HTMLVideoElement>(null);
   if (!media) {
     return (
       <button
         type="button"
         onClick={onClick}
-        title="Footage is picked automatically from the search words"
+        title={ai ? "An AI picture is drawn for this scene when you render" : "Footage is picked automatically from the search words"}
         aria-label="Choose background for this scene"
         className="grid aspect-[9/16] w-full cursor-pointer place-items-center rounded-lg border border-dashed border-ink-soft/50 bg-paper p-0 text-ink-soft transition-colors hover:border-cobalt hover:text-cobalt"
       >
         <span className="grid justify-items-center gap-1 text-[11px] font-semibold">
-          <ImageIcon className="size-4" aria-hidden />
-          Auto
+          {ai ? <Sparkles className="size-4" aria-hidden /> : <ImageIcon className="size-4" aria-hidden />}
+          {ai ? "AI" : "Auto"}
         </span>
       </button>
     );
@@ -44,7 +45,7 @@ function MediaSlot({ media, onClick }: { media: string; onClick: () => void }) {
         <video ref={video} src={`${url}#t=0.5`} muted playsInline preload="metadata" className="block h-full w-full object-cover" />
       )}
       <span className="absolute bottom-1 left-1">
-        <Chip tone="caption">{isImagePath(media) ? "Photo" : "Video"}</Chip>
+        <Chip tone="caption">{media.startsWith("cache/gen/") ? "AI" : isImagePath(media) ? "Photo" : "Video"}</Chip>
       </span>
     </button>
   );
@@ -99,6 +100,7 @@ function Picker({
   const [ideas, setIdeas] = useState<string[]>([]);
   const [ideasBusy, setIdeasBusy] = useState(false);
   const [picking, setPicking] = useState<number | null>(null);
+  const [designing, setDesigning] = useState<"still" | "motion" | null>(null);
   const radioName = useId();
 
   async function pick(r: StockResult) {
@@ -112,6 +114,20 @@ function Picker({
       setStatus((err as Error).message, true);
     } finally {
       setPicking(null);
+    }
+  }
+
+  async function design(animate: boolean) {
+    setDesigning(animate ? "motion" : "still");
+    setStatus(animate ? "Claude is animating this background, then it's rendered to video… about two minutes." : "Claude is drawing this background… about a minute.");
+    try {
+      const m = await api.designFootage(q.trim(), narration, animate);
+      onPicked(m.media, q.trim());
+      setStatus(animate ? "Claude's animated background set for this scene." : "Claude's artwork set for this scene.");
+    } catch (err) {
+      setStatus((err as Error).message, true);
+    } finally {
+      setDesigning(null);
     }
   }
 
@@ -159,6 +175,28 @@ function Picker({
         </form>
         <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={askIdeas} loading={ideasBusy}>
           Ideas
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<Palette className="size-3.5" />}
+          onClick={() => design(false)}
+          loading={designing === "still"}
+          disabled={picking !== null || designing !== null || (!q.trim() && !narration.trim())}
+          title="Claude draws an original background from the search words and the narration"
+        >
+          Design with Claude
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<Clapperboard className="size-3.5" />}
+          onClick={() => design(true)}
+          loading={designing === "motion"}
+          disabled={picking !== null || designing !== null || (!q.trim() && !narration.trim())}
+          title="Claude designs a moving background (drifting light, particles, parallax) and renders it as a looping video clip"
+        >
+          Animate
         </Button>
         <IconButton label="Close footage search" onClick={onClose}>
           <X className="size-4" />
@@ -213,8 +251,31 @@ function Picker({
           ))}
         </ul>
       )}
-      <p className="m-0 text-xs text-ink-soft">Free stock media. Click one to use it for this scene.</p>
+      <p className="m-0 text-xs text-ink-soft">Free stock media: click one to use it for this scene. Or let Claude draw an original background, still or animated.</p>
     </div>
+  );
+}
+
+type PickTarget = "media" | "media2" | "broll";
+const PICK_TITLE: Record<PickTarget, string> = { media: "this scene", media2: "the bottom clip", broll: "a cutaway" };
+
+const NEW_TEXT: TextOverlay = { text: "", at: 0, duration: 2, x: 0.5, y: 0.4, size: "m", color: "#FFFFFF", box: false };
+
+/** Seconds field for an overlay's start or length. */
+function SecondsInput({ label, value, onChange, min = 0 }: { label: string; value: number; onChange: (v: number) => void; min?: number }) {
+  return (
+    <label className="flex items-center gap-1 text-[12px] text-ink-soft">
+      {label}
+      <input
+        type="number"
+        min={min}
+        step={0.1}
+        value={Number(value.toFixed(2))}
+        onChange={(e) => onChange(Math.max(min, Number(e.target.value) || 0))}
+        className="field-input h-7 w-16 px-1.5 py-0 text-[12px] tabular-nums"
+      />
+      s
+    </label>
   );
 }
 
@@ -230,6 +291,8 @@ export function SceneCard({
   onMove,
   onRemove,
   onListen,
+  artStyle = "",
+  artStatus = null,
 }: {
   scene: DraftScene;
   index: number;
@@ -242,16 +305,22 @@ export function SceneCard({
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
   onListen: () => void;
+  artStyle?: ArtStyle | ""; // the draft draws its scenes in this look ("" = stock footage)
+  artStatus?: ArtStatus | null;
 }) {
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickFor, setPickFor] = useState<PickTarget | null>(null);
   const [status, setStatusState] = useState<{ text: string; error?: boolean }>({ text: "" });
   const setStatus = (text: string, error = false) => setStatusState({ text, error });
   const finder = useFinder(setStatus);
   const hook = index === 0;
+  const layout = scene.layout ?? "fill";
+  const broll = scene.broll ?? [];
+  const texts = scene.texts ?? [];
+  const layoutName = useId();
 
-  function togglePicker() {
-    if (pickerOpen) return setPickerOpen(false);
-    setPickerOpen(true);
+  function openPicker(target: PickTarget) {
+    if (pickFor === target) return setPickFor(null);
+    setPickFor(target);
     if (finder.results === null && scene.visual_query.trim()) {
       finder.setQ(scene.visual_query);
       void finder.search(scene.visual_query, finder.kind);
@@ -260,18 +329,46 @@ export function SceneCard({
     }
   }
 
-  async function upload(file: File) {
+  function picked(media: string, query: string) {
+    if (pickFor === "media2") onChange({ media2: media });
+    else if (pickFor === "broll") onChange({ broll: [...broll, { media, at: 0.5, duration: 2 }] });
+    else onChange({ media, visual_query: query || scene.visual_query, media_start: 0 });
+    setPickFor(null);
+  }
+
+  async function upload(file: File, target: PickTarget) {
     setStatus(`Uploading ${file.name}…`);
     try {
       const m = await api.upload(file);
-      onChange({ media: m.media });
+      if (target === "broll") onChange({ broll: [...broll, { media: m.media, at: 0.5, duration: 2 }] });
+      else onChange({ media: m.media, media_start: 0 });
       setStatus(`${m.kind === "photo" ? "Photo" : "Video"} uploaded.`);
     } catch (err) {
       setStatus((err as Error).message, true);
     }
   }
 
+  const setBroll = (k: number, patch: Partial<BRoll>) => onChange({ broll: broll.map((b, j) => (j === k ? { ...b, ...patch } : b)) });
+  const setText = (k: number, patch: Partial<TextOverlay>) => onChange({ texts: texts.map((t, j) => (j === k ? { ...t, ...patch } : t)) });
   const ListenIcon = listenState === "loading" ? Spinner : listenState === "playing" ? Pause : Play;
+  const uploadButton = (target: PickTarget, label: string) => (
+    <label className="relative cursor-pointer">
+      <span className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-semibold text-ink-soft transition-colors hover:bg-ink/[0.05] hover:text-ink">
+        <Upload className="size-3.5" aria-hidden />
+        {label}
+      </span>
+      <input
+        type="file"
+        className="sr-only"
+        accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (f) void upload(f, target);
+        }}
+      />
+    </label>
+  );
 
   return (
     <li
@@ -282,7 +379,13 @@ export function SceneCard({
       }`}
     >
       <div className="grid content-start gap-2">
-        <MediaSlot media={scene.media} onClick={togglePicker} />
+        <MediaSlot media={scene.media} ai={!!artStyle} onClick={() => openPicker("media")} />
+        {layout === "split" && (
+          <>
+            <MediaSlot media={scene.media2 ?? ""} onClick={() => openPicker("media2")} />
+            <span className="text-center text-[11px] text-ink-soft">Bottom</span>
+          </>
+        )}
       </div>
 
       <div className="grid min-w-0 content-start gap-3">
@@ -334,61 +437,137 @@ export function SceneCard({
           </div>
         </div>
 
+        {artStyle && (!scene.media || scene.media.startsWith("cache/gen/")) && (
+          <ScenePicture scene={scene} style={artStyle} status={artStatus} onChange={onChange} />
+        )}
+
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="field-label">Layout</span>
+          <Segmented
+            name={layoutName}
+            size="sm"
+            value={layout}
+            onChange={(v) => onChange({ layout: v })}
+            options={[
+              { value: "fill", label: "Fill" },
+              { value: "fit", label: "Fit" },
+              { value: "split", label: "Split" },
+            ]}
+          />
+          {(scene.media_start ?? 0) > 0 && (
+            <button type="button" className="cursor-pointer bg-transparent p-0 text-[12px] text-ink-soft underline" onClick={() => onChange({ media_start: 0 })}>
+              Starts {scene.media_start!.toFixed(1)}s into the clip. Reset
+            </button>
+          )}
+        </div>
+
         <div className="-ml-2.5 flex flex-wrap items-center gap-1">
           <Button size="sm" variant="ghost" onClick={onListen} aria-label={`Listen to scene ${index + 1}`} icon={<ListenIcon className={listenState === "loading" ? "size-3.5" : "size-3.5 fill-current"} />}>
             {listenState === "playing" ? "Stop" : "Listen"}
           </Button>
-          <Button size="sm" variant="ghost" onClick={togglePicker} icon={<Search className="size-3.5" />} aria-expanded={pickerOpen}>
+          <Button size="sm" variant="ghost" onClick={() => openPicker("media")} icon={<Search className="size-3.5" />} aria-expanded={pickFor === "media"}>
             Find footage
           </Button>
-          <label className={`relative cursor-pointer`}>
-            <span className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-semibold text-ink-soft transition-colors hover:bg-ink/[0.05] hover:text-ink">
-              <Upload className="size-3.5" aria-hidden />
-              Upload
-            </span>
-            <input
-              type="file"
-              className="sr-only"
-              accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                e.target.value = "";
-                if (f) void upload(f);
-              }}
-            />
-          </label>
-          {scene.media && (
+          {uploadButton("media", "Upload")}
+          {scene.media && !scene.media.startsWith("cache/gen/") && (
             <Button
               size="sm"
               variant="ghost"
               onClick={() => {
-                onChange({ media: "" });
+                onChange({ media: "", media_start: 0 });
                 setStatus("");
               }}
             >
-              Use auto footage
+              {artStyle ? "Use AI picture" : "Use auto footage"}
             </Button>
           )}
+          {layout === "split" && scene.media2 && (
+            <Button size="sm" variant="ghost" onClick={() => onChange({ media2: "" })}>
+              Auto bottom clip
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" icon={<Film className="size-3.5" />} onClick={() => openPicker("broll")} aria-expanded={pickFor === "broll"}>
+            Add B-roll
+          </Button>
+          <Button size="sm" variant="ghost" icon={<Type className="size-3.5" />} onClick={() => onChange({ texts: [...texts, { ...NEW_TEXT }] })}>
+            Add text
+          </Button>
           {status.text && (
             <span role="status" className={`ml-1 text-[12.5px] ${status.error ? "text-danger" : "text-ink-soft"}`}>
               {status.text}
             </span>
           )}
         </div>
+
+        {broll.length > 0 && (
+          <ul aria-label="B-roll" className="m-0 grid list-none gap-1.5 p-0">
+            {broll.map((b, k) => (
+              <li key={k} className="flex flex-wrap items-center gap-2 rounded-lg bg-paper/70 px-2 py-1.5">
+                <span className="h-9 w-6 shrink-0 overflow-hidden rounded bg-ink">
+                  {isImagePath(b.media) ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- local engine file
+                    <img src={fileUrl(b.media)} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <video src={`${fileUrl(b.media)}#t=0.5`} muted preload="metadata" className="h-full w-full object-cover" />
+                  )}
+                </span>
+                <span className="text-[12.5px] font-semibold">B-roll</span>
+                <SecondsInput label="at" value={b.at} onChange={(v) => setBroll(k, { at: v })} />
+                <SecondsInput label="for" value={b.duration} min={0.2} onChange={(v) => setBroll(k, { duration: v })} />
+                <IconButton label="Remove this B-roll" tone="danger" onClick={() => onChange({ broll: broll.filter((_, j) => j !== k) })}>
+                  <X className="size-3.5" />
+                </IconButton>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {texts.length > 0 && (
+          <ul aria-label="Text on screen" className="m-0 grid list-none gap-1.5 p-0">
+            {texts.map((t, k) => (
+              <li key={k} className="grid gap-1.5 rounded-lg bg-paper/70 px-2 py-1.5">
+                <div className="flex items-center gap-2">
+                  <input
+                    lang={lang}
+                    aria-label="Text"
+                    autoFocus={!t.text}
+                    className="field-input h-8 min-w-0 flex-1 py-0 text-[13px]"
+                    value={t.text}
+                    placeholder="Text on screen"
+                    onChange={(e) => setText(k, { text: e.target.value })}
+                  />
+                  <input type="color" aria-label="Text colour" className="size-8 cursor-pointer rounded border border-line bg-panel p-0.5" value={t.color} onChange={(e) => setText(k, { color: e.target.value.toUpperCase() })} />
+                  <IconButton label="Remove this text" tone="danger" onClick={() => onChange({ texts: texts.filter((_, j) => j !== k) })}>
+                    <X className="size-3.5" />
+                  </IconButton>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <SecondsInput label="at" value={t.at} onChange={(v) => setText(k, { at: v })} />
+                  <SecondsInput label="for" value={t.duration} min={0.2} onChange={(v) => setText(k, { duration: v })} />
+                  <select aria-label="Text size" className="field-input h-7 w-auto py-0 text-[12px]" value={t.size} onChange={(e) => setText(k, { size: e.target.value as TextOverlay["size"] })}>
+                    <option value="s">Small</option>
+                    <option value="m">Medium</option>
+                    <option value="l">Large</option>
+                  </select>
+                  <label className="flex items-center gap-1 text-[12px] text-ink-soft">
+                    <input type="checkbox" className="size-3.5 accent-cobalt" checked={t.box} onChange={(e) => setText(k, { box: e.target.checked })} />
+                    Box
+                  </label>
+                  <span className="text-[11.5px] text-ink-soft">Drag it on the preview to place it.</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
-      {pickerOpen && (
-        <div className="col-span-2">
-          <Picker
-            finder={finder}
-            narration={scene.narration}
-            setStatus={setStatus}
-            onClose={() => setPickerOpen(false)}
-            onPicked={(media, query) => {
-              onChange({ media, visual_query: query || scene.visual_query });
-              setPickerOpen(false);
-            }}
-          />
+      {pickFor && (
+        <div className="col-span-2 grid gap-1.5">
+          <p className="m-0 text-[12.5px] font-semibold text-ink-soft">
+            Footage for {PICK_TITLE[pickFor]}
+            {pickFor === "broll" && <span className="ml-2 inline-block align-middle">{uploadButton("broll", "Upload a cutaway")}</span>}
+          </p>
+          <Picker finder={finder} narration={scene.narration} setStatus={setStatus} onClose={() => setPickFor(null)} onPicked={picked} />
         </div>
       )}
     </li>

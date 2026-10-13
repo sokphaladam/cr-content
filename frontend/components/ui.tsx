@@ -62,16 +62,19 @@ export function IconButton({
   className = "",
   tone = "default",
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; tone?: "default" | "danger" }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; tone?: "default" | "danger" | "rail" }) {
+  const tones = {
+    default: "text-ink-soft hover:bg-ink/[0.06] hover:text-ink",
+    danger: "text-ink-soft hover:bg-ink/[0.06] hover:text-danger",
+    rail: "text-rail-ink hover:bg-white/[0.08] hover:text-white", // on the dark navigation rail
+  };
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
       {...rest}
-      className={`grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-ink-soft transition-colors hover:bg-ink/[0.06] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent ${
-        tone === "danger" ? "hover:text-danger" : "hover:text-ink"
-      } ${className}`}
+      className={`grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent ${tones[tone]} ${className}`}
     >
       {children}
     </button>

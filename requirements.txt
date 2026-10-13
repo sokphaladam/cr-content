@@ -6,3 +6,6 @@ python-dotenv>=1.0
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
+resvg_py>=0.5     # renders the SVG art Claude draws (backgrounds, designed covers)
+openpyxl>=3.1
+yt-dlp>=2025.1    # downloads campaign reference videos (YouTube, Drive files...)

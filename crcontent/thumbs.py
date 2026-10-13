@@ -1,4 +1,5 @@
 """Smart covers: find the most eye-catching frames and ask Claude for click-worthy headlines."""
+import base64
 import json
 import subprocess
 from pathlib import Path
@@ -67,90 +68,160 @@ def best_frames(video: Path, count: int = 4, samples: int = 32) -> list[float]:
     return picks or [min(1.0, length / 2)]
 
 
-HEADLINES_SCHEMA = {
+COVERS_SCHEMA = {
     "type": "object",
     "properties": {
-        "headlines": {
+        "covers": {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"text": {"type": "string"}, "emphasis": {"type": "string"}},
-                "required": ["text", "emphasis"],
+                "properties": {
+                    "text": {"type": "string"},
+                    "emphasis": {"type": "string"},
+                    "style": {"type": "string", "enum": list(THUMB_STYLES)},
+                    "frame": {"type": "integer"},
+                    "photo_query": {"type": "string"},
+                    "direction": {"type": "string"},
+                },
+                "required": ["text", "emphasis", "style", "frame", "photo_query", "direction"],
                 "additionalProperties": False,
             },
         },
     },
-    "required": ["headlines"],
+    "required": ["covers"],
     "additionalProperties": False,
 }
 
-HEADLINES_SYSTEM = """You write the text overlaid on thumbnails (covers) of short vertical videos for YouTube Shorts, TikTok and Reels.
+HEADLINES_SYSTEM = """You design the covers (thumbnails) of short videos and music videos for YouTube, Shorts, TikTok and Reels.
 
 What makes a cover get clicked:
-- 2-5 words. It's read in a split second at thumbnail size.
+- 2-5 words of headline. It's read in a split second at thumbnail size.
 - Open a curiosity gap or make a bold promise; don't summarise the video or give away the payoff.
 - Proven patterns: a surprising number ("90% GET THIS WRONG"), a bold claim ("THIS CHANGES EVERYTHING"),
   a direct challenge ("YOU'RE DOING IT WRONG"), a short question ("WHY DO CATS PURR?"), a contrast ("CHEAP vs EXPENSIVE").
+  For a song: the hook line, the song's title, or a short emotional phrase from the lyrics.
 - Complement the title rather than repeating it word for word.
 - No emoji, no hashtags, no quotation marks, no clickbait that the video doesn't deliver.
+- The picture matters as much as the words: one clear subject, strong light and colour, room for the headline.
 
-Return varied options using different patterns. For each, `emphasis` is the 1-2 words copied exactly from `text`
-that carry the punch (the number, the surprising word); they get highlighted in a bright colour."""
+`emphasis` is the 1-2 words copied exactly from `text` that carry the punch (the number, the surprising word); they
+get highlighted in a bright colour. `style`: bold (white, heavy outline), box (black on yellow boxes), stacked
+(a word or two per line, large). When the user describes the cover they want, follow their idea first.
+
+Each cover is then laid out by a designer, so also give it a `direction`: one or two sentences of art direction that
+suit the subject and differ between the covers, e.g. "neon cyberpunk: magenta/cyan glow, photo in a tilted frame,
+headline stacked left", "clean editorial: photo full-bleed, bold white type on a black band, red accent tag",
+"split screen: photo top 60%, solid yellow block below with huge black type", "cinematic: teal-orange grade,
+letterboxed photo, thin elegant serif title with a glowing highlight"."""
 
 
-def suggest_headlines(script: VideoScript, lang: str, count: int = 4,
-                      client: anthropic.Anthropic | None = None) -> list[dict]:
+def brief(job: Path) -> dict:
+    """What the cover is for: title, hook and the rest, from the job's script.json or song.json."""
+    if (job / "script.json").exists():
+        script = VideoScript.load(job / "script.json")
+        info = {"kind": "video", "title": script.title,
+                "hook": script.scenes[0].narration if script.scenes else "",
+                "scene_headlines": [s.on_screen_text for s in script.scenes if s.on_screen_text],
+                "caption": script.caption}
+        if script.key_visual:  # from the content plan: the cover should show this shot
+            info["key_visual"] = script.key_visual
+        if script.mood:
+            info["mood"] = script.mood
+        return info
+    if (job / "song.json").exists():
+        from .lyrics import SongScript
+
+        song = SongScript.load(job / "song.json")
+        lines = [l.strip() for s in song.sections for l in s.lyrics if l.strip()]
+        return {"kind": "music video", "title": song.title, "genre": song.genre, "mood": song.mood,
+                "lyrics_start": lines[:6], "caption": song.caption}
+    return {"kind": "video", "title": job.name}
+
+
+def _frame_jpeg(video: Path, at: float, width: int = 360) -> bytes:
+    return subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", f"{at:.2f}", "-i", str(video), "-frames:v", "1",
+         "-vf", f"scale={width}:-2", "-q:v", "4", "-f", "image2", "-c:v", "mjpeg", "-"],
+        stdin=subprocess.DEVNULL, capture_output=True, check=True).stdout
+
+
+def plan_covers(video: Path, info: dict, lang: str, frames: list[float], count: int = 4, idea: str = "",
+                client: anthropic.Anthropic | None = None) -> list[dict]:
+    """Claude looks at the candidate frames and plans `count` covers: headline, highlight, style, and which frame
+    (or, when the user's idea shows something no frame has, a stock photo search instead)."""
     profile = LANGS.get(lang, LANGS["en"])
     client = client or make_client()
-    brief = {
-        "title": script.title,
-        "hook": script.scenes[0].narration if script.scenes else "",
-        "scene_headlines": [s.on_screen_text for s in script.scenes if s.on_screen_text],
-        "caption": script.caption,
-    }
-    system = HEADLINES_SYSTEM
+    content: list[dict] = []
+    for i, at in enumerate(frames):
+        content.append({"type": "text", "text": f"Frame {i + 1} (at {at:.1f} s):"})
+        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                    "data": base64.b64encode(_frame_jpeg(video, at)).decode()}})
+    ask = (f"Language for the headlines: {profile.name}\n"
+           f"About the {info.get('kind', 'video')}:\n{json.dumps(info, ensure_ascii=False, indent=2)}\n\n")
+    if idea.strip():
+        ask += (f"The user's idea for the cover:\n<idea>\n{idea.strip()}\n</idea>\n"
+                f"Follow it: the words, the picture and the mood it asks for.\n\n")
+    ask += (f"Plan {count} different covers. For each, pick the frame (1-{len(frames)}) whose picture fits best: a clear "
+            f"subject, good light, nothing blurry. Use different frames when they're good enough. "
+            f"Only if the user's idea asks for a picture that none of the frames shows, set frame to 0 and "
+            f"photo_query to an ENGLISH stock photo search of 2-5 words for that picture; otherwise photo_query is "
+            f"\"\". Vary the headline patterns and styles.")
     if lang == "km":
-        system += ("\n\nWrite in natural Khmer. Keep each headline under about 25 characters, with a normal space "
-                   "between phrases so it can be broken into lines; `emphasis` is one whole space-separated phrase.")
+        ask += ("\nWrite the headlines in natural Khmer, each under about 25 characters, with a normal space between "
+                "phrases; `emphasis` is one whole space-separated phrase.")
+    content.append({"type": "text", "text": ask})
     response = client.beta.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=2000,
+        max_tokens=3000,
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": HEADLINES_SCHEMA}},
-        system=system,
-        messages=[{"role": "user", "content":
-                   f"Language: {profile.name}\nWrite {count} cover headlines for this video:\n"
-                   f"{json.dumps(brief, ensure_ascii=False, indent=2)}"}],
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": COVERS_SCHEMA}},
+        system=HEADLINES_SYSTEM,
+        messages=[{"role": "user", "content": content}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to suggest thumbnail headlines.")
-    data = json.loads(next(b.text for b in response.content if b.type == "text"))
-    return [h for h in data["headlines"] if h["text"].strip()][:count]
+        raise RuntimeError("Claude declined to suggest thumbnails.")
+    covers = json.loads(next(b.text for b in response.content if b.type == "text"))["covers"]
+    out = []
+    for c in covers:
+        if not c["text"].strip() and not c["photo_query"].strip():
+            continue
+        k = c["frame"] - 1
+        query = c["photo_query"].strip() if not 0 <= k < len(frames) else ""
+        out.append({"text": c["text"].strip(), "emphasis": c["emphasis"].strip(),
+                    "style": c["style"] if c["style"] in THUMB_STYLES else "bold",
+                    "at": frames[k] if 0 <= k < len(frames) else frames[0], "photo_query": query,
+                    "direction": c["direction"].strip()})
+    return out[:count]
 
 
-def basic_headlines(script: VideoScript, count: int = 4) -> list[dict]:
-    """Without Claude: the title and the scene headlines, each with its strongest word highlighted."""
+def basic_headlines(info: dict, count: int = 4, idea: str = "") -> list[dict]:
+    """Without Claude: the idea's own words, the title and the scene headlines (or first lyric lines), each with
+    its strongest word highlighted."""
     seen, out = set(), []
-    for text in [script.title, *(s.on_screen_text for s in script.scenes)]:
+    first = " ".join(idea.split()[:5]) if idea.strip() else ""
+    for text in [first, info.get("title", ""), *info.get("scene_headlines", []), *info.get("lyrics_start", [])]:
         if text.strip() and text.lower() not in seen:
             seen.add(text.lower())
             out.append({"text": text.strip(), "emphasis": auto_emphasis(text)})
     return out[:count]
 
 
-def suggestions(video: Path, script: VideoScript, lang: str, count: int = 4) -> tuple[list[dict], str]:
-    """Pair headlines with the best frames, rotating through the cover styles.
+def suggestions(video: Path, info: dict, lang: str, count: int = 4, idea: str = "") -> tuple[list[dict], str]:
+    """Cover ideas: Claude picks frames and writes headlines (following `idea` when given); without Claude, the
+    best frames paired with headlines from the script, rotating through the styles.
 
     Returns (suggestions, note); the note says why Claude wasn't used, if it wasn't.
     """
-    note = ""
+    frames = best_frames(video, max(count * 2, 6))
     try:
-        heads = suggest_headlines(script, lang, count)
+        covers = plan_covers(video, info, lang, frames, count, idea)
+        if covers:
+            return covers, ""
+        note = "Claude didn't return any covers, so these come from your script."
     except Exception as e:  # no key, no credits, offline...: covers still work from the script itself
-        heads, note = basic_headlines(script, count), "Claude was unavailable, so these headlines come from your script."
-        print(f"  ! thumbnail headlines: {type(e).__name__}: {e}")
-    heads = heads or [{"text": script.title, "emphasis": auto_emphasis(script.title)}]
-    frames = best_frames(video, count)
+        note = "Claude was unavailable, so these headlines come from your script."
+        print(f"  ! thumbnail ideas: {type(e).__name__}: {e}")
+    heads = basic_headlines(info, count, idea) or [{"text": info.get("title", ""), "emphasis": ""}]
     return [{"text": h["text"], "emphasis": h["emphasis"], "style": THUMB_STYLES[i % len(THUMB_STYLES)],
-             "at": frames[i % len(frames)]} for i, h in enumerate(heads)], note
+             "at": frames[i % len(frames)], "photo_query": ""} for i, h in enumerate(heads)], note

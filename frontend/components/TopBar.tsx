@@ -1,56 +1,45 @@
-import { PanelLeft, Smartphone } from "lucide-react";
-import Link from "next/link";
-import type { Options } from "@/lib/api";
+import { Megaphone, PanelLeft, Settings, Smartphone } from "lucide-react";
 import { IconButton } from "./ui";
 
-function Status({ ok, warn, children, title }: { ok: boolean; warn?: boolean; children: string; title?: string }) {
-  return (
-    <span title={title} className="hidden items-center gap-1.5 text-[12.5px] text-ink-soft md:inline-flex">
-      <span className={`size-1.5 rounded-full ${ok ? "bg-ok" : warn ? "bg-warn" : "bg-danger"}`} />
-      {children}
-    </span>
-  );
-}
-
+/** Header below laptop width, where the navigation rail is hidden: library, settings and preview open from here. */
 export function TopBar({
-  options,
   onOpenLibrary,
+  onOpenSettings,
+  onOpenCampaigns,
   onOpenPreview,
   showPreviewButton,
+  setupNeeded,
 }: {
-  options: Options | null;
   onOpenLibrary: () => void;
+  onOpenSettings: () => void;
+  onOpenCampaigns: () => void;
   onOpenPreview: () => void;
   showPreviewButton: boolean;
+  setupNeeded: boolean;
 }) {
-  const keys = options?.keys;
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line bg-panel px-3 sm:px-4">
-      <IconButton label="Open library" onClick={onOpenLibrary} className="lg:hidden">
+    <header className="flex h-14 shrink-0 items-center gap-2 bg-rail px-2 text-white lg:hidden">
+      <IconButton label="Open library" onClick={onOpenLibrary} tone="rail">
         <PanelLeft className="size-5" />
       </IconButton>
-      <Link href="/" className="inline-flex items-center font-display text-lg leading-none font-extrabold tracking-tight text-ink no-underline" aria-label="Shorts Studio home">
-        <span aria-hidden="true" className="mr-2 h-[22px] w-3 rounded-[3px] bg-ink shadow-[inset_0_-6px_0_var(--color-caption)]" />
-        Shorts
-        <span className="ml-1 rounded-[2px] bg-caption px-1 py-0.5">Studio</span>
-      </Link>
-      <div className="ml-auto flex items-center gap-4">
-        {keys && (
-          <>
-            <Status ok={keys.anthropic} title={keys.anthropic ? "Claude writes, translates and imports scripts" : "Add ANTHROPIC_API_KEY to .env and restart the engine"}>
-              {keys.anthropic ? "Claude connected" : "Claude not connected"}
-            </Status>
-            <Status ok={!!keys.stock} warn title={keys.stock ? "Stock footage search is on" : "Add a free PIXABAY_API_KEY to .env for real footage"}>
-              {keys.stock ? `Footage: ${keys.stock === "pixabay" ? "Pixabay" : "Pexels"}` : "Footage: gradients only"}
-            </Status>
-          </>
-        )}
+      <span className="inline-flex items-center gap-2 font-display text-[17px] font-extrabold tracking-tight">
+        <span aria-hidden className="h-5 w-2.5 rounded-[3px] bg-white shadow-[inset_0_-6px_0_var(--color-caption)]" />
+        Shorts Studio
+      </span>
+      <span className="ml-auto flex items-center gap-1">
         {showPreviewButton && (
-          <IconButton label="Open preview" onClick={onOpenPreview} className="wide:hidden">
+          <IconButton label="Open preview" onClick={onOpenPreview} tone="rail" className="wide:hidden">
             <Smartphone className="size-5" />
           </IconButton>
         )}
-      </div>
+        <IconButton label="Campaigns" onClick={onOpenCampaigns} tone="rail">
+          <Megaphone className="size-5" />
+        </IconButton>
+        <IconButton label="Settings" onClick={onOpenSettings} tone="rail" className="relative">
+          <Settings className="size-5" />
+          {setupNeeded && <span aria-hidden className="absolute top-1.5 right-1.5 size-2 rounded-full bg-caption ring-2 ring-rail" />}
+        </IconButton>
+      </span>
     </header>
   );
 }

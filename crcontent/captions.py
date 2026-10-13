@@ -1,8 +1,12 @@
 """Build an .ass subtitle file: big centered captions with the spoken word highlighted."""
 import re
+from typing import TYPE_CHECKING
 
 from .config import HEIGHT, WIDTH, LangProfile
 from .tts import Word
+
+if TYPE_CHECKING:
+    from .styles import CaptionStyle
 
 HIGHLIGHT = "&H0000E5FF&"  # ASS colours are &HAABBGGRR -> yellow
 WHITE = "&H00FFFFFF&"
@@ -24,8 +28,39 @@ def _esc(text: str) -> str:
     return text.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
-def build_ass(scenes: list[tuple[float, float, list[Word], str]], profile: LangProfile) -> str:
-    """scenes: (scene_start, scene_end, words with times relative to scene_start, on_screen_text)."""
+def caption_styles(profile: LangProfile, style: "CaptionStyle", size: tuple[int, int] = (WIDTH, HEIGHT)) -> str:
+    """The Caption and Headline style lines for `style` (see styles.CaptionStyle)."""
+    from .styles import ass_color
+
+    W, _ = size
+    font = style.font or profile.font_name
+    px = round(profile.font_size * {"s": 0.8, "m": 1.0, "l": 1.25}[style.size] * W / WIDTH)
+    base = ass_color(style.color)
+    # how the letters stand off the footage (same choices as the lyric videos)
+    if style.outline == "box":
+        border, outline, shadow, out_c, back_c = 3, max(10, px // 7), 0, "&H55000000&", "&H55000000&"
+    elif style.outline == "shadow":
+        border, outline, shadow, out_c, back_c = 1, 1, max(3, px // 22), "&H60000000&", "&H70000000&"
+    elif style.outline == "glow":
+        border, outline, shadow, out_c, back_c = 1, max(4, px // 18), 2, ass_color(style.highlight, 0x40), "&H70000000&"
+    else:
+        border, outline, shadow, out_c, back_c = 1, round(px * 7 / 92), 3, "&H00000000&", "&H80000000&"
+    head = round(px * 0.8)
+    return (f"Style: Caption,{font},{px},{base},{base},{out_c},{back_c},-1,0,0,0,100,100,0,0,{border},{outline},{shadow},5,90,90,0,1\n"
+            f"Style: Headline,{font},{head},&H00FFFFFF&,&H00FFFFFF&,&HFF000000&,&H1A000000&,-1,0,0,0,100,100,0,0,4,{round(head * 0.35)},0,8,80,80,0,1")
+
+
+def build_ass(scenes: list[tuple], profile: LangProfile, style: "CaptionStyle | None" = None,
+              extra: list[str] | None = None) -> str:
+    """scenes: (scene_start, scene_end, words with times relative to scene_start, on_screen_text[, keywords]).
+    Drawn in `style` (styles.CaptionStyle): the spoken word in its highlight colour, keywords (voiceover.keyword()
+    form) in its keyword colour, the rest in its text colour. `extra`: more Dialogue lines (text overlays)."""
+    from .styles import CaptionStyle, ass_color
+    from .voiceover import keyword
+
+    style = (style or CaptionStyle()).clean(profile.code)
+    high, key_c, base = ass_color(style.highlight), ass_color(style.keyword), ass_color(style.color)
+    blur = r"\blur3" if style.outline == "shadow" else r"\blur10" if style.outline == "glow" else ""
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {WIDTH}
@@ -35,19 +70,23 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,{profile.font_name},{profile.font_size},{WHITE},{WHITE},&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,7,3,5,90,90,0,1
-Style: Headline,{profile.font_name},{round(profile.font_size * 0.8)},{WHITE},{WHITE},&HFF000000&,&H1A000000&,-1,0,0,0,100,100,0,0,4,26,0,8,80,80,230,1
+{caption_styles(profile, style)}
+Style: Overlay,{style.font or profile.font_name},{profile.font_size},&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,{round(profile.font_size * 6 / 92)},2,5,40,40,0,1
+Style: OverlayBox,{style.font or profile.font_name},{profile.font_size},&H00FFFFFF&,&H00FFFFFF&,&H33000000&,&H33000000&,-1,0,0,0,100,100,0,0,3,{round(profile.font_size * 14 / 92)},0,5,40,40,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines: list[str] = []
-    cap_y = round(HEIGHT * 0.62)
-    for scene_start, scene_end, words, headline in scenes:
+    cap_y = round(HEIGHT * style.y)
+    head_y = round(HEIGHT * style.headline_y)
+    n = style.words or profile.words_per_caption
+    for scene_start, scene_end, words, headline, *rest in scenes:
+        keywords = rest[0] if rest else set()
         if headline:
-            lines.append(f"Dialogue: 1,{_ts(scene_start)},{_ts(scene_end)},Headline,,0,0,0,,{_esc(headline.upper())}")
+            lines.append(f"Dialogue: 1,{_ts(scene_start)},{_ts(scene_end)},Headline,,0,0,0,,"
+                         f"{{\\an8\\pos({WIDTH // 2},{head_y})}}{_esc(headline.upper())}")
 
-        n = profile.words_per_caption
         groups = [words[i:i + n] for i in range(0, len(words), n)]
         for gi, group in enumerate(groups):
             # each group stays on screen until the next group starts (no flicker between words)
@@ -57,28 +96,78 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 end = scene_start + (group[wi + 1].start if wi + 1 < len(group) else group_end)
                 parts = []
                 for wj, w in enumerate(group):
-                    color = HIGHLIGHT if wj == wi else WHITE
-                    parts.append(f"{{\\c{color}}}{_esc(w.text)}")
+                    color = high if wj == wi else key_c if keyword(w.text) in keywords else base
+                    parts.append(f"{{\\c{color}}}{_esc(_case(w.text, style.case, profile.code))}")
                 pop = r"{\fscx85\fscy85\t(0,90,\fscx100\fscy100)}" if wi == 0 else ""
-                text = f"{{\\pos({WIDTH // 2},{cap_y})}}{pop}" + " ".join(parts)
+                text = f"{{\\pos({WIDTH // 2},{cap_y}){blur}}}{pop}" + " ".join(parts)
                 lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Caption,,0,0,0,,{text}")
-    return header + "\n".join(lines) + "\n"
+    return header + "\n".join(lines + (extra or [])) + "\n"
+
+
+OVERLAY_SIZES = {"s": 0.6, "m": 0.85, "l": 1.2}  # of the language's caption size
+
+
+def overlay_lines(texts: list, scene_start: float, scene_end: float, profile: LangProfile) -> list[str]:
+    """Dialogue lines for a scene's text overlays (script.TextOverlay), for build_ass(extra=...)."""
+    from .styles import _hex, ass_color
+
+    lines = []
+    for t in texts:
+        text = _esc(t.text)
+        start = scene_start + max(t.at, 0)
+        end = min(start + max(t.duration, 0.1), scene_end)
+        if not text or end <= start:
+            continue
+        x, y = round(WIDTH * min(max(t.x, 0), 1)), round(HEIGHT * min(max(t.y, 0), 1))
+        fs = round(profile.font_size * OVERLAY_SIZES.get(t.size, OVERLAY_SIZES["m"]))
+        color = ass_color(_hex(t.color, "#FFFFFF"))
+        lines.append(f"Dialogue: 2,{_ts(start)},{_ts(end)},{'OverlayBox' if t.box else 'Overlay'},,0,0,0,,"
+                     f"{{\\an5\\pos({x},{y})\\fs{fs}\\c{color}\\fad(120,120)}}{text}")
+    return lines
+
+
+def _case(text: str, case: str, lang: str) -> str:
+    if lang == "km":
+        return text
+    return text.upper() if case == "upper" else text.lower() if case == "lower" else text
 
 
 def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: float = 0.8,
-                      size: tuple[int, int] = (WIDTH, HEIGHT)) -> str:
-    """Lyrics as karaoke: each sung line shown whole, words turning yellow as they're sung.
+                      size: tuple[int, int] = (WIDTH, HEIGHT), style: "LyricStyle | None" = None) -> str:
+    """Lyrics as karaoke, drawn in `style` (font, colours, size, position, effect; see styles.py).
 
     lines: align.LyricLine items (absolute word times). A line appears `lead_in` s before its first word and
-    stays until the next line starts or `hold` s after its last word. Landscape frames put the lyrics in the
-    lower third with the upcoming line dimmed underneath, like a lyric video; vertical frames centre one line.
+    stays until the next line starts or `hold` s after its last word, so two lines never overlap. Effects:
+    karaoke: the whole line shown, words change colour as they're sung.  fill: a smooth colour sweep through
+    each word.  pop: words appear one by one with a little bounce.  fade: the whole line fades in and out.
+    Landscape frames show the upcoming line dimmed underneath (karaoke and fill), like a lyric video.
     """
+    from .styles import LyricStyle, ass_color
+
+    style = (style or LyricStyle()).clean(profile.code)
     W, H = size
     landscape = W > H
     font = round(profile.font_size * (0.85 if profile.code == "km" else 0.8))
     if landscape:
         font = round(font * 0.82)
+    font = round(font * {"s": 0.8, "m": 1.0, "l": 1.25}[style.size])
     small = round(font * 0.72)
+    base, high = ass_color(style.color), ass_color(style.highlight)
+
+    # how the letters stand off the footage
+    blur = ""
+    if style.outline == "box":
+        border, outline, shadow, out_c, back_c = 3, max(10, font // 7), 0, "&H55000000&", "&H55000000&"
+    elif style.outline == "shadow":
+        border, outline, shadow, out_c, back_c = 1, 1, max(3, font // 22), "&H60000000&", "&H70000000&"
+        blur = r"\blur3"
+    elif style.outline == "glow":
+        border, outline, shadow, out_c, back_c = 1, max(4, font // 18), 2, ass_color(style.highlight, 0x40), "&H70000000&"
+        blur = r"\blur10"
+    else:
+        border, outline, shadow, out_c, back_c = 1, max(4, font // 14), 3, "&H00000000&", "&H80000000&"
+    # fill sweeps from SecondaryColour (not sung yet) to PrimaryColour (sung)
+    primary, secondary = (high, base) if style.effect == "fill" else (base, base)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
@@ -88,37 +177,62 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Lyric,{profile.font_name},{font},{WHITE},{WHITE},&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,6,3,5,80,80,0,1
-Style: LyricNext,{profile.font_name},{small},&H60FFFFFF&,&H60FFFFFF&,&H60000000&,&HA0000000&,-1,0,0,0,100,100,0,0,1,4,2,5,80,80,0,1
+Style: Lyric,{style.font},{font},{primary},{secondary},{out_c},{back_c},-1,0,0,0,100,100,0,0,{border},{outline},{shadow},5,80,80,0,1
+Style: LyricNext,{style.font},{small},&H60FFFFFF&,&H60FFFFFF&,&H60000000&,&HA0000000&,-1,0,0,0,100,100,0,0,1,{max(2, outline - 2)},2,5,80,80,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events: list[str] = []
-    y = round(H * (0.78 if landscape else 0.62))
-    pos = f"{{\\pos({W // 2},{y})}}"
+    ys = {"low": 0.80, "middle": 0.5, "high": 0.2} if landscape else {"low": 0.64, "middle": 0.5, "high": 0.24}
+    y = round(H * ys[style.position])
+    pos = f"{{\\pos({W // 2},{y}){blur}}}"
     next_pos = f"{{\\pos({W // 2},{y + round(font * 1.35)})}}"
     prev_end = 0.0
     for li, line in enumerate(lines):
         words = [w for w in line.words if _esc(w.text)]
         if not words:
             continue
+        texts = [_esc(_case(w.text, style.case, profile.code)) for w in words]
         next_start = lines[li + 1].start if li + 1 < len(lines) else float("inf")
         line_end = min(next_start, words[-1].end + hold)
         show = max(prev_end, words[0].start - lead_in)
 
-        def text(sung: int) -> str:
-            return pos + " ".join(f"{{\\c{HIGHLIGHT if j < sung else WHITE}}}{_esc(w.text)}" for j, w in enumerate(words))
+        def dialogue(start: float, end: float, text: str, name: str = "Lyric") -> None:
+            if end > start:
+                events.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},{name},,0,0,0,,{text}")
 
-        if show < words[0].start:
-            pop = r"{\fscx90\fscy90\t(0,120,\fscx100\fscy100)}"
-            events.append(f"Dialogue: 0,{_ts(show)},{_ts(words[0].start)},Lyric,,0,0,0,,{pop}{text(0)}")
-        for wi, w in enumerate(words):
-            end = words[wi + 1].start if wi + 1 < len(words) else line_end
-            if end > w.start:
-                events.append(f"Dialogue: 0,{_ts(w.start)},{_ts(end)},Lyric,,0,0,0,,{text(wi + 1)}")
-        if landscape and li + 1 < len(lines) and next_start - line_end < 2.5 and _esc(lines[li + 1].text):
-            events.append(f"Dialogue: 0,{_ts(show)},{_ts(line_end)},LyricNext,,0,0,0,,{next_pos}{_esc(lines[li + 1].text)}")
+        if style.effect == "fill":
+            # one event per line: \kf sweeps each word over its sung time (centiseconds from when the line shows;
+            # counted from there rather than word by word so rounding never drifts)
+            mark = [round((w.start - show) * 100) for w in words] + [round((words[-1].end - show) * 100)]
+            body = f"{{\\k{max(0, mark[0])}}}" + " ".join(
+                f"{{\\kf{max(1, mark[i + 1] - mark[i])}}}{t}" for i, t in enumerate(texts))
+            dialogue(show, line_end, pos + r"{\fad(120,200)}" + body)
+        elif style.effect == "fade":
+            dialogue(show, line_end, pos + r"{\fad(250,300)}" + " ".join(texts))
+        elif style.effect == "pop":
+            for wi, w in enumerate(words):
+                end = words[wi + 1].start if wi + 1 < len(words) else line_end
+                parts = []
+                for j, t in enumerate(texts):
+                    if j < wi:
+                        parts.append(f"{{\\alpha&H00&\\c{base}\\fscx100\\fscy100}}{t}")
+                    elif j == wi:
+                        parts.append(f"{{\\alpha&H00&\\c{high}\\fscx118\\fscy118\\t(0,140,\\fscx100\\fscy100)}}{t}")
+                    else:  # not sung yet: invisible, but holding its place so the line doesn't shift
+                        parts.append(f"{{\\alpha&HFF&\\fscx100\\fscy100}}{t}")
+                dialogue(w.start, end, pos + " ".join(parts))
+        else:
+            def text(sung: int) -> str:
+                return pos + " ".join(f"{{\\c{high if j < sung else base}}}{t}" for j, t in enumerate(texts))
+
+            dialogue(show, words[0].start, r"{\fscx90\fscy90\t(0,120,\fscx100\fscy100)}" + text(0))
+            for wi, w in enumerate(words):
+                dialogue(w.start, words[wi + 1].start if wi + 1 < len(words) else line_end, text(wi + 1))
+        if (landscape and style.effect in ("karaoke", "fill") and li + 1 < len(lines)
+                and next_start - line_end < 2.5 and _esc(lines[li + 1].text)):
+            dialogue(show, line_end, next_pos + _esc(_case(lines[li + 1].text, style.case, profile.code)), "LyricNext")
         prev_end = line_end
     return header + "\n".join(events) + "\n"
 

@@ -7,6 +7,28 @@ import anthropic
 from pydantic import BaseModel, Field
 
 from .config import CLAUDE_MODEL, LANGS
+from .styles import CaptionStyle
+
+LAYOUTS = ("fill", "fit", "split")  # footage fills the frame / whole clip over a blurred copy / two clips stacked
+
+
+class BRoll(BaseModel):
+    """A cutaway inside a scene: another clip or photo over the footage for a while (seconds from the scene's start)."""
+    media: str
+    at: float = 0
+    duration: float = 2
+
+
+class TextOverlay(BaseModel):
+    """Extra text on the frame for a while (seconds from the scene's start); x, y = its middle, as fractions."""
+    text: str
+    at: float = 0
+    duration: float = 2
+    x: float = 0.5
+    y: float = 0.4
+    size: str = "m"
+    color: str = "#FFFFFF"
+    box: bool = False  # on a black box instead of an outline
 
 
 class Scene(BaseModel):
@@ -16,6 +38,27 @@ class Scene(BaseModel):
     # Chosen background (path relative to the project root: uploads/... or cache/pexels/...).
     # Empty = pick footage automatically from visual_query.
     media: str = ""
+    # Length of a scene without narration (e.g. a sound-effect beat); ignored when there is narration.
+    seconds: float = 0
+    # Transcript edits: words shown in the keyword colour in the captions (voiceover.keyword() form), and stretches
+    # (seconds) cut out of the voiceover, which only apply to the voiceover they were made on (cuts_key).
+    keywords: list[str] = []
+    cuts: list[tuple[float, float]] = []
+    cuts_key: str = ""
+    # Timeline edits: where the footage starts (seconds into the clip), how it fills the frame, the second clip of a
+    # split layout ("" = picked automatically like `media`), cutaways and extra text.
+    media_start: float = 0
+    layout: str = "fill"
+    media2: str = ""
+    broll: list[BRoll] = []
+    texts: list[TextOverlay] = []
+    # AI scene art (when the script has an art_style and no `media` is chosen): the picture's prompt (written by
+    # director.py, editable), its seed (another seed = another take of the same prompt), the camera move over it
+    # (fx.MOTIONS) and atmosphere effects (fx.EFFECTS). Empty prompt = planned at render time.
+    art_prompt: str = ""
+    art_seed: int = 0
+    motion: str = ""
+    effects: list[str] = []
 
 
 class VideoScript(BaseModel):
@@ -23,6 +66,21 @@ class VideoScript(BaseModel):
     scenes: list[Scene]
     caption: str
     hashtags: list[str]
+    # from a content plan's Music / Mood and Key Visual columns: the background track is picked by the mood, the key
+    # visual is the shot the video is built around (scene `key_scene`, 1-based; 0 = none) and the cover is taken from it
+    mood: str = ""
+    key_visual: str = ""
+    key_scene: int = 0
+    captions: CaptionStyle = CaptionStyle()
+    # from a content plan's Fact Check sheet: the notes, the works they cite (a "Sources:" line in the description)
+    # and a comment to pin under the video
+    facts: list[str] = []
+    sources: str = ""
+    pinned_comment: str = ""
+    # scene pictures: "" = stock footage (Pexels/Pixabay), else an imagegen.STYLES look drawn on this computer;
+    # art_bible: the director's notes (characters, world, palette) that keep every picture in one style
+    art_style: str = ""
+    art_bible: str = ""
 
     @property
     def narration(self) -> str:
@@ -74,8 +132,11 @@ Field rules:
 - narration: the exact words spoken, written in the requested language.
 - visual_query: always ENGLISH, 2-4 concrete nouns that a stock video site would have (e.g. "octopus underwater", "city night traffic"). No abstract concepts.
 - on_screen_text: a 1-5 word headline for the scene in the requested language, or "" if not needed.
-- caption: the social post caption in the requested language, 1-2 sentences, ends with a question to drive comments.
-- hashtags: 5-8 tags without the # sign, mixing broad and niche tags."""
+- title: 30-60 characters (Khmer: under about 40), specific and front-loaded: a number, a name, a vivid detail or a
+  clear promise. Title Case for English, no hashtags, no clickbait the video doesn't deliver.
+- caption: the social post caption in the requested language: a first line that hooks on its own, one line that
+  teases the payoff, then a question that is easy to answer to drive comments. Short lines, 0-2 emoji.
+- hashtags: 4-7 tags without the # sign, mixing broad, topic and niche tags; never fyp, viral, foryou or trending."""
 
 def make_client() -> anthropic.Anthropic:
     """Claude client; adds the workspace header for org-level keys that aren't scoped to a workspace."""

@@ -4,6 +4,7 @@ Backends share one small interface so another provider (or a local model) can be
 """
 import json
 import os
+import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,43 @@ class SongResult:
     vocals: Path | None = None
     instrumental: Path | None = None
     song_id: str = ""
+    timestamps: Path | None = None  # the generator's own word timings (timestamps.json), when it sent them
+
+
+class ElevenLabsError(RuntimeError):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+def _song_id(r: requests.Response) -> str:
+    return next((v for k, v in r.headers.items() if "song" in k.lower() and "id" in k.lower()), "")
+
+
+def split_multipart(content_type: str, body: bytes) -> tuple[dict, bytes]:
+    """multipart/mixed response -> (its JSON part, its audio part). Anything else is taken as plain audio."""
+    m = re.search(r'boundary="?([^";]+)"?', content_type or "", re.IGNORECASE)
+    if "multipart" not in (content_type or "").lower() or not m:
+        return {}, body
+    meta, audio = {}, b""
+    for part in body.split(b"--" + m.group(1).encode())[1:]:
+        if part.startswith(b"--"):  # closing boundary
+            break
+        head, sep, data = part.partition(b"\r\n\r\n")
+        if not sep:
+            head, sep, data = part.partition(b"\n\n")
+        if data.endswith(b"\r\n"):
+            data = data[:-2]
+        elif data.endswith(b"\n"):
+            data = data[:-1]
+        if b"application/json" in head.lower():
+            try:
+                meta = json.loads(data.decode("utf-8"))
+            except ValueError:
+                pass
+        elif len(data) > len(audio):
+            audio = data
+    return meta, audio
 
 
 class SongBackend(Protocol):
@@ -76,18 +114,31 @@ class ElevenLabsMusic:
             except ValueError:
                 detail = r.text
             detail = " ".join(str(detail).split())[:1000]
-            raise RuntimeError(f"ElevenLabs {path} failed ({r.status_code}): {detail}")
+            raise ElevenLabsError(r.status_code, f"ElevenLabs {path} failed ({r.status_code}): {detail}")
         return r
 
-    def compose(self, song: SongScript, out: Path) -> str:
-        """Write the full song to `out`; returns the song id ElevenLabs reports (or "")."""
-        r = self._post("/music", json={
-            "composition_plan": self.composition_plan(song),
-            "model_id": self.model,
-            "respect_sections_durations": True,
-        })
+    def compose(self, song: SongScript, out: Path) -> tuple[str, list[dict]]:
+        """Write the full song to `out`; returns the song id ElevenLabs reports (or "") and the word timings it
+        sang the lyrics at ([{"word", "start_ms", "end_ms"}], or [] when it didn't send them).
+
+        The detailed endpoint returns the words with their times, straight from the generator: far more exact than
+        listening for them afterwards. Accounts or models without it fall back to the plain endpoint."""
+        body = {"composition_plan": self.composition_plan(song), "model_id": self.model,
+                "respect_sections_durations": True}
+        try:
+            r = self._post("/music/detailed", json={**body, "with_timestamps": True})
+        except ElevenLabsError as e:
+            if e.status not in (400, 403, 404, 405, 422):
+                raise
+            r = None
+        if r is not None:
+            meta, audio = split_multipart(r.headers.get("content-type", ""), r.content)
+            if audio:
+                out.write_bytes(audio)
+                return r.headers.get("song-id", "") or _song_id(r), list(meta.get("words_timestamps") or [])
+        r = self._post("/music", json=body)
         out.write_bytes(r.content)
-        return next((v for k, v in r.headers.items() if "song" in k.lower() and "id" in k.lower()), "")
+        return _song_id(r), []
 
     def separate(self, mix: Path, out_dir: Path) -> tuple[Path | None, Path | None]:
         """Split `mix` into stems; returns (vocals, instrumental). Non-vocal stems are mixed into one track."""
@@ -116,11 +167,15 @@ class ElevenLabsMusic:
     def generate(self, song: SongScript, out_dir: Path, stems: bool = True) -> SongResult:
         out_dir.mkdir(parents=True, exist_ok=True)
         mix = out_dir / "song.mp3"
-        song_id = self.compose(song, mix)
+        song_id, words = self.compose(song, mix)
+        timestamps = None
+        if words:
+            timestamps = out_dir / "timestamps.json"
+            timestamps.write_text(json.dumps(words, ensure_ascii=False), encoding="utf-8")
         vocals = instrumental = None
         if stems:
             vocals, instrumental = self.separate(mix, out_dir / "stems")
-        return SongResult(mix, vocals, instrumental, song_id)
+        return SongResult(mix, vocals, instrumental, song_id, timestamps)
 
 
 BACKENDS: dict[str, type] = {"elevenlabs": ElevenLabsMusic}

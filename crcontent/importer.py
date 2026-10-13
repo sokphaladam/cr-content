@@ -14,7 +14,7 @@ from .script import KHMER_NOTE, SCHEMA, Scene, VideoScript, make_client
 KHMER_CHARS = re.compile(r"[ក-៿]")
 # emoji & pictographs: the caption fonts can't draw them, they'd render as empty boxes
 EMOJI = re.compile(
-    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U00002B00-\U00002BFF\U0001F1E6-\U0001F1FF"
+    "[\U0001F000-\U0001FAFF\U000023E9-\U000023FA\U00002600-\U000027BF\U00002B00-\U00002BFF\U0001F1E6-\U0001F1FF"
     "\U0000FE0F\U0000200D\U000020E3]+"
 )
 STOPWORDS = set("""close a an the of to and or with on in at by for from into onto then simple animation appearing

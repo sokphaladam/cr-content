@@ -101,8 +101,10 @@ Sound rules:
 Other fields:
 - lyrics: the sung lines in the requested language; [] for an instrumental section.
 - visual_query: always ENGLISH, 2-4 concrete nouns a stock video site would have, matching the section's imagery.
-- caption: the social post caption in the requested language, 1-2 sentences, ends with a question to drive comments.
-- hashtags: 5-8 tags without the # sign, mixing broad music tags and niche topic tags."""
+- title: a short, memorable song title (1-5 words), usually taken from the hook.
+- caption: the social post caption in the requested language: a first line that hooks on its own (a feeling or a
+  story in a phrase), then a question that is easy to answer to drive comments. Short lines, 0-2 emoji.
+- hashtags: 4-7 tags without the # sign, mixing broad music tags and niche topic tags; never fyp, viral or trending."""
 
 KHMER_NOTE = """
 The language is Khmer. Write natural, singable Khmer lyrics. Put a normal space between phrases every 2-5 words,
@@ -291,6 +293,14 @@ def _sections_text(song: SongScript) -> str:
                        for i, s in enumerate(song.sections))
 
 
+# What makes stock footage look like a real music video rather than a slideshow
+SHOT_GUIDE = (
+    "Write each search like a cinematographer's shot, using words stock sites tag their best clips with: a concrete "
+    "subject plus one shot word such as aerial, silhouette, slow motion, close up, golden hour, neon, bokeh, "
+    "timelapse, drone, rain, backlit. Prefer moody, atmospheric, well-lit scenery and anonymous people seen from "
+    "behind or far away; avoid talking heads, text, logos, screens and office scenes.")
+
+
 def describe_song(song: SongScript, lang: str, client: anthropic.Anthropic | None = None) -> None:
     """Fill in footage searches per section, plus mood, caption and hashtags, by having Claude read the lyrics."""
     client = client or make_client()
@@ -300,9 +310,11 @@ def describe_song(song: SongScript, lang: str, client: anthropic.Anthropic | Non
         f"- visual_queries: exactly {len(song.sections)} items, one per section in order. Each is an ENGLISH stock "
         f"video search of 2-4 concrete words that a site like Pexels really has, matching that section's imagery "
         f"and mood. Keep a consistent look across the song (same setting/colour palette), vary the shots.\n"
+        f"  {SHOT_GUIDE}\n"
         f"- genre and mood: a few words each, guessed from the lyrics.\n"
-        f"- caption: a 1-2 sentence social post caption in {LANGS[lang].name} for the music video.\n"
-        f"- hashtags: 5-8 without the # sign."
+        f"- caption: a social post caption in {LANGS[lang].name} for the music video: a first line that hooks on its "
+        f"own, then a question that is easy to answer. Short lines, 0-2 emoji.\n"
+        f"- hashtags: 4-7 without the # sign, broad music tags plus niche ones; never fyp, viral or trending."
     )
     response = client.beta.messages.create(
         model=CLAUDE_MODEL,
@@ -343,7 +355,7 @@ def plan_footage(song: SongScript, lang: str, idea: str, client: anthropic.Anthr
         f"video search of 2-4 concrete words that a site like Pexels really has. Follow the user's idea (its setting, "
         f"characters, story and look) through the whole song, and let each section's lyrics and energy pick the "
         f"moment: quieter shots for verses and instrumental parts, the most striking shots for choruses. Vary the "
-        f"shots; never repeat a search."
+        f"shots; never repeat a search.\n{SHOT_GUIDE}"
     )
     response = client.beta.messages.create(
         model=CLAUDE_MODEL,
@@ -360,6 +372,67 @@ def plan_footage(song: SongScript, lang: str, idea: str, client: anthropic.Anthr
     if not queries:
         raise RuntimeError("no footage searches came back")
     return [queries[i] if i < len(queries) else queries[-1] for i in range(len(song.sections))]
+
+
+IDEAS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "ideas": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "idea": {"type": "string"},
+                    "look": {"type": "string", "enum": ["natural", "cinematic", "film", "moody", "vibrant", "mono"]},
+                    "lyric_style": {"type": "string",
+                                    "enum": ["classic", "neon", "bold_pop", "cinematic", "minimal", "boxed"]},
+                },
+                "required": ["title", "idea", "look", "lyric_style"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["ideas"],
+    "additionalProperties": False,
+}
+
+
+def suggest_video_ideas(song: SongScript, lang: str, count: int = 4,
+                        client: anthropic.Anthropic | None = None) -> list[dict]:
+    """Music video concepts for this song, each with a matching colour grade and lyric style, to pick from."""
+    client = client or make_client()
+    prompt = (
+        f"Song title: {song.title}\nLanguage: {LANGS[lang].name}\n"
+        + (f"Genre: {song.genre}\nMood: {song.mood}\n" if song.genre or song.mood else "")
+        + f"\nLyrics by section:\n{_sections_text(song)}\n\n"
+        f"Suggest {count} different music video concepts for this song, the way a music video director would pitch "
+        f"them. The video is cut from stock footage (Pexels / Pixabay), so every concept must be filmable with "
+        f"stock clips: real places, nature, cities, weather, light, anonymous people seen from behind or far away. "
+        f"No specific actors, faces, story beats that need one recurring character, animation or text on screen.\n"
+        f"- title: 2-4 words naming the concept.\n"
+        f"- idea: 1-2 sentences in English describing the setting, the light and the feeling, specific enough to "
+        f"plan shots from (e.g. 'Empty city streets at blue hour, rain on neon signs and car windows, a lone "
+        f"figure walking under an umbrella').\n"
+        f"- look: the colour grade that suits it (cinematic = teal and orange, film = warm grainy, moody = dark and "
+        f"muted, vibrant = punchy colour, mono = black and white, natural = clean).\n"
+        f"- lyric_style: how the lyrics should look (classic karaoke, neon glow, bold_pop for upbeat TikTok-style "
+        f"word pops, cinematic serif fades for ballads, minimal, boxed).\n"
+        f"Make the concepts clearly different from each other: one close to the lyrics' literal imagery, one more "
+        f"abstract or atmospheric, and at least one bold, striking choice."
+    )
+    response = client.beta.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=4000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": IDEAS_SCHEMA}},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if response.stop_reason == "refusal":
+        raise RuntimeError("Claude declined to suggest ideas for these lyrics.")
+    ideas = json.loads(next(b.text for b in response.content if b.type == "text"))["ideas"]
+    return [i for i in ideas if i["idea"].strip()][:count]
 
 
 def idea_queries(song: SongScript, lang: str, idea: str, log=print) -> list[str]:

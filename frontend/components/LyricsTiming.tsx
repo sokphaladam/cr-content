@@ -2,9 +2,9 @@
 
 import { Check, ChevronDown, ChevronLeft, CircleAlert, Crosshair, Film, ListPlus, Minus, Pause, Play, Plus, RefreshCw, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, outputUrl, type Aspect, type Lang, type LyricsTiming as Timing, type TimedLine, type TimedWord } from "@/lib/api";
+import { api, outputUrl, type Aspect, type Lang, type LyricsTiming as Timing, type MusicVideoSettings, type TimedLine, type TimedWord } from "@/lib/api";
 import { Button, IconButton, Message, Spinner } from "./ui";
-import { VideoIdea } from "./VideoIdea";
+import { MusicVideoOptions } from "./MusicVideoOptions";
 
 /** A line in the editor: a stable id keeps inputs and open word panels attached while lines are added or re-sorted. */
 type Row = TimedLine & { uid: string };
@@ -155,9 +155,10 @@ export function LyricsTiming({
   lang,
   aspect,
   sections,
-  idea: initialIdea,
+  settings: initialSettings,
   busy,
   onBack,
+  onDelete,
   onResync,
   onMakeVideo,
 }: {
@@ -166,13 +167,14 @@ export function LyricsTiming({
   lang: Lang;
   aspect: Aspect;
   sections: string[];
-  idea: string; // last video idea used for this song
+  settings: MusicVideoSettings; // idea, look and lyric style the song's last music video used
   busy: boolean; // a job (sync or render) is running
   onBack: () => void;
-  onResync: () => Promise<string | null>;
-  onMakeVideo: (idea: string) => Promise<string | null>;
+  onDelete: () => void;
+  onResync:() => Promise<string | null>;
+  onMakeVideo: (settings: MusicVideoSettings) => Promise<string | null>;
 }) {
-  const [idea, setIdea] = useState(initialIdea);
+  const [settings, setSettings] = useState(initialSettings);
   const [making, setMaking] = useState(false); // the "make music video" panel is open
   const [lines, setLines] = useState<Row[] | null>(null);
   const [method, setMethod] = useState<Timing["timing"]>("");
@@ -184,6 +186,7 @@ export function LyricsTiming({
   const [follow, setFollow] = useState(true);
   const [ripple, setRipple] = useState(true); // retiming a line moves every line after it by the same amount
   const [confirmResync, setConfirmResync] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set()); // lines showing their words
   const [fresh, setFresh] = useState<string | null>(null); // just-added line: focus its text
   const [deleted, setDeleted] = useState<{ row: Row; index: number } | null>(null);
@@ -348,12 +351,40 @@ export function LyricsTiming({
         >
           Make {aspect === "16:9" ? "16:9" : "9:16"} music video
         </Button>
+        <Button
+          size="sm"
+          variant="danger"
+          aria-label={confirmDelete ? "Confirm delete song" : "Delete song"}
+          title="Deletes the song and its timing. Its music videos stay in Videos."
+          disabled={busy}
+          icon={<Trash2 className="size-3.5" />}
+          onClick={async () => {
+            if (!confirmDelete) {
+              setConfirmDelete(true);
+              setTimeout(() => setConfirmDelete(false), 3000);
+              return;
+            }
+            audio.current?.pause();
+            await pending.current; // let an in-flight timing save finish first
+            onDelete();
+          }}
+        >
+          <span className={confirmDelete ? "" : "hidden md:inline"}>{confirmDelete ? "Confirm delete" : "Delete"}</span>
+        </Button>
       </header>
 
       {making && (
-        <div className="shrink-0 border-b border-line bg-panel px-4 py-3 sm:px-8">
+        <div className="max-h-[62vh] shrink-0 overflow-y-auto border-b border-line bg-panel px-4 py-3 sm:px-8">
           <div className="mx-auto grid max-w-[760px] gap-2">
-            <VideoIdea id={`timing-idea-${name}`} value={idea} onChange={setIdea} />
+            <MusicVideoOptions
+              name={name}
+              lang={lang}
+              aspect={aspect}
+              sample={lines?.find((l) => l.text.trim())?.text ?? title}
+              sections={sections}
+              value={settings}
+              onChange={setSettings}
+            />
             <div className="flex justify-end gap-2">
               <Button size="sm" variant="ghost" onClick={() => setMaking(false)}>
                 Cancel
@@ -367,7 +398,7 @@ export function LyricsTiming({
                   setError("");
                   await pending.current;
                   if (dirty.current && lines) await api.saveLyrics(name, toSave(lines)).catch(() => undefined);
-                  const err = await onMakeVideo(idea);
+                  const err = await onMakeVideo(settings);
                   if (err) setError(err);
                   else setMaking(false);
                 }}
@@ -431,6 +462,8 @@ export function LyricsTiming({
                 {lines.length} lines ·{" "}
                 {method === "edited"
                   ? "timing edited"
+                  : method === "exact"
+                    ? "timed from the song's own word timings"
                   : method === "even"
                     ? "spaced evenly (auto-sync unavailable)"
                     : lines.length

@@ -1,13 +1,15 @@
 """Central settings: video format, voices, caption styling per language."""
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import locations
+
 CODE_DIR = Path(__file__).resolve().parent.parent
-# Everything the app writes (drafts, output, uploads, cache, assets, .env) lives under ROOT. Scripts store media
-# paths relative to it. The desktop app points it at the user's app-data folder; otherwise it's the project folder.
-ROOT = Path(os.getenv("CRCONTENT_DATA_DIR") or CODE_DIR).resolve()
-OUTPUT_DIR = ROOT / "output"
+# Everything the app writes (drafts, uploads, cache, assets, .env...) lives under ROOT, the data folder chosen in
+# Settings (Documents/Shorts Studio by default). Scripts store media paths relative to it. Finished videos go to
+# OUTPUT_DIR, which is ROOT/output unless another folder was chosen. See locations.py.
+locations.first_run(CODE_DIR)
+ROOT, OUTPUT_DIR, _ = locations.current()
 DRAFTS_DIR = ROOT / "drafts"
 CACHE_DIR = ROOT / "cache"
 ASSETS_DIR = ROOT / "assets"

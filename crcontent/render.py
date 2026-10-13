@@ -32,37 +32,84 @@ def duration(path: Path) -> float:
     return float(json.loads(out)["format"]["duration"])
 
 
+def _media_input(media: Path | None, length: float, start: float, size: tuple[int, int]) -> list[str]:
+    """ffmpeg input args for a scene's clip (looped from `start`), photo (held for `length`) or, with no media,
+    a slowly moving gradient."""
+    W, H = size
+    if media and media.suffix.lower() in IMAGE_EXTS:
+        return ["-framerate", str(FPS), "-loop", "1", "-t", f"{length:.3f}", "-i", str(media)]
+    if media:
+        return ["-stream_loop", "-1", *(["-ss", f"{start:.3f}"] if start > 0 else []), "-i", str(media)]
+    c0, c1, c2 = random.choice(GRADIENT_PALETTES)
+    return ["-f", "lavfi", "-i", f"gradients=s={W}x{H}:r={FPS}:c0={c0}:c1={c1}:c2={c2}:n=3:speed=0.015"]
+
+
+def _cover(W: int, H: int) -> str:
+    return f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,fps={FPS},format=yuv420p"
+
+
 def render_scene(footage: Path | None, voice: Path | None, length: float, out: Path, start: float = 0.0,
-                 size: tuple[int, int] = (WIDTH, HEIGHT)) -> None:
+                 size: tuple[int, int] = (WIDTH, HEIGHT), look: str = "", drift: int = 0, layout: str = "fill",
+                 footage2: Path | None = None, broll: list[tuple[Path, float, float]] = ()) -> None:
     """One scene: background cropped to `size` (9:16 by default) and looped/trimmed to the narration length.
 
     voice=None renders a silent track (music videos add the song in finalize); `start` skips into a video
-    clip, so one clip can fill several shots without repeating the same frames.
+    clip, so one clip can fill several shots without repeating the same frames. `look`: a colour grade from
+    styles.LOOKS (music videos), so clips from different sources look like one film. `drift`: 1 or -1 slowly
+    pans a video clip right or left across the shot, like a camera move; 0 keeps it still.
+    `layout`: fill (cropped to the frame), fit (the whole clip over a blurred copy of itself) or split (`footage`
+    on top, `footage2` below). `broll`: (clip or photo, at, seconds) cutaways that cover the frame for a while.
     """
     W, H = size
-    fit = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
-           f"setsar=1,fps={FPS},format=yuv420p")
-    if footage and footage.suffix.lower() in IMAGE_EXTS:
+    fit = _cover(W, H)
+    if drift:
+        # 6% bigger than the frame, then the crop window glides from one side to the other over the shot
+        frames = max(round(length * FPS), 1)
+        x = f"(iw-ow)*n/{frames}" if drift > 0 else f"(iw-ow)*(1-n/{frames})"
+        fit = (f"scale={round(W * 1.06) // 2 * 2}:{round(H * 1.06) // 2 * 2}:force_original_aspect_ratio=increase,"
+               f"fps={FPS},crop={W}:{H}:x='{x}':y='(ih-oh)/2',setsar=1,format=yuv420p")
+    if look:
+        from .styles import look_filter
+        grade = look_filter(look)
+    else:
+        grade = "eq=brightness=-0.06:saturation=1.1"  # slight darken so white captions always stay readable
+    photo = bool(footage and footage.suffix.lower() in IMAGE_EXTS)
+    inputs = _media_input(footage, length, start, size)
+    if layout == "split":
+        inputs += _media_input(footage2, length, 0.0, size)
+        half = H // 2 // 2 * 2
+        vf = f"[0:v]{_cover(W, half)}[top];[1:v]{_cover(W, H - half)}[bot];[top][bot]vstack,{grade}[base]"
+    elif layout == "fit" and footage:
+        vf = (f"[0:v]fps={FPS},split[a][b];[a]{_cover(W, H)},boxblur=24:2,eq=brightness=-0.18[bg];"
+              f"[b]scale={W}:{H}:force_original_aspect_ratio=decrease,setsar=1[fg];"
+              f"[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p,{grade}[base]")
+    elif photo:
         # still photo: slow "Ken Burns" push-in so the scene doesn't look frozen
         frames = round(length * FPS)
-        video_in = ["-framerate", str(FPS), "-loop", "1", "-i", str(footage)]
         vf = (f"[0:v]scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase,"
               f"crop={W * 2}:{H * 2},"
               f"zoompan=z='min(1+{0.18 / max(frames, 1):.6f}*on,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-              f":d=1:s={W}x{H}:fps={FPS},setsar=1,format=yuv420p,eq=brightness=-0.06[v]")
+              f":d=1:s={W}x{H}:fps={FPS},setsar=1,format=yuv420p,"
+              + (f"{grade}[base]" if look else "eq=brightness=-0.06[base]"))
     elif footage:
-        # slight darken so white captions always stay readable
-        video_in = ["-stream_loop", "-1", *(["-ss", f"{start:.3f}"] if start > 0 else []), "-i", str(footage)]
-        vf = f"[0:v]{fit},eq=brightness=-0.06:saturation=1.1[v]"
+        vf = f"[0:v]{fit},{grade}[base]"
     else:
-        c0, c1, c2 = random.choice(GRADIENT_PALETTES)
-        video_in = ["-f", "lavfi", "-i",
-                    f"gradients=s={W}x{H}:r={FPS}:c0={c0}:c1={c1}:c2={c2}:n=3:speed=0.015"]
-        vf = f"[0:v]{fit}[v]"
+        vf = f"[0:v]{fit}[base]"
 
+    # cutaways: each one timed to start `at` seconds in and laid over the frame while it lasts
+    current = "base"
+    for k, (clip, at, seconds) in enumerate(broll):
+        n_inputs = sum(1 for a in inputs if a == "-i")
+        inputs += _media_input(clip, seconds, 0.0, size)
+        vf += (f";[{n_inputs}:v]{_cover(W, H)},trim=duration={seconds:.3f},setpts=PTS-STARTPTS+{at:.3f}/TB,{grade}[b{k}];"
+               f"[{current}][b{k}]overlay=enable='between(t,{at:.3f},{at + seconds:.3f})':eof_action=pass[o{k}]")
+        current = f"o{k}"
+    vf += f";[{current}]null[v]"
+
+    audio_index = sum(1 for a in inputs if a == "-i")
     audio_in = ["-i", str(voice)] if voice else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
-    run(["ffmpeg", "-y", "-hide_banner", *video_in, *audio_in,
-         "-filter_complex", f"{vf};[1:a]aresample=44100,apad[a]",
+    run(["ffmpeg", "-y", "-hide_banner", *inputs, *audio_in,
+         "-filter_complex", f"{vf};[{audio_index}:a]aresample=44100,apad[a]",
          "-map", "[v]", "-map", "[a]", "-t", f"{length:.3f}",
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
          "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
@@ -77,15 +124,23 @@ def concat(clips: list[Path], workdir: Path, out_name: str) -> Path:
     return workdir / out_name
 
 
+MAX_RATE, BUF_SIZE = "12M", "24M"  # the final video's bitrate ceiling
+
+
 def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
-             music: Path | None, music_volume: float = 0.25, soundtrack: Path | None = None) -> None:
+             music: Path | None, music_volume: float = 0.25, soundtrack: Path | None = None,
+             fade_out: float = 0.0) -> None:
     """Burn captions, add ducked background music, and write a web-optimized mp4.
 
     soundtrack replaces the video's own audio entirely (a music video's song); music is then ignored.
+    fade_out: seconds the picture fades to black at the end (a music video's outro).
     Runs inside workdir with relative names so the subtitles filter avoids Windows drive-letter escaping.
     """
     # complex (HarfBuzz) shaping is required for Khmer subscripts/vowel reordering; "auto" picks simple
     vf = f"ass={ass_name}:fontsdir=fonts:shaping=complex"
+    if fade_out > 0:
+        length = duration(workdir / video_name)
+        vf += f",fade=t=out:st={max(length - fade_out, 0):.3f}:d={fade_out:.3f}"
     cmd = ["ffmpeg", "-y", "-hide_banner", "-i", video_name]
     if soundtrack:
         cmd += ["-i", str(soundtrack.resolve()),
@@ -100,14 +155,18 @@ def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
         cmd += ["-filter_complex", f"[0:v]{vf}[v];{audio}", "-map", "[v]", "-map", "[a]"]
     else:
         cmd += ["-vf", vf, "-map", "0:v", "-map", "0:a"]
-    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+    # quality-based, but capped: film grain and particles otherwise push 1080p to ~37 Mbps (1.3 GB for a song), and
+    # YouTube/TikTok re-encode to far less anyway (YouTube recommends 8-12 Mbps for 1080p uploads)
+    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-maxrate", MAX_RATE, "-bufsize", BUF_SIZE,
+            "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", str(out.resolve())]
     run(cmd, cwd=workdir)
 
 
 def thumbnail(video: Path, at: float, out: Path, workdir: Path, ass_name: str | None = None,
-              size: tuple[int, int] = (WIDTH, HEIGHT)) -> None:
-    """One frame of `video` as a JPEG cover, graded, with the headline from `ass_name` (in workdir) on top.
+              size: tuple[int, int] = (WIDTH, HEIGHT), image: Path | None = None) -> None:
+    """One frame of `video` (or the photo `image`) as a JPEG cover, graded, with the headline from `ass_name`
+    (in workdir) on top.
 
     Runs inside workdir with relative names, like finalize(), so the ass filter avoids drive-letter escaping.
     """
@@ -118,5 +177,6 @@ def thumbnail(video: Path, at: float, out: Path, workdir: Path, ass_name: str | 
     if ass_name:
         # darker edges pull the eye to the headline and keep it readable on busy frames
         vf += f",eq=brightness=-0.05,vignette=angle=PI/4.5,ass={ass_name}:fontsdir=fonts:shaping=complex"
-    run(["ffmpeg", "-y", "-hide_banner", "-ss", f"{at:.2f}", "-i", str(video.resolve()),
+    source = ["-i", str(image.resolve())] if image else ["-ss", f"{at:.2f}", "-i", str(video.resolve())]
+    run(["ffmpeg", "-y", "-hide_banner", *source,
          "-frames:v", "1", "-vf", vf, "-q:v", "2", str(out.resolve())], cwd=workdir)

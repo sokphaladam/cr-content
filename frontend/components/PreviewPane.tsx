@@ -1,14 +1,17 @@
 "use client";
 
-import { Check, Copy, Download, Film, ImageIcon, ListMusic, Music, Sparkles, Trash2 } from "lucide-react";
+import { Check, Copy, Download, Film, ImageIcon, ImageUp, ListMusic, Music, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { API_BASE, api, fileUrl, outputUrl, type Job, type Lang, type Scene, type ThumbStyle, type ThumbSuggestion, type ThumbSuggestions, type VideoDetail, type VideoSummary } from "@/lib/api";
+import { API_BASE, api, fileUrl, outputUrl, type Job, type Lang, type MusicVideoSettings, type Options, type PostSuggestion, type Scene, type ThumbStyle, type ThumbSuggestion, type ThumbSuggestions, type VideoDetail, type VideoSummary } from "@/lib/api";
 import { isImagePath, relativeTime } from "@/lib/format";
+import type { DraftTimeline } from "@/lib/useDraftTimeline";
 import { Button, IconButton, Segmented, buttonClass, useToast } from "./ui";
-import { VideoIdea } from "./VideoIdea";
+import { CaptionPanel, LiveControls, LiveFrame, type FrameEdits } from "./LivePreview";
+import { MusicVideoOptions } from "./MusicVideoOptions";
+import { PublishCard } from "./PublishCard";
 
 const STEPS = ["Script", "Voiceover", "Footage", "Captions", "Final render"];
-const SONG_STEPS = ["Lyrics", "Compose"];
+const SONG_STEPS = ["Lyrics", "Compose", "Lyric timing"];
 const MUSIC_VIDEO_STEPS = ["Lyric timing", "Beats and footage", "Captions", "Final render"];
 const SYNC_STEPS = ["Read lyrics", "Lyric timing"];
 const stepsFor = (job: Job | null) =>
@@ -29,6 +32,18 @@ function SongPlayer({ detail }: { detail: VideoDetail }) {
   );
 }
 
+/** The idea, look, lyric style and visuals a song's last music video used: the starting point for the next one. */
+export function settingsOf(detail: Pick<VideoDetail, "idea" | "look" | "lyric_style" | "art_style" | "pictures" | "direction">): MusicVideoSettings {
+  return {
+    idea: detail.idea ?? "",
+    look: detail.look ?? "",
+    lyric_style: detail.lyric_style ?? null,
+    art_style: detail.art_style ?? "",
+    pictures: detail.pictures ?? "normal",
+    direction: detail.direction ?? null,
+  };
+}
+
 function SongCard({
   detail,
   onDelete,
@@ -38,21 +53,30 @@ function SongCard({
 }: {
   detail: VideoDetail;
   onDelete: (name: string) => void;
-  onMakeVideo: (name: string, idea: string) => void;
+  onMakeVideo: (name: string, settings: MusicVideoSettings) => void;
   onOpenTiming: (name: string) => void;
   onSelectVideo: (name: string) => void;
 }) {
   const own = detail.source === "upload";
   const versions = detail.versions ?? [];
-  const [idea, setIdea] = useState(detail.idea ?? "");
+  const [settings, setSettings] = useState<MusicVideoSettings>(() => settingsOf(detail));
+  const sample = detail.song?.sections.flatMap((s) => s.lyrics).find((l) => l.trim()) ?? detail.title;
   return (
     <section className="grid gap-3 rounded-xl border border-line bg-panel p-3.5">
       <div className="grid gap-1.5">
         <Button variant="secondary" icon={<ListMusic className="size-4" />} onClick={() => onOpenTiming(detail.name)}>
           Edit lyric timing
         </Button>
-        <VideoIdea id={`idea-${detail.name}`} value={idea} onChange={setIdea} />
-        <Button variant={versions.length ? "secondary" : "primary"} icon={<Film className="size-4" />} onClick={() => onMakeVideo(detail.name, idea)}>
+        <MusicVideoOptions
+          name={detail.name}
+          lang={detail.lang}
+          aspect={detail.aspect}
+          sample={sample}
+          sections={detail.song?.sections.map((s) => s.name) ?? []}
+          value={settings}
+          onChange={setSettings}
+        />
+        <Button variant={versions.length ? "secondary" : "primary"} icon={<Film className="size-4" />} onClick={() => onMakeVideo(detail.name, settings)}>
           {versions.length ? "Make a new version" : "Make music video"}
         </Button>
         <p className="m-0 text-xs text-ink-soft">
@@ -237,21 +261,155 @@ function Progress({ job, title }: { job: Job | null; title: string }) {
   );
 }
 
+/** The content plan's fact-check notes of a rendered video, and the comment to pin under it. */
+function FactsCard({ detail }: { detail: VideoDetail }) {
+  const toast = useToast();
+  const facts = detail.script?.facts ?? [];
+  const comment = detail.script?.pinned_comment ?? "";
+  if (!facts.length && !comment) return null;
+  return (
+    <section aria-labelledby={`facts-${detail.name}`} className="grid gap-2 rounded-xl border border-line bg-panel p-3.5">
+      <h3 id={`facts-${detail.name}`} className="m-0 font-display text-[14.5px] font-bold">
+        Fact check
+      </h3>
+      {facts.length > 0 && (
+        <ul className="m-0 grid gap-1 pl-4 text-[12.5px] leading-snug text-ink-soft">
+          {facts.map((f, i) => (
+            <li key={i}>{f}</li>
+          ))}
+        </ul>
+      )}
+      {comment && (
+        <>
+          <p className="m-0 rounded-lg bg-paper px-2.5 py-2 text-[12.5px] leading-snug whitespace-pre-line">{comment}</p>
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<Copy className="size-3.5" />}
+            className="justify-self-start"
+            onClick={() =>
+              navigator.clipboard.writeText(comment).then(
+                () => toast("Comment copied. Paste it under the video and pin it.", "success"),
+                () => toast("Couldn't copy. Select the text and copy it.", "error"),
+              )
+            }
+          >
+            Copy pinned comment
+          </Button>
+        </>
+      )}
+    </section>
+  );
+}
+
 function PostCard({ detail, onDelete }: { detail: VideoDetail; onDelete: (name: string) => void }) {
   const toast = useToast();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [post, setPost] = useState(detail.post);
+  const [postIdea, setPostIdea] = useState("");
+  const [options, setOptions] = useState<PostSuggestion[] | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [saving, setSaving] = useState(-1); // index of the option being saved
+
+  async function suggest() {
+    setSuggesting(true);
+    try {
+      setOptions((await api.suggestPosts(detail.name, postIdea)).items);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  async function use(option: PostSuggestion, i: number) {
+    setSaving(i);
+    try {
+      setPost((await api.savePost(detail.name, option)).post);
+      toast("Post text updated", "success");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setSaving(-1);
+    }
+  }
+
+  const isCurrent = (o: PostSuggestion) => post.startsWith(`${o.title}
+
+${o.description}
+`);
+
   return (
     <section aria-label="Post text" className="mx-auto w-full max-w-[300px] rounded-xl border border-line bg-panel">
       <pre lang={detail.lang} className="m-0 max-h-[160px] overflow-auto p-3.5 font-sans text-[13px] leading-relaxed whitespace-pre-wrap">
-        {detail.post || "No caption saved for this video."}
+        {post || "No caption saved for this video."}
       </pre>
+      <div className="grid gap-2 border-t border-line p-3.5">
+        <label className="field-label" htmlFor={`post-idea-${detail.name}`}>
+          Title direction <span className="font-normal">optional</span>
+        </label>
+        <textarea
+          id={`post-idea-${detail.name}`}
+          lang={detail.lang}
+          rows={2}
+          maxLength={600}
+          value={postIdea}
+          onChange={(e) => setPostIdea(e.target.value)}
+          placeholder="Mysterious and curious, aimed at travel lovers, mention the 3 tips"
+          className="field-input resize-y py-1.5 text-[13px] leading-snug"
+        />
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[12px] text-ink-soft">Tone, audience or words to include.</span>
+          <Button size="sm" variant={options && !postIdea ? "ghost" : "primary"} icon={<Sparkles className="size-3.5" />} loading={suggesting} onClick={suggest}>
+            {options ? "New ideas" : "Suggest titles"}
+          </Button>
+        </div>
+        {suggesting && <p className="m-0 text-[12.5px] text-ink-soft">Claude is writing titles and descriptions from different angles…</p>}
+        {options && (
+          <ul className={`m-0 grid list-none gap-2 p-0 ${suggesting ? "opacity-50" : ""}`}>
+            {options.map((o, i) => (
+              <li key={`${i}-${o.title}`} className={`grid gap-1.5 rounded-lg border p-2.5 ${isCurrent(o) ? "border-cobalt" : "border-line"}`}>
+                <span className="text-[10.5px] font-semibold tracking-wide text-ink-soft uppercase">
+                  {i === 0 ? `${o.angle} · Top pick` : o.angle}
+                </span>
+                <p lang={detail.lang} className="m-0 font-display text-[14.5px] leading-snug font-bold">{o.title}</p>
+                <p lang={detail.lang} className="m-0 text-[12.5px] leading-snug whitespace-pre-wrap text-ink-soft">{o.description}</p>
+                <p className="m-0 text-[12px] leading-snug text-cobalt">{o.hashtags.map((h) => `#${h}`).join(" ")}</p>
+                <div className="flex gap-0.5">
+                  <Button
+                    size="sm"
+                    variant={isCurrent(o) ? "ghost" : "secondary"}
+                    icon={<Check className="size-3.5" />}
+                    loading={saving === i}
+                    disabled={saving !== -1 || isCurrent(o)}
+                    onClick={() => use(o, i)}
+                  >
+                    {isCurrent(o) ? "In use" : "Use this"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={<Copy className="size-3.5" />}
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(o.title);
+                      toast("Title copied", "success");
+                    }}
+                  >
+                    Title
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
       <div className="flex items-center gap-0.5 border-t border-line p-1.5">
         <Button
           size="sm"
           variant="ghost"
           icon={<Copy className="size-3.5" />}
           onClick={async () => {
-            await navigator.clipboard.writeText(detail.post);
+            await navigator.clipboard.writeText(post);
             toast("Caption and hashtags copied", "success");
           }}
         >
@@ -289,6 +447,7 @@ const THUMB_STYLES: { value: ThumbStyle; label: string }[] = [
   { value: "bold", label: "Bold" },
   { value: "box", label: "Box" },
   { value: "stacked", label: "Stacked" },
+  { value: "designed", label: "Designed" },
 ];
 
 /** Cover image: get ideas (Claude headline x best frame x style) or pick a frame and headline, then redraw thumbnail.jpg. */
@@ -301,26 +460,31 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
     at: detail.thumb_at ?? Math.min(1, duration / 2),
     style: detail.thumb_style ?? ("bold" as ThumbStyle),
     emphasis: detail.thumb_emphasis ?? "",
+    image: detail.thumb_image ?? "",
     v: detail.thumb_v ?? 0,
   };
   const [text, setText] = useState(initial.text);
   const [at, setAt] = useState(initial.at);
   const [style, setStyle] = useState(initial.style);
   const [emphasis, setEmphasis] = useState(initial.emphasis);
+  const [image, setImage] = useState(initial.image); // photo instead of a video frame ("" = the frame at `at`)
+  const [coverIdea, setCoverIdea] = useState(detail.thumb_suggestions?.idea ?? "");
+  const [uploading, setUploading] = useState(false);
   const [saved, setSaved] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [ideas, setIdeas] = useState<ThumbSuggestions | null>(detail.thumb_suggestions ?? null);
   const [ideasV, setIdeasV] = useState(0); // cache buster for re-rendered preview images
   const [suggesting, setSuggesting] = useState(false);
   const frame = useRef<HTMLVideoElement>(null);
-  const changed = text !== saved.text || at !== saved.at || style !== saved.style || emphasis !== saved.emphasis;
-  const pickingFrame = at !== saved.at;
+  const changed =
+    text !== saved.text || at !== saved.at || style !== saved.style || emphasis !== saved.emphasis || image !== saved.image;
+  const pickingFrame = !image && (at !== saved.at || !!saved.image);
 
   useEffect(() => {
     if (frame.current) frame.current.currentTime = at;
   }, [at, pickingFrame]);
 
-  async function generate(cover = { text, at, style, emphasis }) {
+  async function generate(cover: { text: string; at: number; style: ThumbStyle; emphasis: string; image: string; design?: string } = { text, at, style, emphasis, image }) {
     setBusy(true);
     try {
       const summary = await api.makeThumbnail(detail.name, cover);
@@ -328,7 +492,8 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
       setAt(cover.at);
       setStyle(cover.style);
       setEmphasis(cover.emphasis);
-      setSaved({ ...cover, v: summary.thumb_v });
+      setImage(cover.image);
+      setSaved({ text: cover.text, at: cover.at, style: cover.style, emphasis: cover.emphasis, image: cover.image, v: summary.thumb_v });
       onChange(summary);
       toast("Thumbnail updated", "success");
     } catch (e) {
@@ -341,7 +506,7 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
   async function suggest() {
     setSuggesting(true);
     try {
-      setIdeas(await api.suggestThumbnails(detail.name));
+      setIdeas(await api.suggestThumbnails(detail.name, coverIdea));
       setIdeasV(Date.now());
     } catch (e) {
       toast((e as Error).message, "error");
@@ -350,19 +515,45 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
     }
   }
 
+  async function uploadPhoto(file: File) {
+    setUploading(true);
+    try {
+      const media = await api.upload(file);
+      if (media.kind !== "photo") throw new Error("Use a photo (jpg, png or webp) for the thumbnail.");
+      setImage(media.media);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   const isCurrent = (i: ThumbSuggestion) =>
-    i.text === saved.text && i.at === saved.at && i.style === saved.style && i.emphasis === saved.emphasis;
+    i.text === saved.text && i.at === saved.at && i.style === saved.style && i.emphasis === saved.emphasis && (i.image ?? "") === saved.image;
 
   return (
     <section aria-label="Thumbnail" className="mx-auto grid w-full max-w-[300px] gap-3 rounded-xl border border-line bg-panel p-3.5">
       <div className="grid gap-2">
+        <label className="field-label" htmlFor={`cover-idea-${detail.name}`}>
+          Cover idea <span className="font-normal">optional</span>
+        </label>
+        <textarea
+          id={`cover-idea-${detail.name}`}
+          lang={detail.lang}
+          rows={2}
+          maxLength={600}
+          value={coverIdea}
+          onChange={(e) => setCoverIdea(e.target.value)}
+          placeholder="A silhouette against a neon city at night, the headline asks a question"
+          className="field-input resize-y py-1.5 text-[13px] leading-snug"
+        />
         <div className="flex items-center justify-between gap-2">
-          <span className="field-label">Cover ideas</span>
-          <Button size="sm" variant={ideas ? "ghost" : "primary"} icon={<Sparkles className="size-3.5" />} loading={suggesting} onClick={suggest}>
+          <span className="text-[12px] text-ink-soft">Describe the picture, words or mood you want.</span>
+          <Button size="sm" variant={ideas && !coverIdea ? "ghost" : "primary"} icon={<Sparkles className="size-3.5" />} loading={suggesting} onClick={suggest}>
             {ideas ? "New ideas" : "Suggest covers"}
           </Button>
         </div>
-        {suggesting && !ideas && <p className="m-0 text-[12.5px] text-ink-soft">Finding the best frames and writing headlines…</p>}
+        {suggesting && <p className="m-0 text-[12.5px] text-ink-soft">Claude is picking frames, writing headlines and designing each cover… about a minute.</p>}
         {ideas && (
           <>
             <div className={`grid grid-cols-4 gap-1.5 ${suggesting ? "opacity-50" : ""}`}>
@@ -371,8 +562,8 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
                   key={idea.file}
                   type="button"
                   disabled={busy || suggesting}
-                  onClick={() => generate({ text: idea.text, at: idea.at, style: idea.style, emphasis: idea.emphasis })}
-                  title={`Use “${idea.text}” (${idea.style}, ${idea.at.toFixed(1)} s)`}
+                  onClick={() => generate({ text: idea.text, at: idea.at, style: idea.style, emphasis: idea.emphasis, image: idea.image ?? "", design: idea.design })}
+                  title={`Use “${idea.text}” (${idea.style}, ${idea.image ? "stock photo" : `${idea.at.toFixed(1)} s`})`}
                   aria-label={`Use cover: ${idea.text}`}
                   className={`relative ${detail.aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"} cursor-pointer overflow-hidden rounded-md bg-ink outline outline-offset-1 transition hover:brightness-110 disabled:cursor-wait ${
                     isCurrent(idea) ? "outline-2 outline-cobalt" : "outline-1 outline-line"
@@ -380,6 +571,9 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element -- local engine file */}
                   <img src={`${outputUrl(detail.name, idea.file)}?v=${ideasV}`} alt="" className="h-full w-full object-cover" />
+                  {idea.image && (
+                    <span className="absolute inset-x-0 bottom-0 bg-black/60 py-px text-center text-[9px] font-semibold text-white">Photo</span>
+                  )}
                   {isCurrent(idea) && (
                     <span className="absolute top-1 right-1 grid size-4 place-items-center rounded-full bg-cobalt text-white">
                       <Check className="size-3" />
@@ -394,7 +588,10 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
       </div>
       <div className="flex gap-3">
         <div className={`relative shrink-0 overflow-hidden rounded-md bg-ink ${detail.aspect === "16:9" ? "aspect-video w-[132px]" : "aspect-[9/16] w-[84px]"}`}>
-          {pickingFrame ? (
+          {image && image !== saved.image ? (
+            // eslint-disable-next-line @next/next/no-img-element -- local engine file
+            <img src={fileUrl(image)} alt="Chosen background photo" className="h-full w-full object-cover" />
+          ) : pickingFrame ? (
             <video
               ref={frame}
               src={`${outputUrl(detail.name, "video.mp4")}?v=${encodeURIComponent(detail.created)}`}
@@ -446,21 +643,44 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
       <div className="grid justify-items-start gap-1">
         <span className="field-label">Style</span>
         <Segmented name="thumb-style" size="sm" value={style} options={THUMB_STYLES} onChange={setStyle} />
+        {style === "designed" && (
+          <span className="text-[12px] text-ink-soft">Claude lays out the whole cover. New words keep the design; the first one takes a minute.</span>
+        )}
       </div>
       <div className="grid gap-1">
         <label className="field-label flex justify-between" htmlFor="thumb-at">
-          Frame <span className="font-normal text-ink-soft tabular-nums">{at.toFixed(1)} s</span>
+          {image ? "Background" : "Frame"} <span className="font-normal text-ink-soft tabular-nums">{image ? "photo" : `${at.toFixed(1)} s`}</span>
         </label>
-        <input
-          id="thumb-at"
-          type="range"
-          min={0}
-          max={Math.max(0.1, duration - 0.1)}
-          step={0.1}
-          value={at}
-          onChange={(e) => setAt(+e.target.value)}
-          className="h-6 w-full accent-cobalt"
-        />
+        {image ? (
+          <Button size="sm" variant="ghost" className="justify-self-start" icon={<Film className="size-3.5" />} onClick={() => setImage("")}>
+            Use a video frame instead
+          </Button>
+        ) : (
+          <input
+            id="thumb-at"
+            type="range"
+            min={0}
+            max={Math.max(0.1, duration - 0.1)}
+            step={0.1}
+            value={at}
+            onChange={(e) => setAt(+e.target.value)}
+            className="h-6 w-full accent-cobalt"
+          />
+        )}
+        <label className={`${buttonClass("ghost", "sm")} cursor-pointer justify-self-start ${uploading ? "opacity-60" : ""}`}>
+          <ImageUp className="size-3.5" /> {uploading ? "Uploading…" : image ? "Upload another photo" : "Use my own photo"}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            className="sr-only"
+            disabled={uploading}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void uploadPhoto(f);
+            }}
+          />
+        </label>
       </div>
       <div className="flex items-center gap-1.5">
         <Button size="sm" variant={changed ? "primary" : "secondary"} icon={<ImageIcon className="size-3.5" />} loading={busy} onClick={() => generate()}>
@@ -480,6 +700,7 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
 export type PreviewView = "scene" | "video";
 
 export function PreviewPane({
+  live,
   scene,
   sceneIndex,
   sceneCount,
@@ -495,7 +716,9 @@ export function PreviewPane({
   onMakeMusicVideo,
   onOpenTiming,
   onSelectVideo,
+  onOpenSettings,
 }: {
+  live: { timeline: DraftTimeline; music: string; edit: FrameEdits; options: Options | null } | null; // the open draft
   scene: Scene | null;
   sceneIndex: number;
   sceneCount: number;
@@ -508,9 +731,10 @@ export function PreviewPane({
   onView: (v: PreviewView) => void;
   onDeleteVideo: (name: string) => void;
   onThumbnail: (summary: VideoSummary) => void;
-  onMakeMusicVideo: (name: string, idea: string) => void;
+  onMakeMusicVideo: (name: string, settings: MusicVideoSettings) => void;
   onOpenTiming: (name: string) => void;
   onSelectVideo: (name: string) => void;
+  onOpenSettings: () => void;
 }) {
   const showProgress = rendering || job?.status === "error";
   const canToggle = !!scene && !!detail?.video && !showProgress;
@@ -540,7 +764,7 @@ export function PreviewPane({
 
       <Phone landscape={!showProgress && !scene && detail?.aspect === "16:9"}>
         {showProgress ? (
-          <Progress job={job} title={jobTitle} />
+          <Progress job={job} title={job?.kind === "excel" ? job.title : jobTitle} />
         ) : showVideo && detail ? (
           <video
             key={detail.name}
@@ -551,6 +775,8 @@ export function PreviewPane({
           />
         ) : showSong && detail ? (
           <SongPlayer detail={detail} />
+        ) : scene && live?.timeline.active ? (
+          <LiveFrame timeline={live.timeline} lang={lang} edit={live.edit} />
         ) : scene ? (
           <ScenePreview scene={scene} index={sceneIndex} total={sceneCount} lang={lang} />
         ) : (
@@ -562,7 +788,11 @@ export function PreviewPane({
         )}
       </Phone>
 
-      {!showProgress && !showVideo && scene && (
+      {!showProgress && !showVideo && scene && live && <LiveControls timeline={live.timeline} music={live.music} />}
+      {!showProgress && !showVideo && scene && live?.options && (
+        <CaptionPanel style={live.edit.captions} onChange={live.edit.setCaptions} options={live.options} lang={lang} />
+      )}
+      {!showProgress && !showVideo && scene && !live && (
         <p className="m-0 text-center text-xs text-ink-soft">Approximate look of the scene you&apos;re editing. Click a scene to preview it.</p>
       )}
       {showVideo && detail && <ThumbnailCard key={`thumb-${detail.name}`} detail={detail} onChange={onThumbnail} />}
@@ -589,6 +819,8 @@ export function PreviewPane({
         <SongCard key={`song-${detail.name}`} detail={detail} onDelete={onDeleteVideo} onMakeVideo={onMakeMusicVideo} onOpenTiming={onOpenTiming} onSelectVideo={onSelectVideo} />
       )}
       {showVideo && detail && <PostCard key={`post-${detail.name}`} detail={detail} onDelete={onDeleteVideo} />}
+      {showVideo && detail && <FactsCard key={`facts-${detail.name}`} detail={detail} />}
+      {showVideo && detail && <PublishCard key={`publish-${detail.name}`} detail={detail} onOpenSettings={onOpenSettings} />}
     </div>
   );
 }

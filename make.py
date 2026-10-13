@@ -5,6 +5,8 @@ Examples:
   python make.py "ប្រវត្តិប្រាសាទអង្គរវត្ត" --lang km
   python make.py --script examples/octopus.en.json
   python make.py --batch topics.txt --lang en
+  python make.py --excel plan.xlsx                           (one video per episode of a content plan)
+  python make.py --excel plan.xlsx --eps 1,3-5 --script-only
   python make.py --script output/<job>/script.json --to km   (translate, then render)
   python make.py --import examples/pasted-octopus.txt      (any pasted script format)
   python make.py --voices km
@@ -40,6 +42,9 @@ def main() -> int:
     p.add_argument("--to", choices=sorted(LANGS), help="translate --script into this language before rendering")
     p.add_argument("--script-only", action="store_true", help="only write the script, to review/edit first")
     p.add_argument("--batch", type=Path, help="text file with one topic per line")
+    p.add_argument("--excel", type=Path, metavar="XLSX",
+                   help="content plan workbook: one video per episode from its Scripts sheet (see crcontent/sheet.py)")
+    p.add_argument("--eps", default="", help="with --excel: episodes to make, e.g. 1,3-5 (default: all not Posted)")
     p.add_argument("--voices", metavar="PREFIX", help="list available voices, e.g. 'km' or 'en-US'")
     p.add_argument("--song", action="store_true",
                    help="write and compose an original AI song about the topic (ElevenLabs Music)")
@@ -74,6 +79,9 @@ def main() -> int:
     from crcontent.pipeline import make_video
     common = dict(lang=args.lang, voice=args.voice, scenes=args.scenes, seconds=args.seconds,
                   style=args.style, music=args.music, rate=args.rate, script_only=args.script_only)
+
+    if args.excel:
+        return make_from_excel(args.excel, args.eps, common)
 
     if args.batch:
         topics = [t.strip() for t in args.batch.read_text(encoding="utf-8").splitlines()
@@ -111,6 +119,26 @@ def main() -> int:
         return 0
     make_video(args.topic, script_path=args.script, **common)
     return 0
+
+
+def make_from_excel(path: Path, eps: str, common: dict) -> int:
+    from crcontent.sheet import pick_episodes, plan_all, read_plan, render_episode
+
+    episodes = pick_episodes(read_plan(path), eps)
+    print(f"{path.name}: {len(episodes)} episode(s) to make")
+    plan_all(episodes)
+    common = {k: v for k, v in common.items() if k != "lang"}  # each episode's language comes from its voiceover
+    failed = []
+    for i, e in enumerate(episodes, 1):
+        print(f"\n=== {i}/{len(episodes)}: Ep {e.ep} - {e.script.title} ({len(e.script.scenes)} scenes) ===")
+        try:
+            render_episode(e, **common)
+        except Exception as err:  # keep going; report at the end
+            print(f"  ! failed: {err}")
+            failed.append(e.ep)
+    print(f"\nExcel done: {len(episodes) - len(failed)} ok, {len(failed)} failed"
+          + (f" (episodes {', '.join(map(str, failed))})" if failed else ""))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

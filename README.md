@@ -11,10 +11,10 @@ topic → Claude script → Edge TTS voiceover → Pexels footage → FFmpeg (ca
 ```powershell
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
-copy .env.example .env      # then fill in the keys
 ```
 
-Requires FFmpeg on PATH. Keys:
+Requires FFmpeg on PATH. In the app, open **Settings** (bottom of the left rail) to add or replace these keys;
+they're saved to `.env` in the data folder (created from `.env.example` on first run) and apply right away. Keys:
 - `ANTHROPIC_API_KEY`: Claude writes the scripts. Not needed with `--script`.
 - `PIXABAY_API_KEY` (or `PEXELS_API_KEY`): free stock footage. Without one you get animated gradient backgrounds, or clips from `assets/footage/`. Pixabay key: sign up, then see https://pixabay.com/api/docs/
 
@@ -28,7 +28,16 @@ npm install                  # project root, first time only (Tauri CLI); also r
 npm run dev                  # desktop app with hot reload: Next.js dev server + engine from .venv
 ```
 
-In dev the app uses this project folder for drafts, output and `.env`, the same as the web UI.
+**Where files are kept.** Dev runs, the web UI, `make.py` and the installed app all share one library, set in
+**Settings → Storage** (`crcontent/locations.py`, remembered in `%APPDATA%\com.crcontent.shorts-studio\locations.json`):
+- *Data folder* (default `Documents\Shorts Studio`, or `%USERPROFILE%\Shorts Studio` when Documents is synced by
+  OneDrive): `.env`, `accounts.json`, `schedule.json`, `drafts/`, `uploads/`, `cache/`, `campaigns/`,
+  `assets/music|fonts|footage/`.
+- *Finished videos* (default `output/` in the data folder, or any folder of yours).
+
+Changing either one in Settings moves the files there and restarts the engine. The first run gathers the data that
+earlier versions kept in the project folder and in `%APPDATA%\com.crcontent.shorts-studio\`. `CRCONTENT_DATA_DIR`
+overrides the data folder (tests, a second library).
 
 **Installer** (needs Rust, plus `.venv\Scripts\pip install -r requirements-build.txt`):
 
@@ -37,10 +46,8 @@ npm run build                # → src-tauri\target\release\bundle\nsis\Shorts S
 ```
 
 This freezes the engine with PyInstaller (`scripts/build_engine.py` → `src-tauri/engine-dist/`), exports the UI to
-static files (`frontend/out/`), and bundles both. The installed app keeps its data in
-`%APPDATA%\com.crcontent.shorts-studio\`: `.env` (created from `.env.example` on first run, put your API keys there
-and restart), `drafts/`, `output/`, `uploads/`, `cache/`, `assets/music|fonts|footage/`, and `engine.log` for
-troubleshooting. FFmpeg must still be on PATH. The music-video extras (torch / stable-ts / librosa) aren't bundled,
+static files (`frontend/out/`), and bundles both. The installed app writes `engine.log` (for troubleshooting) to
+`%APPDATA%\com.crcontent.shorts-studio\`; its library is in the folders above. FFmpeg must still be on PATH. The music-video extras (torch / stable-ts / librosa) aren't bundled,
 so the installed app uses even lyric spacing and bpm-based cuts.
 
 | Part | Where |
@@ -92,12 +99,53 @@ Write a topic, let Claude draft the script, edit scenes in the storyboard, pick 
 then render and watch progress live.
 
 Each scene's background can be:
-- **Auto**: footage found from the scene's search words (Pixabay/Pexels, or a gradient without a key)
-- **Find footage**: search stock videos or photos and click one; **Ask Claude for ideas** suggests better search words
+- **Auto**: footage found from the scene's search words (Pixabay/Pexels); when none is found, Claude draws the scene
+  (gradient only when Claude is unavailable too)
+- **Find footage**: search stock videos or photos and click one; **Ask Claude for ideas** suggests better search words;
+  **Design with Claude** draws an original background from the search words and narration (no text, calm middle
+  band for the captions, slow zoom like a photo; cached in `cache/art/`); **Animate** has Claude design a moving
+  background instead (drifting light, particles, parallax) that becomes a seamless 6-second looping clip, about two
+  minutes
 - **Upload video or photo**: your own clip or image (photos get a slow zoom)
 
 **Listen** previews speech before rendering: next to the Voice picker (first scene, with the chosen voice
 and speed) and on every scene (that scene's narration). Click again to stop.
+
+**Music** (`assets/music`, not in git): name tracks by mood (`playful-sneaky-pizzicato_Sneaky-Snitch.mp3`) so
+mood matching finds them. A `<track>.json` next to a track holds the credit its licence needs; the render adds it
+to the video's description (`post.txt`). The music button next to the Music picker searches free instrumental music
+on **Jamendo** (free client ID from devportal.jamendo.com, pasted in Settings), plays previews, and adds the chosen
+track to the library with its credit. Jamendo's free licences are Creative Commons; check that a track's licence
+allows your use (some are non-commercial) before posting it on a monetized channel.
+
+**Transcript** (the Scenes / Transcript switch under the title) shows the whole voiceover as words with their
+timing, made with the chosen voice and speed and cached in `cache/voiceover/`; the render reuses that exact audio.
+Click a word to play from it (Space plays and pauses), shift-click to select several, then **H** marks them as
+keywords (drawn green in the captions) and **Delete** removes them from the narration (that scene is voiced again).
+Pauses of 0.3 s or more show as chips: click one to cut it to 0.12 s, or **Speech cleanup** cuts them all.
+Cuts belong to the voiceover they were made on, so editing a scene's narration or changing voice or speed drops them.
+
+**Live preview** (play button under the phone in the Preview pane) plays the whole draft before rendering: the
+voiceover, each scene's footage (for automatic scenes, the same stock clips the render will pick, fetched by
+`/api/footage/auto`), the headline and word-by-word captions drawn like the render's. Drag the bar to scrub; clicking a
+scene card or a transcript word moves the playhead there, since the transcript and the preview share one player. A
+chosen music track plays along (a random one is only picked at render time). The final video is still made by FFmpeg,
+so the caption look lives in two places: `crcontent/captions.py` and `frontend/components/LivePreview.tsx`.
+
+**Captions panel** (under the preview) sets the look of the whole video's captions: a preset (Classic, Bold, Boxed,
+Neon, Minimal), font, size, outline (outline, box, shadow, glow), letter case, words shown at a time and the colours
+of the text, the spoken word and keywords. Drag the captions, the scene headline or any text overlay on the preview to
+move them; the render puts them in the same place (`script.captions`, `crcontent/styles.py` CaptionStyle).
+
+**Timeline** (under the editor) shows the video on a time axis: each scene's footage as a filmstrip, B-roll and text
+tracks, and the voiceover's waveform. Click to jump, zoom with the slider. Drag a scene's left edge to start its
+footage later in the clip, drag a scene to reorder it, drag B-roll and text to retime them (the right edge sets how
+long they last; they stay inside their scene).
+
+**Per scene** (scene cards): **Layout** Fill (cropped to the frame), Fit (the whole clip over a blurred copy) or Split
+(two clips stacked; the bottom one is picked automatically unless you choose it); **Add B-roll** puts a cutaway clip or
+photo over the footage for a while; **Add text** puts extra text on screen (size, colour, box, timing). **Undo / Redo**
+(top bar, or Ctrl+Z / Ctrl+Shift+Z outside text fields) step through edits; each drag is one step.
 
 **Paste a script** (on the start screen) imports a script written anywhere, e.g. from a chat assistant:
 `Title:` / `[0–3s] Hook` / `Visual:` / `On-screen text:` / `Voiceover:` blocks, or any other layout. Voiceover
@@ -109,10 +157,18 @@ the `Visual / On-screen text / Voiceover` layout. CLI: `python make.py --import 
 and hashtags in the other language with Claude, keeping every scene's background. Render it as a new video;
 the original stays in the library.
 
-**Thumbnail → Suggest covers** (on a rendered video) scores frames for sharpness, colour, contrast and exposure,
-asks Claude for 4 short click-worthy headlines (numbers, questions, bold claims), and renders each on a top frame
-in a different style (Bold / Box / Stacked) with its key word highlighted. Click one to use it, then fine-tune the
-headline, highlighted word, style or frame. Without Claude the headlines come from the script. New renders also
+**Thumbnail → Suggest covers** (on any rendered video, music videos included) scores frames for sharpness, colour,
+contrast and exposure, then shows Claude the best ones: it picks the frames and writes 4 short click-worthy headlines
+(numbers, questions, bold claims) in different styles (Bold / Box / Stacked) with the key word highlighted. Write a
+**Cover idea** first ("a silhouette against a neon city, the headline asks a question") and the covers follow it; a
+picture the video doesn't contain comes from stock photos instead. Click one to use it, then fine-tune the headline,
+highlighted word, style or frame, or **Use my own photo** as the background. Without Claude the headlines come from
+the script.
+
+With Claude every suggestion is also **Designed**: Claude lays out the whole cover around the frame as SVG (colour
+grade, panels, badges, arrows, the headline in real type), renders it, looks at the result once and fixes anything
+that's cut off or hard to read. Pick the **Designed** style yourself to get one for your own headline and frame;
+changing the words keeps the design, changing the frame or photo re-renders instantly. New renders also
 pick the best-looking frame for the default cover automatically.
 
 Uploads are stored in `uploads/`, downloaded stock in `cache/stock/`. Past videos are in the left sidebar (preview, copy caption, download, delete).
@@ -130,6 +186,42 @@ In VS Code: Run and Debug → **Web UI** → F5.
 .venv\Scripts\python make.py --batch topics.example.txt             # a month of content in one run
 .venv\Scripts\python make.py --voices km                            # list voices
 ```
+
+### From an Excel content plan
+
+```powershell
+.venv\Scripts\python make.py --excel Animal_Shorts_Content_Plan.xlsx               # every episode not marked Posted
+.venv\Scripts\python make.py --excel Animal_Shorts_Content_Plan.xlsx --eps 1,3-5   # just these episodes
+```
+
+In the app: **New video → Excel plan**, choose the `.xlsx`, tick episodes (rows marked Posted start unticked), then
+**Create drafts** to check each storyboard first, or **Render** them all in one job (each also becomes a draft).
+
+One video per episode. The workbook needs a **Scripts** sheet with a header row `Ep | … | Time | Visual |
+On-screen Text | Voiceover` (one row per scene). Optional sheets add the rest: a plan sheet (`Ep | Animal | Hook |
+YouTube Title | … | Music / Mood | Key Visual | Status`), **Descriptions** (`Ep | Title | Description | Hashtags`)
+and **Fact Check** (`Ep | … | Note`). Sheets are found by their headers, not their names. The voiceover is spoken
+word for word; Claude turns each Visual description into a stock-footage search (without Claude, keywords from it).
+Sound cues in brackets, like `(Chainsaw sound)`, aren't spoken, and a scene that is only a cue becomes a silent
+beat as long as its Time span (add the sound effect yourself). **Music / Mood** picks the background track:
+with Music on random, Claude chooses the `assets/music` file that fits the mood (without Claude, a file whose name
+shares the most words with it, e.g. `warm-piano.mp3` for "Warm, soft piano"); when nothing in the library fits and a
+Jamendo client ID is set, a matching free track is fetched from Jamendo. **Key Visual** is the shot the video is built
+around: its scene gets the most precise footage search, the other scenes keep a matching look, and the cover is
+taken from that scene and designed to show it. `post.txt` keeps the sheet's title with emoji,
+and `notes.txt` lists mood, key visual, sound cues and fact checks for the edit and the pinned comment.
+**Fact Check** notes stay with the episode (drafts too): the editor's Fact check section shows and edits them, notes
+that cite a work (an author with "et al.", a year in brackets, a journal or university, a link) become the
+**Sources** line of the description, and a **pinned comment** listing the notes is ready to copy from the editor or
+the video's page. On YouTube it's also posted for you right after upload (Settings → YouTube → "Post the video's
+fact-check comment", on by default; needs the comment permission, so connect YouTube again once). A video scheduled to
+go public later gets its comment a few minutes after that time (queued in `schedule.json`, retried if YouTube isn't
+ready); private videos can't have comments. The API can't pin comments: pin it in YouTube Studio → Comments. TikTok
+has no comment API, so copy it there.
+
+**YouTube category**: Settings → YouTube → Category sets the default for every upload (auto-uploads and scheduled ones
+too); "Auto" uses Music for music videos and People & Blogs for everything else. The upload card's Category picker
+overrides it for one upload.
 
 Each run creates `output/<time>-<lang>-<slug>/` with:
 | File | Use |
@@ -162,9 +254,14 @@ as lyrics, and Claude reads them when picking footage.
    (`lyrics.json` in the song's output folder).
 4. **Make music video**: footage cut on the beat (tempo detected from the song), karaoke lyrics (16:9 shows the next
    line dimmed underneath), the whole song as the soundtrack. Full-length songs take several minutes.
-   Optionally write a **Video idea** first ("a woman driving through neon Tokyo at night, rain on the windshield"):
-   Claude plans the footage search for every section around it (without Claude, the idea's words are searched). The
-   idea is remembered on the song for the next version, and each version records the idea it was made with.
+   Optionally write a **Video idea** first ("a woman driving through neon Tokyo at night, rain on the windshield"),
+   or press **Suggest ideas** for Claude's concepts (each with a matching look and lyric style): Claude plans the
+   footage search for every section around it (without Claude, the idea's words are searched).
+   **Footage look** puts one colour grade over every clip (Natural, Cinematic, Warm film, Moody, Vibrant, Black &
+   white) plus a slow camera drift, so stock clips look like one film. **Lyrics style** picks a preset (Classic, Neon,
+   Bold pop, Cinematic, Minimal, Boxed) with a live preview; **Customize** changes the font, colours, effect (karaoke,
+   smooth fill, word pop, fade), edge (outline, shadow, box, glow), size, position and capitals. Idea, look and style
+   are remembered on the song for the next version, and each version records the ones it was made with.
 
 Songs live under **Drafts**: their lyrics and timing stay editable. Every **Make music video** creates a new version in
 its own `output/<time>-<lang>-mv-<title>/` folder, listed under the song and in **Videos**; earlier versions are kept.
@@ -176,7 +273,10 @@ The first sync downloads the Whisper and Demucs models (about 2 GB, once).
 ## AI songs and music videos
 
 Claude writes original lyrics, ElevenLabs Music composes and sings them, and the song becomes a vertical music video
-with footage cut on the beat and karaoke lyrics. In the web UI: **New video → Make a song**, compose, then
+with footage cut on the beat and karaoke lyrics. ElevenLabs reports when it sang each word (`timestamps.json` in the
+song folder); the lyrics are timed from those straight after composing, matched letter by letter so ad-libs and
+different word splits (Khmer too) don't matter. That timing is exact and the same every time; listening with Whisper
+is only the fallback (when no timings came back, or the lyrics were changed after composing). In the web UI: **New video → Make a song**, compose, then
 **Make music video**. Needs `ELEVENLABS_API_KEY` in `.env` (an ElevenLabs plan with Music API access).
 
 ```powershell
@@ -198,28 +298,82 @@ vocals stem, so keep "split vocals and instrumental" on when composing (your own
 alignment model (default `medium` on GPU, `base` on CPU). Describe a sound, not a real singer: lyrics and styles
 never name real artists, and `post.txt` notes the music is AI-generated.
 
+## Upload to YouTube and TikTok
+
+Every rendered video has an **Upload to channels** card under its post text. It uploads `video.mp4` with
+`post.txt` (first line = title, the rest = description, `#tags` = hashtags/tags). Tick **Auto-upload** to post
+every new render (scripts, Excel episodes and music videos) as soon as it finishes.
+
+Each platform uses your own developer app. Enter its keys in the card (the form shows the redirect URI to
+register, with a copy button; the key icon changes them later), then press **Connect**: the sign-in opens in
+your browser and comes back to the app. Keys from older `.env` setups are imported once.
+
+- **YouTube**: in Google Cloud Console enable *YouTube Data API v3*, set up the OAuth consent screen (add your
+  Google account as a test user), then create an OAuth client ID of type **Desktop app** and enter its
+  client ID and secret. Vertical videos get `#Shorts`. The API's default quota allows
+  about 6 uploads a day; until Google verifies your app, it may post them as private.
+  Several channels can be connected: **Add channel** signs in again (pick the Google account or brand account
+  that owns it). One is the default (**Make default**); the Upload card has a channel picker for each upload,
+  while auto-uploads and set-time uploads go to the default. All channels share the one developer app and its
+  daily quota.
+- **TikTok**: at developers.tiktok.com create an app (platform **Desktop**), add *Login Kit* and the
+  *Content Posting API* (Direct Post), register the redirect URI `http://localhost:8765/callback/`, and enter
+  its client key and secret. Until TikTok audits the app, direct posts can only be
+  **Only me**; choose **Send to TikTok drafts** to finish and post publicly from the TikTok app instead.
+
+Keys and tokens are kept in `accounts.json` (in the data folder, never committed); each video's uploads in its
+`published.json`. Port 8765 can be changed with `PUBLISH_CALLBACK_PORT`.
+
+## Campaigns (Whop Content Rewards)
+
+**Campaigns** in the left rail turns a paid clipping campaign into ready-to-post clips:
+
+1. **Add**: open the campaign on Whop, copy the whole page and paste it (plus its link). Claude pulls out the
+   brief, the content requirements (length, required hashtags, accounts to tag, phrases the caption must include,
+   ad disclosure, rules and don'ts) and the links to the reference materials. Everything stays editable.
+2. **Reference materials**: links are downloaded with yt-dlp (YouTube, single Drive/Dropbox files, direct video
+   links); folders can't be, so download those files and add them. **Prepare** downloads and transcribes them
+   with Whisper (`pip install -r requirements-music.txt`).
+3. **Make clips**: Claude reads the transcripts and picks the strongest moments that fit the brief. Each becomes
+   a 9:16 clip (whole picture over a blurred fill, or cropped), with captions, an on-screen hook and post text
+   that carries every required hashtag, mention, phrase and disclosure. Clips also appear in Videos.
+4. **Post**: upload or schedule each clip, or **Schedule new** to spread all unposted clips over your posting
+   times. After a clip is live, copy its link from the clip card and submit it on Whop to get paid for views.
+
+### Scheduled uploads
+
+A video's **Upload** card has **Schedule for later**. Auto-upload (Settings, Channels) can post right after a
+render or **at set times** (e.g. 09:00 and 18:00): each new video takes the next free time. Settings, **Upload
+queue** lists everything scheduled. Uploads go out while the app is open; anything due while it was closed goes
+out when you open it. The queue is kept in `schedule.json`, campaigns in `campaigns/`.
+
 ## Layout
 
 | Module | Job |
 |---|---|
 | `crcontent/script.py` | Claude prompt + JSON schema for hook, scenes, caption and hashtags |
+| `crcontent/sheet.py` | Reads an Excel content plan into one script per episode (`make.py --excel`) |
 | `crcontent/tts.py` | Edge TTS voiceover with word timings |
 | `crcontent/visuals.py` | Pexels search/download (cached), local footage, gradient fallback |
+| `crcontent/art.py` | Claude as art director: SVG backgrounds and designed covers, rendered with resvg |
+| `crcontent/motion.py` | Plays Claude's SMIL-animated SVG frame by frame into a looping mp4 (resvg + FFmpeg) |
 | `crcontent/captions.py` | Word-highlight `.ass` captions and scene headlines |
 | `crcontent/render.py` | FFmpeg scene clips, concat, burn-in, music ducking |
 | `crcontent/lyrics.py` | Claude prompt + schema for original songs (sections, lyrics, sound) |
 | `crcontent/song.py` | ElevenLabs Music: compose + vocal/instrumental stems |
 | `crcontent/align.py` | Lyric timing (stable-ts forced alignment + repair of stray words, even-spacing fallback) |
 | `crcontent/beats.py` | Beat detection and beat-synced shot plan |
+| `crcontent/campaigns.py` | Campaigns: read the brief and requirements (Claude), download and transcribe references, pick and cut clips |
+| `crcontent/schedule.py` | Scheduled uploads queue and posting-time slots |
+| `crcontent/publish.py` | YouTube / TikTok sign-in (OAuth + PKCE) and uploads, auto-upload settings |
 | `crcontent/web.py` + `web/` | FastAPI backend and the browser UI |
 | `crcontent/config.py` | Voices, fonts, sizes per language |
 
 ## Roadmap ideas
 
-1. **Auto-publish**: schedule `video.mp4` + `post.txt` via Metricool / YouTube API / TikTok Content Posting API.
-2. **Trend input**: pull trending topics (vidIQ, Google Trends) into `--batch` automatically.
-3. **AI images**: generate a picture per scene (image-generation API) when stock footage doesn't fit.
-4. **Premium voice**: ElevenLabs option for more natural or cloned voices.
-5. **Templates**: per-channel brand presets (fonts, colours, logo watermark, intro/outro).
-6. **Web dashboard**: queue topics, preview and edit scripts, approve before posting.
-7. **Analytics loop**: feed best-performing videos back into the script prompt.
+1. **Trend input**: pull trending topics (vidIQ, Google Trends) into `--batch` automatically.
+2. **AI images**: generate a picture per scene (image-generation API) when stock footage doesn't fit.
+3. **Premium voice**: ElevenLabs option for more natural or cloned voices.
+4. **Templates**: per-channel brand presets (fonts, colours, logo watermark, intro/outro).
+5. **Web dashboard**: queue topics, preview and edit scripts, approve before posting.
+6. **Analytics loop**: feed best-performing videos back into the script prompt.

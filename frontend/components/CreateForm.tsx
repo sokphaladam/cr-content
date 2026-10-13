@@ -3,6 +3,7 @@
 import { ClipboardPaste, Music, PenLine, Sparkles, Upload } from "lucide-react";
 import { useState } from "react";
 import { api, type Aspect, type Lang, type Options, type SongScript, type VideoScript } from "@/lib/api";
+import { ExcelPlanForm } from "./ExcelPlanForm";
 import { Button, Field, Message, Segmented, Tabs } from "./ui";
 
 const PLACEHOLDER: Record<Lang, string> = {
@@ -22,7 +23,7 @@ const PASTE_EXAMPLE = [
   "…",
 ].join("\n");
 
-type Mode = "topic" | "paste" | "song";
+type Mode = "topic" | "paste" | "excel" | "song";
 
 const LYRICS_EXAMPLE = ["[Verse 1]", "I walked along the river in the rain", "The city lights were calling out your name", "", "[Chorus]", "Stay with me tonight", "…"].join("\n");
 
@@ -132,11 +133,15 @@ export function CreateForm({
   onScript,
   onSong,
   onImportSong,
+  onExcelDrafts,
+  onExcelRender,
 }: {
   options: Options | null;
   onScript: (script: VideoScript, lang: Lang, topic: string, notice?: string) => void;
   onSong: (song: SongScript, lang: Lang, topic: string) => void;
   onImportSong: (jobId: string, title: string) => void;
+  onExcelDrafts: (drafts: { ep: number; id: string; title: string }[]) => void;
+  onExcelRender: (jobId: string, title: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("topic");
   const [songSource, setSongSource] = useState<"own" | "ai">("own");
@@ -224,7 +229,7 @@ export function CreateForm({
         <div className="grid gap-2">
           <h1 className="m-0 font-display text-[clamp(30px,3.6vw,44px)] leading-[1.05] font-extrabold tracking-[-0.025em]">Make a new video</h1>
           <p className="m-0 max-w-[56ch] text-[15px] text-ink-soft">
-            Start from an idea and let Claude write the script, or paste a script you already have. Either way it becomes a draft you can edit.
+            Start from an idea and let Claude write the script, paste a script you already have, or upload a content plan in Excel. Every script becomes a draft you can edit.
           </p>
         </div>
 
@@ -238,6 +243,7 @@ export function CreateForm({
           items={[
             { value: "topic", label: "Start from a topic" },
             { value: "paste", label: "Paste a script" },
+            { value: "excel", label: "Excel plan" },
             { value: "song", label: "Music video" },
           ]}
         />
@@ -370,6 +376,8 @@ export function CreateForm({
             />
           </form>
         )}
+
+        {mode === "excel" && <ExcelPlanForm claude={!!options?.keys.anthropic} onDrafts={onExcelDrafts} onRender={onExcelRender} />}
 
         {mode === "paste" && (
           <form onSubmit={importPasted} className="grid gap-4 rounded-xl border border-line bg-panel p-5 sm:p-6">

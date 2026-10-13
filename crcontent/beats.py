@@ -40,14 +40,20 @@ def _snap(t: float, beats: list[float], window: float) -> float:
     return near if abs(near - t) <= window else t
 
 
-def plan_shots(song: SongScript, spans: list[tuple[float, float]], beats: list[float], total: float) -> list[Shot]:
-    """Cut on section boundaries plus every few beats inside them: every 4 beats in a chorus/hook, 8 elsewhere."""
+PACE_FACTOR = {"slow": 2.0, "normal": 1.0, "fast": 0.5}  # x the beats between cuts
+
+
+def plan_shots(song: SongScript, spans: list[tuple[float, float]], beats: list[float], total: float,
+               paces: list[str] | None = None) -> list[Shot]:
+    """Cut on section boundaries plus every few beats inside them: every 4 beats in a chorus/hook, 8 elsewhere.
+    `paces`: per section "slow" (half as many cuts), "normal" or "fast" (twice as many), from a directed idea."""
     beat = 60 / max(song.bpm or 120, 40)
     cuts = {0.0, total}
     for i, (start, end) in enumerate(spans):
         name = song.sections[i].name.lower()
-        every = beat * (4 if ("chorus" in name or "hook" in name or "drop" in name) else 8)
-        every = max(MIN_SHOT_SEC * 1.5, min(6.0, every))
+        pace = paces[i] if paces and i < len(paces) else "normal"
+        every = beat * (4 if ("chorus" in name or "hook" in name or "drop" in name) else 8) * PACE_FACTOR.get(pace, 1.0)
+        every = max(MIN_SHOT_SEC * (1.0 if pace == "fast" else 1.5), min(10.0 if pace == "slow" else 6.0, every))
         cuts.add(_snap(start, beats, beat / 2))
         t = start + every
         while t < end - every / 2:

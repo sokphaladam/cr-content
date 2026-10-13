@@ -8,7 +8,9 @@ Options:
                     the app, even if the app crashes)
 """
 import argparse
+import multiprocessing
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -17,6 +19,8 @@ import webbrowser
 
 import uvicorn
 from dotenv import load_dotenv
+
+RESTART_CODE = 3  # same as crcontent/web.py
 
 
 def _exit_with_parent(pid: int) -> None:
@@ -47,19 +51,27 @@ def _serve_with_reload(port: int) -> None:
 
     cmd = [sys.executable, os.path.abspath(__file__), "--no-browser", "--port", str(port), "--parent-pid", str(os.getpid())]
     root = os.path.dirname(os.path.abspath(__file__))
-    child = subprocess.Popen(cmd, cwd=root)
+    env = {**os.environ, "CRCONTENT_RELOADER": "1"}  # the engine exits with RESTART_CODE to ask for a fresh start
+    child = subprocess.Popen(cmd, cwd=root, env=env)
     try:
-        for changes in watch(os.path.join(root, "crcontent"), os.path.join(root, "web"), watch_filter=PythonFilter()):
+        for changes in watch(os.path.join(root, "crcontent"), os.path.join(root, "web"), watch_filter=PythonFilter(),
+                             yield_on_timeout=True, rust_timeout=1000):
+            if not changes:
+                if child.poll() == RESTART_CODE:
+                    print("Restarting the engine", flush=True)
+                    child = subprocess.Popen(cmd, cwd=root, env=env)
+                continue
             names = ", ".join(sorted({os.path.relpath(path, root) for _, path in changes}))
             print(f"Code changed ({names}); restarting the engine", flush=True)
             child.kill()
             child.wait()
-            child = subprocess.Popen(cmd, cwd=root)
+            child = subprocess.Popen(cmd, cwd=root, env=env)
     finally:
         child.kill()
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()  # the frozen engine.exe starts motion.py's frame renderers as copies of itself
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
     p = argparse.ArgumentParser()
@@ -69,7 +81,10 @@ if __name__ == "__main__":
     p.add_argument("--parent-pid", type=int)
     args = p.parse_args()
 
-    from crcontent.config import ROOT
+    from crcontent.config import CODE_DIR, ROOT
+    ROOT.mkdir(parents=True, exist_ok=True)  # a chosen data folder can be gone (renamed, an unplugged drive)
+    if not (ROOT / ".env").exists() and (CODE_DIR / ".env.example").exists():
+        shutil.copy(CODE_DIR / ".env.example", ROOT / ".env")  # first run: a .env to fill in the API keys
     load_dotenv(ROOT / ".env")
     if args.parent_pid:
         threading.Thread(target=_exit_with_parent, args=(args.parent_pid,), daemon=True).start()

@@ -6,6 +6,8 @@ __pycache__/
 # Secrets (keep .env.example)
 .env
 .env.*
+accounts.json
+schedule.json
 !.env.example
 
 # Generated / local data (all recreated by the app)
@@ -13,6 +15,7 @@ output/
 cache/
 uploads/
 drafts/
+campaigns/
 *.tmp
 
 # Your own media: drop files in, they stay on this PC

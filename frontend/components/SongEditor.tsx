@@ -91,6 +91,7 @@ export function SongEditor({
   options,
   composing,
   onBack,
+  onDelete,
   onCompose,
 }: {
   song: SongScript;
@@ -99,9 +100,11 @@ export function SongEditor({
   options: Options;
   composing: boolean;
   onBack: () => void;
+  onDelete: (() => void) | null; // null until the song is composed (nothing saved to delete yet)
   onCompose: (stems: boolean) => Promise<string | null>;
 }) {
   const [stems, setStems] = useState(true);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState("");
   const total = song.sections.reduce((n, s) => n + s.seconds, 0);
   const keyMissing = !options.keys.elevenlabs;
@@ -121,6 +124,26 @@ export function SongEditor({
         <span className="text-[13px] text-ink-soft">
           {song.sections.length} sections, {total} s
         </span>
+        {onDelete && (
+          <Button
+            size="sm"
+            variant="danger"
+            aria-label={confirmDelete ? "Confirm delete song" : "Delete song"}
+            title="Deletes the song. Its music videos stay in Videos."
+            disabled={composing}
+            icon={<Trash2 className="size-3.5" />}
+            onClick={() => {
+              if (!confirmDelete) {
+                setConfirmDelete(true);
+                setTimeout(() => setConfirmDelete(false), 3000);
+                return;
+              }
+              onDelete();
+            }}
+          >
+            <span className={confirmDelete ? "" : "hidden md:inline"}>{confirmDelete ? "Confirm delete" : "Delete"}</span>
+          </Button>
+        )}
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
