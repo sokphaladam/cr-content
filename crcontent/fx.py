@@ -7,6 +7,9 @@ pixel at a time like FFmpeg's zoompan) and piped to FFmpeg, which grades, adds t
   foreground slides over the background, a 2.5D parallax like a real camera move
 - effects (EFFECTS): bloom glow, light leaks, floating particles (dust, snow, embers, sparkles, petals), anime speed
   lines, chromatic aberration, film grain, vignette
+- old tape (TAPES): VHS playback, rewinding, TV static, a camcorder date stamp, a 4:3 home-video frame inside the
+  video's frame, and `wear` (0..1) that makes each replay of a memory worse: more tracking noise, faded colour,
+  skipped frames, and with `fade` the nearest subject (found by depth) fading away from the scene
 - beat accents for music videos: on each beat inside the shot a zoom punch, and with "flash" a white flash
 """
 import hashlib
@@ -48,6 +51,15 @@ EFFECTS: dict[str, str] = {
     "flash": "Beat flash",
 }
 PARTICLES = ("dust", "snow", "embers", "sparkles", "petals")
+# old-tape treatments for a whole section of a music video (render_shot's tape / wear / frame / stamp / fade)
+TAPES: dict[str, str] = {
+    "": "None",
+    "play": "VHS playback",  # tracking lines, colour bleed, scanlines, tape noise
+    "rewind": "Rewinding",  # the shot runs backwards with tearing bands, harder on the beat
+    "static_in": "Static clearing",  # TV static that clears to the picture
+    "static": "TV static",  # only static
+}
+FRAMES: dict[str, str] = {"full": "Full frame", "4:3": "4:3 home video"}
 
 _depth_lock = threading.Lock()
 _depth_model = None
@@ -269,23 +281,199 @@ def _screen(a, b):
     return 1 - (1 - a) * (1 - b.clamp(0, 1))
 
 
+# ---------- old tape ----------
+
+def _stamp_font(px: int):
+    from PIL import ImageFont
+
+    for name in ("consolab.ttf", "consola.ttf", "lucon.ttf", "courbd.ttf", "Menlo.ttc", "DejaVuSansMono-Bold.ttf"):
+        for folder in ("C:/Windows/Fonts", "/System/Library/Fonts", "/Library/Fonts", "/usr/share/fonts/truetype/dejavu"):
+            try:
+                return ImageFont.truetype(f"{folder}/{name}", px)
+            except OSError:
+                continue
+    return ImageFont.load_default(px)
+
+
+class _Tape:
+    """A VHS tape played on an old TV: per-row horizontal displacement (tracking band, head-switching noise at the
+    bottom, rewind tears), then the picture's colour (smeared, shifted chroma, soft luma, lifted blacks, scanlines,
+    noise), TV static, and the camcorder's on-screen display. `wear` 0..1: how worn the tape is."""
+
+    def __init__(self, tape: str, wear: float, stamp: str, w: int, h: int, seed: int, dev, half):
+        import random
+
+        import torch
+
+        self.tape, self.wear, self.w, self.h, self.dev, self.half = tape, min(max(wear, 0.0), 1.0), w, h, dev, half
+        self.rnd = random.Random(seed)
+        self.seed = seed
+        self.rows = torch.linspace(0, 1, h, device=dev)
+        self.scan = (1 - 0.07 * (torch.arange(h, device=dev) % 2)).to(half).view(1, 1, h, 1)
+        self.osd = [self._osd(stamp, False), self._osd(stamp, True)] if tape in ("play", "rewind") else None
+
+    def _osd(self, stamp: str, scrambled: bool):
+        """The camcorder's text (PLAY / REW top left, the date stamp bottom left) as (rgb, alpha) tensors."""
+        import numpy as np
+        import torch
+        from PIL import Image, ImageDraw
+
+        w, h = self.w, self.h
+        px = max(14, round(h * 0.06))
+        font = _stamp_font(px)
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        m = round(px * 0.9)
+        rew = self.tape == "rewind"
+        label = "REW" if rew else "PLAY"
+        if stamp and scrambled:  # a worn tape's date stamp glitching to wrong numbers for a frame
+            stamp = "".join(str(self.rnd.randint(0, 9)) if c.isdigit() else c for c in stamp)
+
+        def text(x, y, s):
+            d.text((x + 3, y + 3), s, font=font, fill=(0, 0, 0, 170))
+            d.text((x, y), s, font=font, fill=(255, 250, 235, 235))
+
+        def triangles(x, y, n, left):
+            s = px * 0.8
+            for k in range(n):
+                ox = x + k * s * 0.75
+                pts = [(ox, y + s / 2), (ox + s * 0.75, y), (ox + s * 0.75, y + s)] if left else \
+                      [(ox, y), (ox + s * 0.75, y + s / 2), (ox, y + s)]
+                d.polygon([(a + 3, b + 3) for a, b in pts], fill=(0, 0, 0, 170))
+                d.polygon(pts, fill=(255, 250, 235, 235))
+            return x + n * s * 0.75 + s * 0.4
+
+        y = m + px * 0.1
+        if rew:
+            x = triangles(m, y, 2, True)
+            text(x, m, label)
+        else:
+            x = d.textlength(label, font=font) + m + px * 0.4
+            text(m, m, label)
+            triangles(x, y, 1, False)
+        if stamp:
+            lines = stamp.upper().splitlines()[:2]
+            for k, line in enumerate(reversed(lines)):
+                text(m, h - m - px * (k + 1) * 1.2, line)
+        a = torch.from_numpy(np.array(img)).to(self.dev).permute(2, 0, 1)[None].to(self.half) / 255.0
+        return a[:, :3], a[:, 3:]
+
+    def offsets(self, n: int, t: float, hit: float):
+        """Horizontal shift of every row this frame, in pixels: a (h,) tensor."""
+        import torch
+
+        g = torch.Generator(device=self.dev).manual_seed(self.seed * 7919 + n)
+        noise = torch.rand(self.h, generator=g, device=self.dev) - 0.5
+        noise = torch.nn.functional.avg_pool1d(noise[None, None], 9, stride=1, padding=4)[0, 0] * 3  # smooth ripples
+        wear, y = self.wear, self.rows
+        off = torch.zeros(self.h, device=self.dev)
+        if self.tape in ("play", "rewind"):
+            jitter = (torch.rand(1, generator=g, device=self.dev) - 0.5) * (0.6 + 3.0 * wear) if n % 3 == 0 else 0.0
+            off = off + jitter
+            # a tracking band rolling slowly down the picture
+            centre = (t * (0.11 + 0.2 * wear) + (self.seed % 97) / 97) % 1.3 - 0.15
+            width = 0.025 + 0.06 * wear + 0.04 * hit * wear
+            band = torch.exp(-((y - centre) / width) ** 2)
+            off = off + band * noise * (3 + 26 * wear + 20 * hit * wear)
+            # head-switching noise along the bottom edge
+            bottom = (y > 0.975).float()
+            off = off + bottom * (8 + 14 * wear) * (0.6 + noise)
+        if self.tape == "rewind":  # fast tearing bands sweeping up, harder on the beat
+            for k in range(3):
+                c = 1.1 - ((t * (1.6 + 0.5 * k) + k * 0.37) % 1.3)
+                band = torch.exp(-((y - c) / (0.035 + 0.02 * k)) ** 2)
+                off = off + band * (40 + 30 * k + 60 * hit) * (0.5 + noise)
+            off = off + torch.sin(y * 40 + t * 30) * (1.5 + 6 * hit)
+        return off
+
+    def colour(self, frame, n: int, t: float, hit: float):
+        """The tape's picture: frame (1, 3, h, w) in 0..1 -> the same frame through a VHS deck."""
+        import torch
+        import torch.nn.functional as F
+
+        wear = self.wear
+        luma = (frame * torch.tensor([0.299, 0.587, 0.114], device=self.dev, dtype=self.half).view(1, 3, 1, 1)).sum(1, keepdim=True)
+        chroma = frame - luma
+        k = 7 + 2 * round(5 * wear)
+        chroma = F.avg_pool2d(chroma, (1, k), stride=1, padding=(0, k // 2), count_include_pad=False)  # colour smears sideways
+        chroma = torch.roll(chroma, shifts=round(3 + 5 * wear), dims=-1)  # and lags behind the picture
+        chroma = chroma * (0.9 - 0.55 * wear)
+        luma = F.avg_pool2d(luma, (1, 3), stride=1, padding=(0, 1), count_include_pad=False)  # soft tape resolution
+        luma = luma * (0.9 - 0.08 * wear) + 0.05 + 0.03 * wear  # lifted blacks, dimmer whites
+        out = luma + chroma
+        out = out + torch.tensor([0.035, 0.012, -0.03], device=self.dev, dtype=self.half).view(1, 3, 1, 1) * (1 - 0.6 * wear)
+        g = torch.Generator(device=self.dev).manual_seed(self.seed * 104729 + n)
+        noise = torch.randn(1, 1, self.h // 2, self.w // 4, generator=g, device=self.dev, dtype=self.half)
+        noise = F.interpolate(noise, size=(self.h, self.w), mode="nearest")  # tape noise is stretched sideways
+        out = out + noise * (0.025 + 0.045 * wear)
+        # white dropout streaks: a few short scratches, many more on a worn tape or on a rewind beat
+        streaks = int(self.rnd.random() < 0.15 + 0.6 * wear) * self.rnd.randint(1, 2 + round(8 * wear)) \
+            + (self.rnd.randint(3, 9) if self.tape == "rewind" and hit > 0.3 else 0)
+        for _ in range(streaks):
+            r0, length = self.rnd.randrange(self.h - 2), self.rnd.uniform(0.04, 0.35) * self.w
+            c0 = self.rnd.uniform(-0.1, 1) * self.w
+            a, b = max(0, int(c0)), min(self.w, int(c0 + length))
+            if b > a:
+                out[:, :, r0:r0 + 2, a:b] = out[:, :, r0:r0 + 2, a:b] * 0.3 + 0.7
+        out = out * self.scan
+        if self.osd is not None:
+            rgb, alpha = self.osd[1 if wear > 0.55 and self.rnd.random() < wear * 0.18 else 0]
+            if self.tape != "rewind" or (t * 2) % 1 < 0.6:  # REW blinks
+                out = out * (1 - alpha) + rgb * alpha
+        return out.clamp(0, 1)
+
+    def static(self, frame, n: int, amount: float):
+        """TV static over `frame`, `amount` 0..1 (1 = only static)."""
+        import torch
+        import torch.nn.functional as F
+
+        if amount <= 0:
+            return frame
+        g = torch.Generator(device=self.dev).manual_seed(self.seed * 15485863 + n)
+        snow = torch.rand(1, 1, self.h // 2, self.w // 2, generator=g, device=self.dev, dtype=self.half)
+        snow = F.interpolate(snow, size=(self.h, self.w), mode="nearest") ** 1.4
+        roll = ((self.rows * 3 - n * 0.04) % 1.0 < 0.12).to(self.half).view(1, 1, self.h, 1)  # a brighter rolling bar
+        snow = (snow * 0.85 + roll * 0.12).expand(1, 3, self.h, self.w) * self.scan
+        return frame * (1 - amount) + snow * amount
+
+
+def _rounded_mask(w: int, h: int, radius: float, dev, half):
+    """1 inside a rounded rectangle filling w x h, softened over a pixel: an old TV's screen."""
+    import torch
+
+    ys, xs = torch.meshgrid(torch.arange(h, device=dev, dtype=torch.float32) + 0.5,
+                            torch.arange(w, device=dev, dtype=torch.float32) + 0.5, indexing="ij")
+    dx = (radius - xs).clamp(min=0) + (xs - (w - radius)).clamp(min=0)
+    dy = (radius - ys).clamp(min=0) + (ys - (h - radius)).clamp(min=0)
+    return (radius + 0.5 - torch.sqrt(dx * dx + dy * dy)).clamp(0, 1).to(half)[None, None]
+
+
 # ---------- the shot ----------
 
 def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] = (WIDTH, HEIGHT),
                 motion: str = "push_in", effects: tuple[str, ...] | list[str] = (), beats: list[float] = (),
-                voice: Path | None = None, look: str = "", seed: int = 0, parallax: float = 1.0) -> None:
+                voice: Path | None = None, look: str = "", seed: int = 0, parallax: float = 1.0,
+                tape: str = "", wear: float = 0.0, frame: str = "full", stamp: str = "", fade: bool = False) -> None:
     """`image` filling a `size` frame for `length` seconds with a camera move and effects, as an mp4.
 
     beats: seconds (from the shot's start) to accent: a quick zoom punch, a flash with the "flash" effect, a
     colour split with "chromatic". voice: the shot's audio (silent without). look: a colour grade (styles.LOOKS).
     parallax: strength of the 3D moves (0 = flat).
+    tape: an old-tape treatment (TAPES); wear: 0..1, how worn that tape is; frame: "4:3" shows the shot as a home
+    video on a dark screen inside the frame (FRAMES); stamp: the camcorder's date ("MAY 31 1998"; with tape play or
+    rewind); fade: the nearest subject fades out of the scene, more with wear.
     """
     import numpy as np
     import torch
     import torch.nn.functional as F
     from PIL import Image
 
+    OW, OH = size  # the video's frame; W x H is the picture inside it (smaller in a 4:3 home-video frame)
     W, H = size
+    if frame == "4:3":
+        margin = round(min(OW, OH) * 0.045)
+        W = min(OW - 2 * margin, round((OH - 2 * margin) * 4 / 3)) // 2 * 2
+        H = round(W * 3 / 4) // 2 * 2
     dev = _device()
     half = torch.float16 if dev.type == "cuda" else torch.float32
     pic = Image.open(image).convert("RGB")
@@ -300,7 +488,8 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                             torch.linspace(-1, 1, W, device=dev, dtype=half), indexing="ij")
     motion = motion if motion in MOTIONS else "push_in"
     depth = None
-    if motion.endswith("_3d") and parallax > 0:
+    tape = tape if tape in TAPES else ""
+    if (motion.endswith("_3d") and parallax > 0) or fade:
         try:
             depth = depth_map(image).to(half)
         except Exception as e:  # no depth model (offline): the move still happens, just flat
@@ -318,6 +507,13 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
     # distance from the centre in pixels, 1 at the corners: the lines only cover the edges of the frame
     radius = (torch.sqrt((xs.float() * W) ** 2 + (ys.float() * H) ** 2) / math.hypot(W, H)) if angle is not None else None
     beats = [b for b in beats if 0 <= b < length]
+    deck = _Tape(tape, wear, stamp, W, H, seed, dev, half) if tape else None
+    screen = None
+    if (OW, OH) != (W, H):  # the home-video picture on a dark screen, lit by its own glow
+        screen = _rounded_mask(W, H, min(W, H) * 0.035, dev, half)
+        x0, y0 = (OW - W) // 2, (OH - H) // 2
+    skip = 0.3 * deck.wear ** 1.5 if deck and tape == "play" else 0.0  # worn tapes skip frames
+    prev = None
 
     frames = max(round(length * FPS), 1)
     grade = "eq=brightness=-0.03:saturation=1.04,"  # a touch darker, so white captions always read
@@ -329,7 +525,7 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
     log = out.with_suffix(".ffmpeg.log")
     with open(log, "w", encoding="utf-8", errors="replace") as err:
         proc = subprocess.Popen(
-            ["ffmpeg", "-y", "-hide_banner", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS),
+            ["ffmpeg", "-y", "-hide_banner", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{OW}x{OH}", "-r", str(FPS),
              "-i", "-", *audio_in, "-filter_complex", f"[0:v]{grade}setsar=1,format=yuv420p[v];[1:a]aresample=44100,apad[a]",
              "-map", "[v]", "-map", "[a]", "-t", f"{length:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
              "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", str(out)],
@@ -339,23 +535,33 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                 for n in range(frames):
                     t = n / FPS
                     p = n / max(frames - 1, 1)
-                    zoom, cx, cy, par = _camera(motion, p, room_x, room_y)
                     since = [t - b for b in beats if t >= b]
                     hit = math.exp(-min(since) * 9) if since else 0.0  # 1 on the beat, fading over ~0.3 s
+                    if prev is not None and skip and deck.rnd.random() < skip:
+                        proc.stdin.write(prev)  # the tape skips: the last frame again
+                        continue
+                    if tape == "rewind":  # the move plays backwards, fast, over and over
+                        p = 1 - (t * 1.6 / max(length, 0.5) + hit * 0.04) % 1.0
+                    zoom, cx, cy, par = _camera(motion, p, room_x, room_y)
                     zoom *= 1 + 0.035 * hit
                     gx = xs * (fx / zoom) + cx
                     gy = ys * (fy / zoom) + cy
+                    d = None
                     if depth is not None:
                         grid0 = torch.stack([gx, gy], -1)[None]
                         d = F.grid_sample(depth, grid0, mode="bilinear", padding_mode="border", align_corners=False)[0, 0]
                         near = d - 0.5
-                        if motion == "dolly_3d":  # near things grow faster than far ones as the camera moves in
+                        if not motion.endswith("_3d") or parallax <= 0:
+                            pass  # depth only for fading the subject
+                        elif motion == "dolly_3d":  # near things grow faster than far ones as the camera moves in
                             k = 1 / (1 + 0.09 * parallax * par * (d + 0.2))
                             gx, gy = cx + (gx - cx) * k, cy + (gy - cy) * k
                         elif motion == "orbit_3d":
                             gx = gx - near * 0.05 * parallax * par
                         else:  # rise_3d
                             gy = gy - near * 0.05 * parallax * par
+                    if deck is not None:  # tracking noise and tears shift whole rows sideways
+                        gx = gx + (deck.offsets(n, t, hit) * (2 * fx / (W * zoom))).to(half)[:, None]
                     grid = torch.stack([gx, gy], -1)[None]
                     frame = F.grid_sample(src, grid, mode="bicubic", padding_mode="reflection", align_corners=False)
                     if "chromatic" in effects:
@@ -387,6 +593,17 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                         idx = ((angle + math.pi) / (2 * math.pi) * 420).long().clamp(0, 419)
                         lines = ((spokes[idx] > 0.9).to(half) * ((radius - reach[idx]) / 0.25).clamp(0, 1).to(half))
                         frame = _screen(frame, (lines * 0.55)[None, None].expand(1, 3, H, W))
+                    if fade and d is not None:  # the nearest subject loses its colour and turns to a ghost
+                        near = ((d - 0.55) / 0.2).clamp(0, 1)[None, None].to(half)
+                        amount = (0.35 + 0.5 * min(max(wear, 0.0), 1.0)) * (0.9 + 0.1 * math.sin(t * 13))
+                        grey = frame.mean(1, keepdim=True) * 0.6 + 0.32
+                        frame = frame * (1 - near * amount) + grey * near * amount
+                    if deck is not None:
+                        frame = deck.colour(frame, n, t, hit) if tape in ("play", "rewind") else frame * deck.scan
+                        if tape == "static":
+                            frame = deck.static(frame, n, 0.94)
+                        elif tape == "static_in":  # static, then the picture comes through
+                            frame = deck.static(frame, n, (1 - (p - 0.12) / 0.38) if p > 0.12 else 1.0)
                     if vignette is not None:
                         frame = frame * vignette
                     if "flash" in effects and hit > 0:
@@ -394,8 +611,17 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                     if "grain" in effects:
                         frame = frame + torch.randn(1, 1, H // 2, W // 2, device=dev, dtype=half).repeat_interleave(
                             2, -1).repeat_interleave(2, -2) * 0.028
+                    frame = frame.clamp(0, 1)
+                    if screen is not None:  # the picture on a dark screen, its light spilling around it
+                        spill = F.interpolate(frame, size=(max(H // 16, 1), max(W // 16, 1)), mode="area")
+                        canvas = F.interpolate(_blur(F.pad(spill, (6, 6, 6, 6)), 3), size=(OH, OW), mode="bilinear",
+                                               align_corners=False) * 0.22
+                        inner = canvas[:, :, y0:y0 + H, x0:x0 + W]
+                        canvas[:, :, y0:y0 + H, x0:x0 + W] = inner * (1 - screen) + frame * screen
+                        frame = canvas
                     rgb = (frame[0].clamp(0, 1) * 255).to(torch.uint8).permute(1, 2, 0).contiguous().cpu().numpy()
-                    proc.stdin.write(rgb.tobytes())
+                    prev = rgb.tobytes()
+                    proc.stdin.write(prev)
             proc.stdin.close()
         except BrokenPipeError:
             pass

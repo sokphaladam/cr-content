@@ -2,6 +2,10 @@
 
 Times are local wall-clock times on this computer ("2026-10-13T09:00"). If the app is closed when an upload is
 due, it goes out as soon as the app is open again.
+
+Facebook publishes scheduled posts itself, so a Facebook upload goes out EARLY: as soon as its time is within
+EARLY (and at least EARLY_MARGIN away) it is uploaded with that time, and Facebook makes it public then, whether or
+not this computer is on. Closer than that, it is posted at its time like the others.
 """
 import json
 import threading
@@ -15,6 +19,8 @@ from .config import ROOT
 
 FILE = ROOT / "schedule.json"
 CHECK_SEC = 20
+EARLY = {"facebook": timedelta(days=28)}  # platforms that publish at a set time themselves: how far ahead
+EARLY_MARGIN = timedelta(minutes=15)  # Facebook needs 10 minutes; the upload itself takes a few
 _lock = threading.Lock()
 _started = False
 
@@ -88,7 +94,8 @@ def mark(item_id: str, **fields) -> None:
 def next_slot(platform: str, times: list[str], after: datetime | None = None) -> datetime:
     """The next posting time (from the daily `times`, "HH:MM") that no other upload to `platform` has taken."""
     after = (after or datetime.now()) + timedelta(minutes=2)
-    taken = {i["at"] for i in _load() if i["platform"] == platform and i["status"] in ("scheduled", "uploading")
+    # (done counts too: an early Facebook upload is done long before its time)
+    taken = {i["at"] for i in _load() if i["platform"] == platform and i["status"] in ("scheduled", "uploading", "done")
              and i.get("action", "upload") == "upload"}
     slots = sorted(t for t in times if len(t) == 5) or ["09:00"]
     day = after.date()
@@ -99,6 +106,13 @@ def next_slot(platform: str, times: list[str], after: datetime | None = None) ->
                 return at
         day += timedelta(days=1)
     return after
+
+
+def goes_early(item: dict, now: datetime) -> bool:
+    """Can this queued upload be handed now to a platform that publishes it at its time itself (EARLY)?"""
+    early = EARLY.get(item["platform"]) if item.get("action", "upload") == "upload" else None
+    at = datetime.fromisoformat(item["at"])
+    return bool(early) and now + EARLY_MARGIN <= at <= now + early
 
 
 def start(run: Callable[[dict], None]) -> None:
@@ -117,10 +131,14 @@ def start(run: Callable[[dict], None]) -> None:
     def loop() -> None:
         while True:
             try:
-                now = datetime.now().isoformat(timespec="minutes")
+                now = datetime.now().replace(second=0, microsecond=0)
                 with _lock:
                     data = _load()
-                    due = [i for i in data if i["status"] == "scheduled" and i["at"] <= now]
+                    waiting = [i for i in data if i["status"] == "scheduled"]
+                    due = [i for i in waiting if i["at"] <= now.isoformat(timespec="minutes")]
+                    if not due and not any(i["status"] == "uploading" for i in data):
+                        # nothing else to send: one early upload per check, so they never hold up one that's due
+                        due = sorted((i for i in waiting if goes_early(i, now)), key=lambda i: i["at"])[:1]
                     for i in due:
                         i["status"] = "uploading"
                     if due:

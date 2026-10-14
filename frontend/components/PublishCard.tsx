@@ -15,6 +15,15 @@ function nextHour(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:00`;
 }
 
+/** The next full hour at least 15 minutes away: Facebook schedules posts 10 minutes ahead or more. */
+function fbNextHour(): string {
+  const at = nextHour();
+  if (new Date(at).getTime() - Date.now() >= 15 * 60_000) return at;
+  const d = new Date(new Date(at).getTime() + 60 * 60_000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:00`;
+}
+
 const YT_VISIBILITY = [
   { value: "public", label: "Public" },
   { value: "unlisted", label: "Unlisted" },
@@ -235,6 +244,8 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
   const [ttVisibility, setTtVisibility] = useState<TikTokChoice | null>(null);
   const [ttAt, setTtAt] = useState(nextHour); // when a scheduled TikTok post goes out
   const [ttCreator, setTtCreator] = useState<TikTokCreator | null>(null);
+  const [fbSchedule, setFbSchedule] = useState(false); // Facebook: upload now, Facebook publishes it at fbAt
+  const [fbAt, setFbAt] = useState(fbNextHour);
 
   const tiktokConnected = !!accounts?.tiktok.connected;
   useEffect(() => {
@@ -328,6 +339,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
           ...(ytCategory ? { category: ytCategory } : {}),
           ...(ytChannel ? { channel: ytChannel } : {}),
           ...(platforms.includes("tiktok") && ttChoice && ttChoice !== "SCHEDULE" ? { tiktok_privacy: ttChoice } : {}),
+          ...(platforms.includes("facebook") && fbSchedule ? { facebook_publish_at: fbAt } : {}),
         },
       );
       for (const p of platforms) {
@@ -405,7 +417,9 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                       </span>
                     )}
                     <Button size="sm" variant={prev ? "ghost" : "secondary"} icon={<Upload className="size-3.5" />} loading={busy(p)} onClick={() => upload([p])}>
-                      {(p === "youtube" && (ytVisibility ?? accounts.youtube.privacy) === "schedule") || (p === "tiktok" && ttChoice === "SCHEDULE")
+                      {(p === "youtube" && (ytVisibility ?? accounts.youtube.privacy) === "schedule") ||
+                      (p === "tiktok" && ttChoice === "SCHEDULE") ||
+                      (p === "facebook" && fbSchedule)
                         ? "Schedule"
                         : prev
                           ? "Upload again"
@@ -487,6 +501,42 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                       )}
                       {ttChoice === "DRAFT" && (
                         <p className="m-0 text-xs leading-snug text-ink-soft">Goes to your TikTok inbox; open TikTok to add sounds or edits and post it.</p>
+                      )}
+                    </div>
+                  )}
+                  {p === "facebook" && !busy(p) && (
+                    <div className="grid gap-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <label className="sr-only" htmlFor={`fb-when-${detail.name}`}>
+                          When it goes public on Facebook
+                        </label>
+                        <select
+                          id={`fb-when-${detail.name}`}
+                          className="field-input h-8 w-auto py-0 text-sm"
+                          value={fbSchedule ? "schedule" : "now"}
+                          onChange={(e) => {
+                            if (e.target.value === "schedule" && !fbSchedule) setFbAt(fbNextHour());
+                            setFbSchedule(e.target.value === "schedule");
+                          }}
+                        >
+                          <option value="now">Post now</option>
+                          <option value="schedule">Schedule</option>
+                        </select>
+                        {fbSchedule && (
+                          <input
+                            type="datetime-local"
+                            aria-label="Facebook post goes public at"
+                            className="field-input h-8 min-w-0 flex-1 py-0 text-sm"
+                            value={fbAt}
+                            onChange={(e) => setFbAt(e.target.value)}
+                          />
+                        )}
+                      </div>
+                      {fbSchedule && (
+                        <p className="m-0 text-xs leading-snug text-ink-soft">
+                          Uploads now; Facebook publishes it at this time, even if the app is closed (10 minutes to 28 days ahead). You&apos;ll find it in
+                          Meta Business Suite → Planner.
+                        </p>
                       )}
                     </div>
                   )}
@@ -623,7 +673,10 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                     Cancel
                   </Button>
                 </div>
-                <p className="m-0 text-xs leading-snug text-ink-soft">Uploads while the app is open. If it&apos;s closed then, the upload goes out when you open it.</p>
+                <p className="m-0 text-xs leading-snug text-ink-soft">
+                  Uploads while the app is open. If it&apos;s closed then, the upload goes out when you open it.
+                  {targets.includes("facebook") && " Facebook gets it ahead of time and publishes it itself at that time (when it's 15 minutes to 28 days away)."}
+                </p>
               </form>
             ) : (
               <Button

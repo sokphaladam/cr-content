@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import anthropic
 
 from .config import CLAUDE_MODEL
-from .fx import EFFECTS, MOTIONS
+from .fx import EFFECTS, FRAMES, MOTIONS, TAPES
 
 # effects Claude picks per scene; the base ones (glow, grain, vignette...) come with the art style
 MOOD_EFFECTS = ["dust", "snow", "embers", "sparkles", "petals", "speed_lines", "light_leak", "light_trails", "flash"]
@@ -139,6 +139,8 @@ def plan_song(title: str, mood: str, genre: str, slots: list[dict], style: str, 
     directed = any(s.get("scene") for s in slots)
     listing = "\n".join(f"{i + 1}. [{s['section']}, {s['seconds']:.0f}s] lyrics: {s['lyrics'] or '(instrumental)'}"
                         + (f"\n   DIRECTION: {s['scene']}" if s.get("scene") else "")
+                        + ("\n   FRAME: a 4:3 home-video picture, filmed on a 1990s camcorder (eye level, handheld)"
+                           if s.get("frame") == "4:3" else "")
                         for i, s in enumerate(slots))
     task = (f"A {aspect} music video for the song {title!r} ({mood} {genre})."
             + (f"\nThe creator's idea for the video: {idea}" if idea else
@@ -166,8 +168,13 @@ DIRECTION_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"scene": {"type": "string"}, "pace": {"type": "string", "enum": list(PACES)}},
-                "required": ["scene", "pace"],
+                "properties": {"scene": {"type": "string"}, "pace": {"type": "string", "enum": list(PACES)},
+                               "tape": {"type": "string", "enum": list(TAPES)},
+                               "wear": {"type": "number"},
+                               "frame": {"type": "string", "enum": list(FRAMES)},
+                               "stamp": {"type": "string"},
+                               "fade": {"type": "boolean"}},
+                "required": ["scene", "pace", "tape", "wear", "frame", "stamp", "fade"],
                 "additionalProperties": False,
             },
         },
@@ -179,6 +186,21 @@ DIRECTION_SCHEMA = {
     "required": ["bible", "sections", "look", "lyric_preset", "lyric_font", "notes"],
     "additionalProperties": False,
 }
+
+
+def clean_section(row: dict) -> dict:
+    """One section of a shot list with every field present and in range (Claude's, or edited in the app)."""
+    try:
+        wear = round(min(max(float(row.get("wear") or 0), 0.0), 1.0), 2)
+    except (TypeError, ValueError):
+        wear = 0.0
+    return {"scene": str(row.get("scene") or "").strip()[:600],
+            "pace": row.get("pace") if row.get("pace") in PACES else "normal",
+            "tape": row.get("tape") if row.get("tape") in TAPES else "",
+            "wear": wear,
+            "frame": row.get("frame") if row.get("frame") in FRAMES else "full",
+            "stamp": str(row.get("stamp") or "").strip()[:40],
+            "fade": bool(row.get("fade"))}
 
 
 def direct_idea(title: str, mood: str, genre: str, sections: list[dict], idea: str, looks: dict[str, str],
@@ -199,7 +221,8 @@ The creator's concept:
 
 How the video is made: AI-drawn still pictures, each moved by a camera move (push in, pan, 3D parallax), cut on the
 beat, with effects (light trails, light leaks, particles, flashes), a colour grade over everything and the lyrics as
-captions. There is no real filming and nothing moves inside a picture.
+captions. There is no real filming and nothing moves inside a picture. Sections can also be treated as an old tape
+(VHS playback, rewinding, TV static, a 4:3 home-video frame, a camcorder date stamp, wear that grows each replay).
 
 Return:
 - sections: exactly {len(sections)}, one per song section in the order above. `scene`: what the viewer sees during
@@ -208,6 +231,22 @@ Return:
   the story between its neighbours. Repeated sections (a second chorus) may share a scene or progress it. `pace`:
   how fast it cuts: fast for energy or "faster cuts", slow for "everything slows down", stillness, intros/outros
   that linger; normal otherwise.
+  Old-tape treatment of the section (for concepts about memories, home videos, VHS, camcorders, old TVs; otherwise
+  tape "", wear 0, frame "full", stamp "", fade false):
+  `tape`: "play" = the pictures play as a VHS tape (tracking lines, colour bleed, scanlines, PLAY on screen);
+  "rewind" = the shots run backwards with tearing bands, hardest on the beat (rewinding, looping, glitch chaos);
+  "static_in" = TV static clearing to the picture (a TV or tape starting); "static" = only TV static (a tape ending,
+  a dead channel); "" = a clean modern picture.
+  `wear` 0..1: how worn the tape looks. More tracking noise, faded colour, white dropouts and skipped frames as it
+  rises. When the concept says a memory degrades each time it replays, raise it step by step across the sections
+  (e.g. 0, 0.3, 0.55, 0.8). 0 for clean sections.
+  `frame`: "4:3" shows the section as a home video on a dark TV screen inside the video's frame (memories, the
+  tape's footage); "full" fills the frame (the present).
+  `stamp`: the camcorder's date shown with tape play/rewind, in caps (e.g. "MAY 31 1998", a second line after 
+
+  such as "PM 9:41"); keep the same date for the same memory. "" for none.
+  `fade`: true when the person in the memory should be fading away (the nearest subject loses colour and turns to
+  a ghost, more with wear).
 - bible: the recurring characters (fixed appearance: hair, clothes, age), the car/place/world, era and palette, under
   70 words, so every picture shows the same people and world.
 - look: the colour grade that best matches the concept, one of: {", ".join(f"{k} ({v})" for k, v in looks.items())}.
@@ -215,7 +254,9 @@ Return:
 - lyric_font: a font the concept asks for, from: {", ".join(fonts)}; "" when it doesn't ask for one.
 - notes: short plain sentences for the creator about anything in the concept the app can't do literally and what
   it does instead (e.g. lyrics can't sit on the windshield inside the picture; they are shown over the middle of the
-  frame). Empty when everything fits."""
+  frame). Empty when everything fits. VHS looks, rewinds, static, a 4:3 home-video frame, date stamps and a fading
+  subject ARE possible (the fields above), so don't list those; the old-tape treatments apply to AI-drawn pictures,
+  not to stock footage."""
     response = _client(client).beta.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=8000,
@@ -229,10 +270,10 @@ Return:
     data = json.loads(next(b.text for b in response.content if b.type == "text"))
     rows = data["sections"][:len(sections)]
     while len(rows) < len(sections):  # rare: repeat the last direction
-        rows.append(rows[-1] if rows else {"scene": "", "pace": "normal"})
+        rows.append(rows[-1] if rows else {})
     return {
         "bible": data["bible"].strip(),
-        "sections": [{"scene": r["scene"].strip(), "pace": r["pace"] if r["pace"] in PACES else "normal"} for r in rows],
+        "sections": [clean_section(r) for r in rows],
         "look": data["look"] if data["look"] in looks else "",
         "lyric_preset": data["lyric_preset"] if data["lyric_preset"] in presets else "",
         "lyric_font": data["lyric_font"] if data["lyric_font"] in fonts else "",

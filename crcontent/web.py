@@ -857,16 +857,15 @@ class DirectionEdit(BaseModel):
 
 @app.put("/api/videos/{name}/direct")
 def edit_video_direction(name: str, req: DirectionEdit):
-    """Save your changes to the shot list (scenes, paces, characters)."""
-    from .director import PACES
+    """Save your changes to the shot list (scenes, paces, old-tape treatments, characters)."""
+    from .director import clean_section
 
     folder = _video_dir(name)
     song = SongScript.load(folder / "song.json")
     if len(req.sections) != len(song.sections):
         raise HTTPException(409, "The song's sections changed; direct the idea again.")
     direction = {"idea": req.idea.strip()[:IDEA_MAX], "bible": req.bible.strip()[:2000], "notes": req.notes[:6],
-                 "sections": [{"scene": str(r.get("scene", "")).strip()[:600],
-                               "pace": r.get("pace") if r.get("pace") in PACES else "normal"} for r in req.sections]}
+                 "sections": [clean_section(r) for r in req.sections]}
     _save_direction(folder, direction)
     return direction
 
@@ -912,9 +911,12 @@ def _plan_view(folder: Path, plan: dict | None) -> dict:
     song = SongScript.load(folder / "song.json")
     current = song_direction(song, _read_meta(folder).get("direction"), plan.get("idea", ""))
     plan["direction_current"] = plan.get("direction", "") == _direction_key(current)
+    from .pipeline import HOME_VIDEO
+
     size = frame_size(plan.get("aspect") or "9:16")
     for k, slot in enumerate(plan["slots"]):
-        path = imagegen.drawn(slot["prompt"], plan["style"], size, slot.get("seed") or k + 1)
+        shape = HOME_VIDEO if slot.get("frame") == "4:3" else size  # drawn landscape, like a 16:9 picture
+        path = imagegen.drawn(slot["prompt"], plan["style"], shape, slot.get("seed") or k + 1)
         slot["picture"] = _media_info(path) if path else None
     return {"plan": plan}
 
@@ -1854,9 +1856,13 @@ def _run_scheduled(item: dict) -> None:
     try:
         if not (folder / "video.mp4").exists():
             raise publish.PublishError("The video was deleted.")
+        at = datetime.fromisoformat(item["at"])
+        # Facebook publishes it at its time itself (schedule.EARLY): uploaded ahead with that time
+        native = item["platform"] == "facebook" and publish.fb_can_schedule(at)
         info = publish.upload(folder, item["platform"], log=lambda line: None, channel=item.get("channel") or None,
-                              privacy=item.get("privacy") or None)
-        schedule.mark(item["id"], status="done", url=info.get("url", ""), done=datetime.now().isoformat(timespec="seconds"))
+                              privacy=item.get("privacy") or None, publish_at=at if native else None)
+        schedule.mark(item["id"], status="done", url=info.get("url", ""), done=datetime.now().isoformat(timespec="seconds"),
+                      **({"publish_at": info["publish_at"]} if info.get("publish_at") else {}))
     except Exception as e:
         traceback.print_exc()
         schedule.mark(item["id"], status="error", error=str(e).strip().splitlines()[-1] if str(e).strip() else repr(e))
@@ -2037,6 +2043,7 @@ class PublishRequest(BaseModel):
     platforms: list[str]
     privacy: str | None = None  # YouTube only: public | unlisted | private for this upload
     publish_at: str | None = None  # YouTube only: local time it goes public ("2026-10-13T09:00"); uploads now as private
+    facebook_publish_at: str | None = None  # Facebook: uploads now, Facebook publishes it at this local time
     category: str | None = None  # YouTube only: a category id for this upload (see publish.YT_CATEGORIES)
     channel: str = ""  # YouTube only: the channel id to upload to; "" = the default channel
     tiktok_privacy: str | None = None  # TikTok: a privacy level or "DRAFT" for this upload; None = Settings
@@ -2086,7 +2093,16 @@ def publish_video(name: str, req: PublishRequest):
         if req.tiktok_privacy not in (*publish.TIKTOK_PRIVACY, "DRAFT"):
             raise HTTPException(400, "Unknown TikTok visibility.")
         tiktok["privacy"] = req.tiktok_privacy
-    options = {"youtube": youtube, "tiktok": tiktok}
+    facebook = {}
+    if req.facebook_publish_at and "facebook" in req.platforms:
+        try:
+            at = schedule.parse_time(req.facebook_publish_at)
+        except ValueError:
+            raise HTTPException(400, "Pick a date and time for Facebook.")
+        if not publish.fb_can_schedule(at):
+            raise HTTPException(400, "Facebook schedules posts from 10 minutes to 28 days ahead. Pick a time in that range.")
+        facebook["publish_at"] = at
+    options = {"youtube": youtube, "tiktok": tiktok, "facebook": facebook}
     return {"jobs": {p: _queue_publish(folder, p, **options.get(p, {})) for p in dict.fromkeys(req.platforms)}}
 
 

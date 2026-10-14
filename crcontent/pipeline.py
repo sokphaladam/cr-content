@@ -301,21 +301,24 @@ def _repeats(song) -> dict[int, int]:
     return same
 
 
+HOME_VIDEO = (1440, 1080)  # the shape a 4:3 home-video section's pictures are drawn in
 ART_PLAN = "art_plan.json"  # a song's picture plan, kept in the song folder so it can be checked before a render
 
 
 def song_slots(song, spans: list[tuple[float, float]], shots: list, lines: list, pace: str = "normal",
-               scenes: list[str] | None = None) -> tuple[list[dict], list[int], set[int]]:
+               scenes: list[str] | None = None, frames: list[str] | None = None) -> tuple[list[dict], list[int], set[int]]:
     """The pictures a music video needs: consecutive shots of a section grouped so each picture stays on screen
     ~PICTURE_PACES seconds. A section that repeats an earlier one (a chorus sung again) shows that section's pictures
-    again, unless `scenes` (a directed idea, one per section) asks for something else there.
+    again, unless `scenes` (a directed idea, one per section) asks for something else there. `frames`: the
+    directed frame per section; "4:3" slots are drawn as landscape home-video pictures.
     Returns (slots, the slot of every shot, the shots that show a repeated picture)."""
     seconds_each, cap = PICTURE_PACES.get(pace, PICTURE_PACES["normal"])
     per_section: dict[int, list[int]] = {}
     for i, shot in enumerate(shots):
         per_section.setdefault(shot.section, []).append(i)
     repeat_of = {sec: orig for sec, orig in _repeats(song).items() if sec in per_section and orig in per_section
-                 and (not scenes or scenes[sec].strip().lower() == scenes[orig].strip().lower())}
+                 and (not scenes or scenes[sec].strip().lower() == scenes[orig].strip().lower())
+                 and (not frames or frames[sec] == frames[orig])}
     # (the cap counts every slot on screen, so repeats lower the number drawn even in long songs)
     want = {sec: min(len(idx), max(1, round((spans[sec][1] - spans[sec][0]) / seconds_each)))
             for sec, idx in per_section.items()}
@@ -338,7 +341,8 @@ def song_slots(song, spans: list[tuple[float, float]], shots: list, lines: list,
                 slot_of[g] = len(slots)
             slots.append({"section": song.sections[sec].name, "lyrics": sung[:300], "start": round(start, 2),
                           "seconds": round(end - start, 2), "also": [],
-                          **({"scene": scenes[sec]} if scenes and scenes[sec].strip() else {})})
+                          **({"scene": scenes[sec]} if scenes and scenes[sec].strip() else {}),
+                          **({"frame": "4:3"} if frames and frames[sec] == "4:3" else {})})
     reused: set[int] = set()
     for sec, orig in sorted(repeat_of.items()):
         idx, n = per_section[sec], min(len(per_section[sec]), want[orig])
@@ -450,7 +454,8 @@ def plan_song_pictures(song_dir: Path, style: str, pace: str = "normal", idea: s
     rows = direction["sections"] if direction else None
     *_, spans, shots = _song_layout(song_dir, song, lines, duration(song_dir / "song.mp3"), log,
                                     [r["pace"] for r in rows] if rows else None)
-    slots, *_ = song_slots(song, spans, shots, lines, pace, [r["scene"] for r in rows] if rows else None)
+    slots, *_ = song_slots(song, spans, shots, lines, pace, [r["scene"] for r in rows] if rows else None,
+                           [r.get("frame", "full") for r in rows] if rows else None)
     plan = _new_art_plan(song, slots, style, pace, aspect, idea.strip(), log, bible.strip(), direction)
     save_art_plan(song_dir, plan)
     return plan
@@ -467,7 +472,8 @@ def song_art(song_dir: Path, song, spans: list[tuple[float, float]], shots: list
     from . import director, imagegen
 
     scenes = [r["scene"] for r in direction["sections"]] if direction else None
-    slots, slot_of, reused = song_slots(song, spans, shots, lines, pace, scenes)
+    frames = [r.get("frame", "full") for r in direction["sections"]] if direction else None
+    slots, slot_of, reused = song_slots(song, spans, shots, lines, pace, scenes, frames)
     plan = load_art_plan(song_dir)
     if plan_fits(plan, style, pace, idea, slots, direction):
         log(f"      using your planned pictures ({len(slots)})")
@@ -481,9 +487,10 @@ def song_art(song_dir: Path, song, spans: list[tuple[float, float]], shots: list
     for k, s in enumerate(plan["slots"]):
         seed = s.get("seed") or k + 1
         plans.append(director.ShotPlan(s["prompt"], s.get("motion") or "push_in", s.get("effects") or []))
+        shape = HOME_VIDEO if s.get("frame") == "4:3" else size  # a home video's picture is drawn landscape
         log(f"      drawing picture {k + 1}/{len(plan['slots'])}"
-            + (" (already drawn)" if imagegen.drawn(s["prompt"], style, size, seed) else ""))
-        pictures.append(imagegen.generate(s["prompt"], style, size, seed=seed, log=log))
+            + (" (already drawn)" if imagegen.drawn(s["prompt"], style, shape, seed) else ""))
+        pictures.append(imagegen.generate(s["prompt"], style, shape, seed=seed, log=log))
 
     def plan_for(i: int):
         shot_plan = plans[slot_of[i]]
@@ -705,7 +712,9 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
             # the picture's planned move on its first shot, other moves when it comes back; zoom punches on every
             # beat in choruses, a flash where a new section starts
             move = plan.motion if first else MOTION_CYCLE[(i + len(MOTION_CYCLE) // 2) % len(MOTION_CYCLE)]
-            hits = [b - shot.start for b in beats if shot.start <= b < shot.end] if chorus else ([0.0] if section_start else [])
+            row = direction["sections"][shot.section] if direction else {}
+            tape = row.get("tape", "")
+            hits = [b - shot.start for b in beats if shot.start <= b < shot.end] if chorus or tape == "rewind"                 else ([0.0] if section_start else [])
             effects = [*fx.default_effects(drawn, music=True), *plan.effects]
             if not section_start:
                 effects = [e for e in effects if e != "flash"]
@@ -713,7 +722,8 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
                 effects.append("flash")
             clip = work / f"shot_{i:02d}.mp4"
             fx.render_shot(picture, shot.length, clip, size=size, motion=move, effects=effects, beats=hits, look=look,
-                           seed=i)
+                           seed=i, tape=tape, wear=row.get("wear", 0.0), frame=row.get("frame", "full"),
+                           stamp=row.get("stamp", ""), fade=bool(row.get("fade")))
             clips.append(clip)
             continue
         section = song.sections[shot.section]

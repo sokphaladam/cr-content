@@ -199,13 +199,27 @@ export interface SongScript {
 export type Look = "natural" | "cinematic" | "film" | "moody" | "vibrant" | "dusk" | "mono";
 export type LyricPreset = "classic" | "neon" | "bold_pop" | "cinematic" | "minimal" | "retro" | "boxed";
 export type CutPace = "slow" | "normal" | "fast";
+/** Old-tape treatments for a section (crcontent/fx.py TAPES / FRAMES). */
+export type Tape = "" | "play" | "rewind" | "static_in" | "static";
+export type TapeFrame = "full" | "4:3";
+
+/** One section of a shot list: what it shows, how fast it cuts, and how it looks as an old tape. */
+export interface DirectedSection {
+  scene: string;
+  pace: CutPace;
+  tape?: Tape; // "" = a clean modern picture
+  wear?: number; // 0..1: how worn the tape looks (each replay of a memory a little more)
+  frame?: TapeFrame; // "4:3": a home video on a dark screen inside the frame
+  stamp?: string; // the camcorder date, e.g. "MAY 31 1998"
+  fade?: boolean; // the person in the memory fades away
+}
 
 /** Your music video idea as a shot list (crcontent/director.py direct_idea): a scene and cutting pace per section of
  *  the song, in order, plus the recurring characters and world. Followed by the pictures, the cuts and the footage. */
 export interface SongDirection {
   idea: string; // the idea it was made from; ignored once the idea changes
   bible: string;
-  sections: { scene: string; pace: CutPace }[];
+  sections: DirectedSection[];
   notes: string[]; // what can't be done literally, and what is done instead
   look?: Look | ""; // Claude's suggestions when it was made (applied to the settings then)
   lyric_preset?: LyricPreset | "";
@@ -245,6 +259,7 @@ export interface SongArtSlot {
   motion: Motion;
   effects: Effect[];
   seed: number;
+  frame?: "4:3"; // a home-video section: drawn landscape
   picture: MediaInfo | null; // already drawn (free to check before the render)
 }
 
@@ -844,11 +859,19 @@ export const api = {
     request<PublishAccounts>(`/api/publish/${platform}/app`, { method: "PUT", json: keys }),
   publishSettings: (platform: Platform, settings: Partial<Pick<PublishAccount, "auto" | "privacy" | "mode" | "when" | "times" | "comment" | "category" | "channel" | "page" | "account_id" | "share_to_feed">>) =>
     request<PublishAccounts>(`/api/publish/${platform}/settings`, { method: "PUT", json: settings }),
-  /** `youtube` overrides the channel's visibility for this upload; `publish_at` uploads it private and YouTube makes it public then. */
+  /** `youtube` overrides the channel's visibility for this upload; `publish_at` uploads it private and YouTube makes it public then.
+   *  `facebook_publish_at`: the same for Facebook (a scheduled Reel or Page video). */
   publishVideo: (
     name: string,
     platforms: Platform[],
-    options: { privacy?: string; publish_at?: string; category?: string; channel?: string; tiktok_privacy?: TikTokPrivacy | "DRAFT" } = {},
+    options: {
+      privacy?: string;
+      publish_at?: string;
+      category?: string;
+      channel?: string;
+      tiktok_privacy?: TikTokPrivacy | "DRAFT";
+      facebook_publish_at?: string; // uploads now; Facebook publishes it at this local time (10 min to 28 days ahead)
+    } = {},
   ) =>
     request<{ jobs: Partial<Record<Platform, string>> }>(`/api/videos/${encodeURIComponent(name)}/publish`, {
       method: "POST",

@@ -61,6 +61,9 @@ META_AUTH = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
 META_SCOPES = ("pages_show_list,pages_read_engagement,pages_manage_posts,business_management,"
                "instagram_basic,instagram_content_publish")
 FB_REEL_MAX_SEC = 90  # longer (or landscape) videos go to the Page as regular videos
+# Facebook publishes a scheduled post itself (the app needn't run then): at least 10 minutes ahead, at most ~a month
+FB_SCHEDULE_MIN = timedelta(minutes=10)
+FB_SCHEDULE_MAX = timedelta(days=28)
 IG_CAPTION_MAX, IG_HASHTAGS_MAX = 2200, 30
 
 TIKTOK_AUTH = "https://www.tiktok.com/v2/auth/authorize/"
@@ -583,7 +586,8 @@ def _record(job: Path, platform: str, info: dict) -> None:
 def upload(job: Path, platform: str, log=print, privacy: str | None = None, publish_at: datetime | None = None,
            category: str | None = None, channel: str | None = None) -> dict:
     """`privacy`: YouTube public | unlisted | private, or a TikTok TIKTOK_PRIVACY level / "DRAFT". `publish_at`
-    (local time) and `category` are YouTube only. `channel`: the YouTube channel, Facebook Page or Instagram account
+    (local time): YouTube and Facebook upload now and make it public then (Facebook: FB_SCHEDULE_MIN to
+    FB_SCHEDULE_MAX ahead). `category` is YouTube only. `channel`: the YouTube channel, Facebook Page or Instagram account
     id to post to (default: the one chosen in Settings)."""
     video = job / "video.mp4"
     if not video.exists():
@@ -600,7 +604,7 @@ def upload(job: Path, platform: str, log=print, privacy: str | None = None, publ
                                                 acct["channel_id"])
         return info
     if platform == "facebook":
-        info = _upload_facebook(job, video, log, channel)
+        info = _upload_facebook(job, video, log, channel, publish_at)
     elif platform == "instagram":
         info = _upload_instagram(job, video, log, channel)
     else:
@@ -1020,13 +1024,24 @@ def _audio_48k(job: Path, video: Path) -> Path:
     return out if done.returncode == 0 and out.exists() else video
 
 
-def _upload_facebook(job: Path, video: Path, log, page_id: str | None = None) -> dict:
-    """A vertical video up to 90 s becomes a Reel on the Page; anything else a regular Page video."""
+def fb_can_schedule(at: datetime, now: datetime | None = None) -> bool:
+    """Can Facebook itself publish a post at local time `at` (uploaded now)?"""
+    ahead = at - (now or datetime.now())
+    return FB_SCHEDULE_MIN <= ahead <= FB_SCHEDULE_MAX
+
+
+def _upload_facebook(job: Path, video: Path, log, page_id: str | None = None, publish_at: datetime | None = None) -> dict:
+    """A vertical video up to 90 s becomes a Reel on the Page; anything else a regular Page video. `publish_at`:
+    uploaded now, and Facebook publishes it at that local time (it shows in Meta Business Suite's planner)."""
     from .render import duration
 
     page = _meta_account(_load(), "facebook", page_id)
     if not page:
         raise PublishError("Facebook isn't connected (or that Page is gone). Connect it in Settings.")
+    if publish_at and not fb_can_schedule(publish_at):
+        raise PublishError("Facebook schedules posts from 10 minutes to 28 days ahead. Pick a time in that range.")
+    when = {"scheduled_publish_time": str(int(publish_at.timestamp()))} if publish_at else {}
+    later = f" (goes public {publish_at:%a %d %b, %H:%M})" if publish_at else ""
     token, text = page["token"], _caption(job, 5000)
     try:
         seconds = duration(video)
@@ -1034,7 +1049,7 @@ def _upload_facebook(job: Path, video: Path, log, page_id: str | None = None) ->
         seconds = 0.0
     if _is_short(job) and 3 <= seconds <= FB_REEL_MAX_SEC:
         upload_file = _audio_48k(job, video)
-        log(f"Facebook: posting a Reel to {page['name']}…")
+        log(f"Facebook: {'scheduling' if publish_at else 'posting'} a Reel to {page['name']}…")
         start = _meta_json(requests.post(f"{GRAPH}/{page['id']}/video_reels", timeout=60,
                                          data={"upload_phase": "start", "access_token": token}), "Facebook")
         video_id = start["video_id"]
@@ -1042,8 +1057,8 @@ def _upload_facebook(job: Path, video: Path, log, page_id: str | None = None) ->
         _rupload(start.get("upload_url") or f"https://rupload.facebook.com/video-upload/{GRAPH_VERSION}/{video_id}",
                  token, upload_file, "Facebook")
         _meta_json(requests.post(f"{GRAPH}/{page['id']}/video_reels", timeout=60, data={
-            "upload_phase": "finish", "video_id": video_id, "video_state": "PUBLISHED", "description": text,
-            "access_token": token}), "Facebook")
+            "upload_phase": "finish", "video_id": video_id, "video_state": "SCHEDULED" if publish_at else "PUBLISHED",
+            "description": text, "access_token": token, **when}), "Facebook")
         log("Facebook: processing…")
         deadline = time.time() + 600
         while time.time() < deadline:
@@ -1054,22 +1069,27 @@ def _upload_facebook(job: Path, video: Path, log, page_id: str | None = None) ->
                 raise PublishError(f"Facebook couldn't post the Reel: {reason}")
             if (st.get("publishing_phase") or {}).get("status") == "complete" or st.get("video_status") == "ready":
                 break
+            if publish_at and (st.get("processing_phase") or {}).get("status") == "complete":
+                break  # processed; it publishes at its time
             time.sleep(5)
         else:
             log("Facebook: still processing; the Reel appears on the Page when Facebook is done.")
         url = f"https://www.facebook.com/reel/{video_id}"
-        log(f"Facebook: posted → {url}")
-        return {"id": video_id, "url": url, "page": page["id"], "page_name": page["name"], "reel": True}
+        log(f"Facebook: {'scheduled' if publish_at else 'posted'} → {url}{later}")
+        return {"id": video_id, "url": url, "page": page["id"], "page_name": page["name"], "reel": True,
+                **({"publish_at": publish_at.isoformat(timespec="minutes")} if publish_at else {})}
     title = post_text(job)[0]
     log(f"Facebook: uploading {video.stat().st_size / 1e6:.1f} MB to {page['name']}…")
     with open(video, "rb") as f:
         r = requests.post(f"https://graph-video.facebook.com/{GRAPH_VERSION}/{page['id']}/videos", timeout=None,
-                          data={"title": title[:255], "description": text, "access_token": token},
+                          data={"title": title[:255], "description": text, "access_token": token,
+                                **({"published": "false", **when} if publish_at else {})},
                           files={"source": (video.name, f, "video/mp4")})
     video_id = _meta_json(r, "Facebook").get("id", "")
     url = f"https://www.facebook.com/{page['id']}/videos/{video_id}"
-    log(f"Facebook: posted → {url}")
-    return {"id": video_id, "url": url, "page": page["id"], "page_name": page["name"]}
+    log(f"Facebook: {'scheduled' if publish_at else 'posted'} → {url}{later}")
+    return {"id": video_id, "url": url, "page": page["id"], "page_name": page["name"],
+            **({"publish_at": publish_at.isoformat(timespec="minutes")} if publish_at else {})}
 
 
 def _upload_instagram(job: Path, video: Path, log, account_id: str | None = None) -> dict:

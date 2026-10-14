@@ -2,7 +2,7 @@
 
 import { ChevronDown, Clapperboard, Info } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, type CutPace, type SongDirection } from "@/lib/api";
+import { api, type CutPace, type DirectedSection, type SongDirection, type Tape, type TapeFrame } from "@/lib/api";
 import { Button, Message, Segmented } from "./ui";
 
 const PACE_OPTIONS: { value: CutPace; label: string }[] = [
@@ -10,6 +10,74 @@ const PACE_OPTIONS: { value: CutPace; label: string }[] = [
   { value: "normal", label: "Normal" },
   { value: "fast", label: "Fast" },
 ];
+
+const TAPE_OPTIONS: { value: Tape; label: string }[] = [
+  { value: "", label: "Clean picture" },
+  { value: "play", label: "VHS playback" },
+  { value: "rewind", label: "Rewinding" },
+  { value: "static_in", label: "Static clearing" },
+  { value: "static", label: "TV static" },
+];
+
+const FRAME_OPTIONS: { value: TapeFrame; label: string }[] = [
+  { value: "full", label: "Full" },
+  { value: "4:3", label: "4:3 home video" },
+];
+
+/** How a section looks as an old tape: VHS playback or a rewind, worn more each replay, in a home-video frame. */
+function TapeControls({ id, row, onChange }: { id: string; row: DirectedSection; onChange: (patch: Partial<DirectedSection>) => void }) {
+  const tape = row.tape ?? "";
+  const playing = tape === "play" || tape === "rewind";
+  const wear = row.wear ?? 0;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+      <label className="flex items-center gap-1.5">
+        <span className="text-ink-soft">Tape</span>
+        <select
+          className="field-input h-8 py-0 text-sm"
+          value={tape}
+          onChange={(e) => onChange({ tape: e.target.value as Tape })}
+        >
+          {TAPE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <Segmented name={`${id}-frame`} size="sm" value={row.frame ?? "full"} options={FRAME_OPTIONS} onChange={(frame) => onChange({ frame })} />
+      {playing && (
+        <>
+          <label className="flex items-center gap-1.5" title="How worn the tape looks: more noise, faded colour and skipped frames">
+            <span className="text-ink-soft">Wear</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={wear}
+              onChange={(e) => onChange({ wear: Number(e.target.value) })}
+              className="w-24 accent-cobalt"
+            />
+            <span className="w-8 tabular-nums text-ink-soft">{Math.round(wear * 100)}%</span>
+          </label>
+          <input
+            aria-label="Date stamp"
+            placeholder="Date stamp, e.g. MAY 31 1998"
+            maxLength={40}
+            value={row.stamp ?? ""}
+            onChange={(e) => onChange({ stamp: e.target.value.toUpperCase() })}
+            className="field-input h-8 w-48 py-0 text-sm"
+          />
+        </>
+      )}
+      <label className="flex items-center gap-1.5" title="The person nearest the camera loses colour and turns to a ghost (more with wear)">
+        <input type="checkbox" checked={!!row.fade} onChange={(e) => onChange({ fade: e.target.checked })} className="accent-cobalt" />
+        <span>Fade the person</span>
+      </label>
+    </div>
+  );
+}
 
 /**
  * Your idea as a shot list: Claude reads the concept and writes what each section of the song shows and how fast it
@@ -127,6 +195,7 @@ export function ShotList({
                   onChange={(e) => setRow(i, { scene: e.target.value })}
                   className="field-input field-sizing-content min-h-[44px] resize-none text-sm leading-snug"
                 />
+                <TapeControls id={`${name}-tape-${i}`} row={row} onChange={(patch) => setRow(i, patch)} />
               </li>
             ))}
           </ol>
@@ -138,7 +207,7 @@ export function ShotList({
               onChange={(e) => edit({ ...direction, bible: e.target.value })}
               className="field-input field-sizing-content min-h-[52px] resize-none text-sm leading-snug"
             />
-            <span className="text-xs text-ink-soft">Every picture shows these same people, car and places. Pace: how fast that part cuts on the beat.</span>
+            <span className="text-xs text-ink-soft">Every picture shows these same people, car and places. Pace: how fast that part cuts on the beat. Tape: play a part as an old VHS tape (AI pictures only).</span>
           </label>
         </div>
       )}

@@ -1,24 +1,29 @@
 import type { Metadata } from "next";
-import { Bricolage_Grotesque, Noto_Sans, Noto_Sans_Khmer } from "next/font/google";
+import localFont from "next/font/local";
 import { APPEARANCE_SCRIPT } from "@/lib/appearanceScript";
 import "./globals.css";
 
-const bricolage = Bricolage_Grotesque({
+// Bundled (app/fonts, variable woff2 from Google Fonts, OFL) instead of next/font/google: no download at build time,
+// so the app builds offline, and Turbopack can't trip over Google's font URLs ("queries have exactly one entry").
+const bricolage = localFont({
+  src: "./fonts/bricolage-grotesque-latin.woff2",
   variable: "--font-bricolage",
-  subsets: ["latin"],
-  weight: ["500", "700", "800"],
+  weight: "500 800",
+  display: "swap",
 });
 
-const noto = Noto_Sans({
+const noto = localFont({
+  src: "./fonts/noto-sans-latin.woff2",
   variable: "--font-noto",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight: "400 600",
+  display: "swap",
 });
 
-const notoKhmer = Noto_Sans_Khmer({
+const notoKhmer = localFont({
+  src: "./fonts/noto-sans-khmer-khmer.woff2",
   variable: "--font-noto-khmer",
-  subsets: ["khmer"],
-  weight: ["400", "600"],
+  weight: "400 600",
+  display: "swap",
 });
 
 export const metadata: Metadata = {

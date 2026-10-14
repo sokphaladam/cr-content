@@ -1,5 +1,5 @@
 anthropic>=1.11
-edge-tts>=7.2
+edge-tts>=7.3.1  # older versions get 403 from Microsoft (its request token changed)
 pydantic>=2.0
 requests>=2.31
 python-dotenv>=1.0
