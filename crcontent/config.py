@@ -1,4 +1,6 @@
 """Central settings: video format, voices, caption styling per language."""
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,7 +15,14 @@ ROOT, OUTPUT_DIR, _ = locations.current()
 DRAFTS_DIR = ROOT / "drafts"
 CACHE_DIR = ROOT / "cache"
 ASSETS_DIR = ROOT / "assets"
-WINDOWS_FONTS = Path("C:/Windows/Fonts")
+# where installed fonts are looked up (after assets/fonts): Windows, or macOS system / user fonts
+if sys.platform == "win32":
+    SYSTEM_FONT_DIRS = (Path("C:/Windows/Fonts"), Path(os.getenv("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts")
+elif sys.platform == "darwin":
+    SYSTEM_FONT_DIRS = (Path.home() / "Library" / "Fonts", Path("/Library/Fonts"), Path("/System/Library/Fonts"),
+                        Path("/System/Library/Fonts/Supplemental"))
+else:
+    SYSTEM_FONT_DIRS = (Path.home() / ".local" / "share" / "fonts", Path.home() / ".fonts", Path("/usr/share/fonts"))
 
 WIDTH, HEIGHT, FPS = 1080, 1920, 30
 # Frame sizes by aspect ratio: shorts are vertical; full-length music videos can also be landscape (YouTube).
@@ -36,7 +45,7 @@ class LangProfile:
     code: str
     name: str
     voices: tuple[str, ...]          # first one is the default
-    font_file: str                   # file in assets/fonts or C:/Windows/Fonts
+    font_file: str                   # file in assets/fonts or the system fonts
     font_name: str                   # family name libass should look up
     font_size: int
     words_per_caption: int           # tokens shown together on screen
@@ -59,8 +68,9 @@ LANGS: dict[str, LangProfile] = {
         code="km",
         name="Khmer",
         voices=("km-KH-PisethNeural", "km-KH-SreymomNeural"),
-        font_file="KhmerOSbattambang.ttf",
-        font_name="Khmer OS Battambang",
+        # Khmer OS comes with Windows; macOS has Khmer Sangam MN instead
+        font_file="Khmer Sangam MN.ttf" if sys.platform == "darwin" else "KhmerOSbattambang.ttf",
+        font_name="Khmer Sangam MN" if sys.platform == "darwin" else "Khmer OS Battambang",
         font_size=100,
         words_per_caption=1,
         words_per_second=0.9,  # phrases per second

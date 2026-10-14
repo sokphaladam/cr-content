@@ -72,7 +72,7 @@ function RowMenu({ item }: { item: Item }) {
     };
   }, [at]);
 
-  const entry = "flex w-full cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-2.5 py-1.5 text-left text-[13px] no-underline";
+  const entry = "flex w-full cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-2.5 py-1.5 text-left text-base no-underline";
   const run = (fn: () => void) => () => {
     close();
     fn();
@@ -105,7 +105,7 @@ function RowMenu({ item }: { item: Item }) {
           role="menu"
           aria-label={`Actions for ${item.title}`}
           style={{ top: at.top, right: at.right, transform: at.up ? "translateY(-100%)" : undefined }}
-          className="fixed z-50 grid w-[200px] gap-0.5 rounded-lg border border-line bg-panel p-1 shadow-[0_12px_32px_-12px_rgb(21_26_36/0.35)]"
+          className="fixed z-50 grid w-[200px] gap-0.5 popover rounded-lg p-1"
         >
           <button type="button" role="menuitem" className={`${entry} text-ink hover:bg-ink/[0.05] focus-visible:bg-ink/[0.05]`} onClick={run(item.onClick)}>
             <SquarePen className="size-3.5 text-ink-soft" /> Open
@@ -130,7 +130,7 @@ function RowMenu({ item }: { item: Item }) {
           >
             <Trash2 className="size-3.5" /> {confirm ? "Click again to delete" : "Delete"}
           </button>
-          {confirm && item.deleteHint && <p className="m-0 px-2.5 pt-0.5 pb-1.5 text-[11.5px] leading-snug text-ink-soft">{item.deleteHint}</p>}
+          {confirm && item.deleteHint && <p className="m-0 px-2.5 pt-0.5 pb-1.5 text-xs leading-snug text-ink-soft">{item.deleteHint}</p>}
         </div>
       )}
     </>
@@ -177,7 +177,7 @@ function Row({ item }: { item: Item }) {
         aria-current={item.current || undefined}
         onClick={item.onClick}
         className={`relative grid w-full cursor-pointer grid-cols-[52px_minmax(0,1fr)] items-center gap-3 rounded-lg border-0 py-1.5 pr-2 pl-2 text-left transition-colors ${
-          item.current ? "bg-panel shadow-[0_1px_2px_rgb(21_26_36/0.08)]" : "bg-transparent hover:bg-ink/[0.04]"
+          item.current ? "bg-panel shadow-(--shadow-card)" : "bg-transparent hover:bg-ink/[0.04]"
         }`}
       >
         {item.current && <span aria-hidden className="absolute top-2 bottom-2 left-0 w-[3px] rounded-r bg-caption" />}
@@ -190,10 +190,10 @@ function Row({ item }: { item: Item }) {
           </span>
         </span>
         <span className="min-w-0">
-          <span lang={item.lang} className="line-clamp-2 pr-6 text-[13.5px] leading-snug font-semibold text-ink">
+          <span lang={item.lang} className="line-clamp-2 pr-6 text-base leading-snug font-semibold text-ink">
             {item.title}
           </span>
-          <span className="mt-1 flex items-center gap-1.5 text-[11.5px] text-ink-soft">
+          <span className="mt-1 flex items-center gap-1.5 text-xs text-ink-soft">
             <span className="inline-flex items-center gap-1 font-semibold text-ink/75">
               <TypeIcon type={item.type} className="size-3" />
               {item.musicVideo ? "Music video" : TYPE_LABEL[item.type]}
@@ -319,13 +319,13 @@ export function Library({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="grid gap-3 px-4 pt-4">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="m-0 font-display text-[17px] font-bold tracking-tight">Library</h2>
-          <Button size="sm" variant="primary" icon={<Plus className="size-4" />} onClick={onNew}>
-            New
-          </Button>
-        </div>
+      <div className="pane-header">
+        <h2 className="pane-title m-0">Library</h2>
+        <Button size="sm" variant="primary" icon={<Plus className="size-4" />} onClick={onNew}>
+          New
+        </Button>
+      </div>
+      <div className="grid gap-3 px-4 pt-3">
         <label className="relative block">
           <span className="sr-only">Search {tab}</span>
           <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-ink-soft" />
@@ -334,7 +334,7 @@ export function Library({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={tab === "drafts" ? "Search drafts" : "Search videos"}
-            className="field-input h-9 py-0 pr-8 pl-8 text-[13.5px] [&::-webkit-search-cancel-button]:hidden"
+            className="field-input h-9 py-0 pr-8 pl-8 text-base [&::-webkit-search-cancel-button]:hidden"
           />
           {query && (
             <button
@@ -367,13 +367,13 @@ export function Library({
                   type="button"
                   aria-pressed={on}
                   onClick={() => setFilter(f)}
-                  className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded-full border px-2.5 text-[12px] font-semibold transition-colors ${
-                    on ? "border-ink bg-ink text-white" : "border-line bg-panel text-ink-soft hover:border-ink-soft/60 hover:text-ink"
+                  className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded-full border px-2.5 text-sm font-semibold transition-colors ${
+                    on ? "border-ink bg-ink text-on-ink" : "border-line bg-panel text-ink-soft hover:border-line-strong hover:text-ink"
                   }`}
                 >
                   {f !== "all" && <TypeIcon type={f} className="size-3.5" />}
                   {FILTER_LABEL[f]}
-                  <span className={on ? "text-white/70" : "text-ink-soft/80"}>{count}</span>
+                  <span className={on ? "text-on-ink/70" : "text-ink-soft/80"}>{count}</span>
                 </button>
               );
             })}
@@ -383,9 +383,9 @@ export function Library({
 
       <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {groups === null ? (
-          <p className="m-0 p-4 text-[13px] text-ink-soft">Loading…</p>
+          <p className="m-0 p-4 text-base text-ink-soft">Loading…</p>
         ) : groups.length === 0 ? (
-          <div className="grid justify-items-center gap-2 px-4 py-10 text-center text-[13px] text-ink-soft">
+          <div className="grid justify-items-center gap-2 px-4 py-10 text-center text-base text-ink-soft">
             <span className="grid size-10 place-items-center rounded-full bg-ink/[0.06]">
               {query ? <Search className="size-5" /> : tab === "drafts" ? <FileText className="size-5" /> : <Film className="size-5" />}
             </span>

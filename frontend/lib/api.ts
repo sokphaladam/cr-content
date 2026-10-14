@@ -66,13 +66,15 @@ export interface ArtStatus {
   >;
   motions: Record<Motion, string>;
   effects: Record<Effect, string>;
-  // the desktop app's one-time AI add-on (torch, Stable Diffusion, Whisper); dev runs never need it
+  // the one-time AI add-on (torch, Stable Diffusion, Whisper), installed from Settings
   addon?: AddonStatus;
 }
 
 export interface AddonStatus {
-  needed: boolean; // this engine lacks the AI libraries and the add-on isn't installed
+  needed: boolean; // this engine lacks the AI libraries and the add-on can be installed here
   ready: boolean;
+  scope: "all" | "music"; // a Mac gets the music extras only (scene art needs an NVIDIA GPU)
+  size: string; // "about 3 GB"
   installing: boolean;
   stage: string; // "Downloading torch", "Installing (a few minutes…)"…
   done: number; // bytes
@@ -302,7 +304,7 @@ export interface Job {
   channel_name?: string; // publish (youtube): the channel it went to
 }
 
-export type Platform = "youtube" | "tiktok";
+export type Platform = "youtube" | "tiktok" | "facebook" | "instagram";
 export type TikTokPrivacy = "PUBLIC_TO_EVERYONE" | "MUTUAL_FOLLOW_FRIENDS" | "FOLLOWER_OF_CREATOR" | "SELF_ONLY";
 
 /** The connected TikTok account and the visibilities TikTok lets it post with (publish.py tiktok_creator). */
@@ -330,6 +332,12 @@ export interface PublishAccount {
   category?: string; // youtube: default category id, or "auto" (Music for music videos, People & Blogs otherwise)
   channel?: string; // youtube: the default channel's id (the one `account` names)
   channels?: YouTubeChannel[]; // youtube: every connected channel (missing on an older engine)
+  page?: string; // facebook: the default Page's id
+  pages?: { id: string; name: string }[]; // facebook: every Page the Meta sign-in gave
+  account_id?: string; // instagram: the default account's id
+  accounts?: { id: string; name: string; page: string }[]; // instagram: the accounts linked to those Pages
+  share_to_feed?: boolean; // instagram: Reels also show in the profile grid
+  no_linked_account?: boolean; // instagram: signed in, but no Page has an Instagram professional account linked
 }
 
 /** A connected YouTube channel. */
@@ -625,16 +633,54 @@ export interface Locations {
   locked: boolean; // set by CRCONTENT_DATA_DIR, not changeable from the app
 }
 
-/** Desktop app only: does it start with Windows (in the tray)? undefined = not in the desktop app. */
+/** Running on a Mac: the desktop app starts "at login" from the menu bar instead of "with Windows" from the tray. */
+export function isMac(): boolean {
+  return typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+}
+
+/** What the "start in the background" option is called on this OS. */
+export function autostartLabel(): string {
+  return isMac() ? "Open at Login" : "Start with Windows";
+}
+
+/** Desktop app only: does it start at sign-in (in the tray / menu bar)? undefined = not in the desktop app. */
 export async function getAutostart(): Promise<boolean | undefined> {
   const tauri = typeof window !== "undefined" ? window.__TAURI_INTERNALS__ : undefined;
   return tauri ? tauri.invoke<boolean>("get_autostart") : undefined;
 }
 
-/** Desktop app only: start with Windows (in the tray) or not; returns the new state. */
+/** Desktop app only: start at sign-in (in the tray / menu bar) or not; returns the new state. */
 export async function setAutostart(enabled: boolean): Promise<boolean | undefined> {
   const tauri = typeof window !== "undefined" ? window.__TAURI_INTERNALS__ : undefined;
   return tauri ? tauri.invoke<boolean>("set_autostart", { enabled }) : undefined;
+}
+
+/** A newer version of the desktop app on GitHub (src-tauri check_update). */
+export interface AppUpdate {
+  version: string;
+  current: string;
+  notes: string; // the release's description (Markdown)
+  date: string;
+}
+
+function desktop() {
+  return typeof window !== "undefined" ? window.__TAURI_INTERNALS__ : undefined;
+}
+
+/** Desktop app only: this app's version; undefined in the browser. */
+export async function appVersion(): Promise<string | undefined> {
+  return desktop()?.invoke<string>("app_version");
+}
+
+/** Desktop app only: the newer version on GitHub, null when this one is the latest, undefined in the browser. */
+export async function checkUpdate(): Promise<AppUpdate | null | undefined> {
+  return desktop()?.invoke<AppUpdate | null>("check_update");
+}
+
+/** Desktop app only: download and install the update found by checkUpdate, then restart (progress comes as
+ *  `desktop-update` window events: { downloaded, total }). */
+export async function installUpdate(): Promise<void> {
+  await desktop()?.invoke("install_update");
 }
 
 /** Desktop app only: a native folder picker. null = cancelled, undefined = not in the desktop app. */
@@ -796,7 +842,7 @@ export const api = {
     request<PublishAccounts>(`/api/publish/${platform}${channel ? `?channel=${encodeURIComponent(channel)}` : ""}`, { method: "DELETE" }),
   savePublishApp: (platform: Platform, keys: { client_id: string; client_secret: string }) =>
     request<PublishAccounts>(`/api/publish/${platform}/app`, { method: "PUT", json: keys }),
-  publishSettings: (platform: Platform, settings: Partial<Pick<PublishAccount, "auto" | "privacy" | "mode" | "when" | "times" | "comment" | "category" | "channel">>) =>
+  publishSettings: (platform: Platform, settings: Partial<Pick<PublishAccount, "auto" | "privacy" | "mode" | "when" | "times" | "comment" | "category" | "channel" | "page" | "account_id" | "share_to_feed">>) =>
     request<PublishAccounts>(`/api/publish/${platform}/settings`, { method: "PUT", json: settings }),
   /** `youtube` overrides the channel's visibility for this upload; `publish_at` uploads it private and YouTube makes it public then. */
   publishVideo: (

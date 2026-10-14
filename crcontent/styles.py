@@ -1,14 +1,11 @@
 """Looks for music videos: how the lyrics are drawn (font, colours, effect) and how the footage is graded."""
-import os
 from pathlib import Path
 
 from pydantic import BaseModel
 
-from .config import ASSETS_DIR, WINDOWS_FONTS
+from .config import ASSETS_DIR, LANGS, SYSTEM_FONT_DIRS
 
-USER_FONTS = Path(os.getenv("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts"
-
-# family name libass looks up -> font file (assets/fonts, Windows fonts or the user's installed fonts)
+# family name libass looks up -> font file (assets/fonts, or the system's / the user's installed fonts)
 FONTS: dict[str, dict[str, str]] = {
     "en": {
         "Arial": "arialbd.ttf",
@@ -37,19 +34,38 @@ FONTS: dict[str, dict[str, str]] = {
         "Khmer OS Freehand": "KhmerOSfreehand.ttf",
         "Khmer UI": "KhmerUIb.ttf",
         "Leelawadee UI": "LeelaUIb.ttf",
+        # the Khmer fonts that come with macOS
+        "Khmer Sangam MN": "Khmer Sangam MN.ttf",
+        "Khmer MN": "Khmer MN.ttc",
     },
 }
 
+# the same families under the file names macOS gives them
+MAC_FILES: dict[str, str] = {
+    "arialbd.ttf": "Arial Bold.ttf",
+    "impact.ttf": "Impact.ttf",
+    "georgiab.ttf": "Georgia Bold.ttf",
+    "trebucbd.ttf": "Trebuchet MS Bold.ttf",
+    "verdanab.ttf": "Verdana Bold.ttf",
+    "comicbd.ttf": "Comic Sans MS Bold.ttf",
+}
+
+
+def font_dirs() -> list[Path]:
+    return [d for d in (ASSETS_DIR / "fonts", *SYSTEM_FONT_DIRS) if d.is_dir()]
+
 
 def font_path(file: str) -> Path | None:
-    for folder in (ASSETS_DIR / "fonts", WINDOWS_FONTS, USER_FONTS):
-        if (folder / file).exists():
-            return folder / file
+    names = [file, MAC_FILES[file]] if file in MAC_FILES else [file]
+    for folder in font_dirs():
+        for name in names:
+            if (folder / name).exists():
+                return folder / name
     return None
 
 
 def available_fonts(lang: str) -> list[str]:
-    """Font families for `lang` that are installed on this PC."""
+    """Font families for `lang` that are installed on this computer."""
     return [name for name, file in FONTS.get(lang, FONTS["en"]).items() if font_path(file)]
 
 
@@ -83,7 +99,7 @@ class LyricStyle(BaseModel):
         fonts = available_fonts(lang)
         preset = PRESETS.get(s.preset, PRESETS["classic"])
         wanted = s.font or (preset["font_km"] if lang == "km" else preset["font"])
-        s.font = wanted if wanted in fonts else (fonts[0] if fonts else ("Khmer OS Battambang" if lang == "km" else "Arial"))
+        s.font = wanted if wanted in fonts else (fonts[0] if fonts else LANGS["km" if lang == "km" else "en"].font_name)
         return s
 
 

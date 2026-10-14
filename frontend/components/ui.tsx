@@ -19,13 +19,13 @@ type Size = "sm" | "md";
 
 const VARIANTS: Record<Variant, string> = {
   primary: "bg-cobalt text-white border-cobalt hover:bg-cobalt-deep hover:border-cobalt-deep",
-  secondary: "bg-panel text-ink border-line hover:border-ink-soft/60 hover:bg-paper/60",
+  secondary: "bg-panel text-ink border-line hover:border-line-strong hover:bg-sunken",
   ghost: "bg-transparent text-ink-soft border-transparent hover:bg-ink/[0.05] hover:text-ink",
   danger: "bg-transparent text-danger border-transparent hover:bg-danger/[0.07]",
 };
 const SIZES: Record<Size, string> = {
-  sm: "h-8 gap-1.5 px-2.5 text-[13px]",
-  md: "h-10 gap-2 px-4 text-sm",
+  sm: "h-8 gap-1.5 px-2.5 text-base",
+  md: "h-10 gap-2 px-4 text-md",
 };
 
 export function buttonClass(variant: Variant = "secondary", size: Size = "md", extra = "") {
@@ -101,7 +101,7 @@ export function Field({ label, htmlFor, hint, children }: { label: ReactNode; ht
 export function Message({ text, error }: { text: string; error?: boolean }) {
   if (!text) return null;
   return (
-    <p role={error ? "alert" : "status"} className={`m-0 text-[13.5px] ${error ? "text-danger" : "text-ink-soft"}`}>
+    <p role={error ? "alert" : "status"} className={`m-0 text-base ${error ? "text-danger" : "text-ink-soft"}`}>
       {text}
     </p>
   );
@@ -129,7 +129,7 @@ export function Segmented<T extends string>({
           <span
             lang={o.lang}
             className={`flex h-full items-center rounded-md px-3 font-semibold text-ink-soft transition-colors peer-checked:bg-panel peer-checked:text-ink peer-checked:shadow-sm peer-focus-visible:outline-2 peer-focus-visible:outline-cobalt ${
-              size === "sm" ? "text-[12.5px]" : "text-[13.5px]"
+              size === "sm" ? "text-sm" : "text-base"
             }`}
           >
             {o.label}
@@ -163,13 +163,13 @@ export function Tabs<T extends string>({
             role="tab"
             aria-selected={active}
             onClick={() => onChange(it.value)}
-            className={`-mb-px flex cursor-pointer items-center gap-1.5 border-b-2 bg-transparent px-0.5 pt-1 pb-2.5 text-sm font-semibold transition-colors ${
+            className={`-mb-px flex cursor-pointer items-center gap-1.5 border-b-2 bg-transparent px-0.5 pt-1 pb-2.5 text-md font-semibold transition-colors ${
               active ? "border-ink text-ink" : "border-transparent text-ink-soft hover:text-ink"
             }`}
           >
             {it.label}
             {it.count !== undefined && (
-              <span className={`rounded-full px-1.5 py-px text-[11px] leading-4 ${active ? "bg-ink text-white" : "bg-ink/[0.07] text-ink-soft"}`}>
+              <span className={`rounded-full px-1.5 py-px text-xs leading-4 ${active ? "bg-ink text-on-ink" : "bg-ink/[0.07] text-ink-soft"}`}>
                 {it.count}
               </span>
             )}
@@ -181,8 +181,8 @@ export function Tabs<T extends string>({
 }
 
 export function Chip({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "caption" | "ink" }) {
-  const t = { neutral: "bg-ink/[0.06] text-ink-soft", caption: "bg-caption text-ink", ink: "bg-ink text-white" }[tone];
-  return <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[11px] leading-none font-semibold ${t}`}>{children}</span>;
+  const t = { neutral: "bg-ink/[0.06] text-ink-soft", caption: "bg-caption text-media", ink: "bg-ink text-on-ink" }[tone];
+  return <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs leading-none font-semibold ${t}`}>{children}</span>;
 }
 
 /* ---------- Toasts ---------- */
@@ -207,8 +207,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             role={t.tone === "error" ? "alert" : "status"}
-            className={`pointer-events-auto flex items-start gap-3 rounded-xl px-4 py-3 text-[13.5px] shadow-[0_12px_32px_-12px_rgb(24_32_46/0.45)] ${
-              t.tone === "error" ? "bg-danger text-white" : "bg-ink text-white"
+            className={`pointer-events-auto flex items-start gap-3 rounded-xl px-4 py-3 text-base shadow-(--shadow-pop) ${
+              t.tone === "error" ? "bg-danger text-white" : "bg-ink text-on-ink"
             }`}
           >
             {t.tone === "success" && <span aria-hidden className="mt-1 size-2 shrink-0 rounded-full bg-caption" />}
@@ -217,7 +217,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               type="button"
               aria-label="Dismiss"
               onClick={() => setToasts((all) => all.filter((x) => x.id !== t.id))}
-              className="-mr-1 cursor-pointer rounded bg-transparent text-white/70 hover:text-white"
+              className="-mr-1 cursor-pointer rounded bg-transparent text-current opacity-70 hover:opacity-100"
             >
               <X className="size-4" />
             </button>
@@ -257,13 +257,79 @@ export function Drawer({
         className={`absolute top-0 bottom-0 flex w-[min(360px,90vw)] flex-col bg-paper shadow-2xl ${side === "left" ? "left-0" : "right-0"}`}
       >
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-panel px-4">
-          <span className="font-display text-base font-bold">{label}</span>
+          <span className="pane-title">{label}</span>
           <IconButton label="Close" onClick={onClose}>
             <X className="size-5" />
           </IconButton>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
       </div>
+    </div>
+  );
+}
+
+/* ---------- Pane resize handle ---------- */
+
+/** A thin draggable edge between two panes. `edge` is the side of the pane it sits on; dragging changes that pane's
+ *  width (double-click resets it). Arrow keys move it too, for keyboard users. */
+export function ResizeHandle({
+  edge,
+  width,
+  min,
+  max,
+  label,
+  onResize,
+  onReset,
+}: {
+  edge: "left" | "right";
+  width: number;
+  min: number;
+  max: number;
+  label: string;
+  onResize: (width: number, done: boolean) => void;
+  onReset: () => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const start = useRef({ x: 0, width: 0 });
+  const dir = edge === "right" ? 1 : -1; // a right edge grows to the right, a left edge to the left
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      aria-valuenow={width}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      tabIndex={0}
+      title={`${label} (double-click to reset)`}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        start.current = { x: e.clientX, width };
+        setDragging(true);
+      }}
+      onPointerMove={(e) => dragging && onResize(start.current.width + (e.clientX - start.current.x) * dir, false)}
+      onPointerUp={(e) => {
+        if (!dragging) return;
+        setDragging(false);
+        onResize(start.current.width + (e.clientX - start.current.x) * dir, true);
+      }}
+      onDoubleClick={onReset}
+      onKeyDown={(e) => {
+        const step = e.shiftKey ? 48 : 16;
+        if (e.key === "ArrowLeft") onResize(width - step * dir, true);
+        else if (e.key === "ArrowRight") onResize(width + step * dir, true);
+        else return;
+        e.preventDefault();
+      }}
+      className={`group absolute top-0 bottom-0 z-10 w-2 cursor-col-resize touch-none outline-none ${edge === "right" ? "-right-1" : "-left-1"}`}
+    >
+      <span
+        aria-hidden
+        className={`absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 transition-colors ${
+          dragging ? "bg-cobalt" : "bg-transparent group-hover:bg-cobalt/50 group-focus-visible:bg-cobalt"
+        }`}
+      />
     </div>
   );
 }

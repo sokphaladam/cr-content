@@ -1,13 +1,21 @@
-"""The AI add-on for the desktop app: torch (CUDA), Stable Diffusion, Whisper lyric timing and beat detection.
+"""The AI add-on: torch (CUDA), Stable Diffusion, Whisper lyric timing and beat detection, installed from Settings.
 
-The installed app's engine is frozen (PyInstaller) without these libraries: they are ~3 GB and most of it is
-torch. Instead, Settings offers a one-time install into <ROOT>/addons/ai:
-  1. the official embeddable Python of the same version as the engine (python.org),
-  2. pip, then the exact package versions the app is tested with (PINNED; torch from the CUDA 12.4 index).
+On a Mac it is the music extras only (Whisper lyric timing, beat detection, vocal separation): scene art needs an
+NVIDIA GPU with CUDA, which Macs don't have.
+
+How it installs depends on where the engine runs (_mode()):
+  venv        dev runs: pip installs into the engine's own Python (the project's .venv); usable right away.
+  embed       the Windows app: its engine is frozen (PyInstaller) without these libraries (~3 GB, mostly torch), so
+              the add-on goes to <ROOT>/addons/ai: the official embeddable Python of the engine's version
+              (python.org), pip, then the exact package versions the app is tested with (PINNED; CUDA 12.4 torch).
+  standalone  the Mac app: the same, with a python-build-standalone Python of the engine's minor version
+              (python.org has no portable Mac build).
 activate() then puts that Python's site-packages (and its full standard library, which PyInstaller trims) on the
-engine's import path, so `import torch` works as if it had been bundled. Dev runs use the project's .venv instead.
+engine's import path, so `import torch` works as if it had been bundled.
 """
+import hashlib
 import importlib
+import importlib.util
 import json
 import os
 import platform
@@ -15,6 +23,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import zipfile
@@ -38,6 +47,16 @@ PINNED = [
 ]
 APPROX_BYTES = 3_100_000_000  # what pip downloads in all (torch's CUDA wheel is ~2.5 GB of it)
 
+MAC = sys.platform == "darwin"
+# Mac: the music extras only, on the CPU (torch from PyPI); pip picks versions that fit the engine's Python
+MAC_PACKAGES = ["torch", "torchaudio", "stable-ts>=2.17", "openai-whisper", "demucs>=4.0", "librosa>=0.10",
+                "soundfile"]
+MAC_APPROX_BYTES = 400_000_000
+# what each kind of install makes importable
+MODULES = ("torch", "stable_whisper", "librosa") if MAC else ("torch", "diffusers", "stable_whisper", "librosa")
+STANDALONE_LATEST = ("https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/"
+                     "latest-release.json")
+
 _lock = threading.Lock()
 _state: dict = {"installing": False, "stage": "", "done": 0, "total": 0, "speed": 0, "error": ""}
 
@@ -50,30 +69,54 @@ def _ver() -> str:
     return platform.python_version()  # e.g. 3.11.9
 
 
+def _mode() -> str:
+    """How the add-on installs here (see the module docstring); "" = it can't."""
+    if not frozen():
+        return "venv"
+    return "embed" if sys.platform == "win32" else "standalone" if MAC else ""
+
+
+def _lib() -> Path:
+    """The add-on Python's standard library."""
+    return PY_DIR if sys.platform == "win32" else PY_DIR / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+
+
+def _stdlib() -> tuple[Path, ...]:
+    """Where the add-on Python's standard library is: a zip and the folder (Windows), or lib/pythonX.Y."""
+    if sys.platform == "win32":
+        return PY_DIR / f"python{''.join(_ver().split('.')[:2])}.zip", PY_DIR
+    return _lib(), _lib() / "lib-dynload"
+
+
 def _site() -> Path:
-    return PY_DIR / "Lib" / "site-packages"
+    return PY_DIR / "Lib" / "site-packages" if sys.platform == "win32" else _lib() / "site-packages"
+
+
+def _present() -> bool:
+    """The libraries the add-on provides can be imported in this engine."""
+    try:
+        return all(importlib.util.find_spec(m) for m in MODULES)
+    except (ImportError, ValueError):
+        return False
 
 
 def ready() -> bool:
+    if _mode() == "venv":
+        return _present()
     return MARKER.exists() and (_site() / "torch").exists()
 
 
 def needed() -> bool:
-    """Does this engine need the add-on for AI features? (Dev runs have the libraries in .venv.)"""
-    if not frozen():
-        return False
-    try:
-        importlib.import_module("torch")
-        return False
-    except ImportError:
-        return True
+    """Can the add-on be installed here, and is it missing?"""
+    return bool(_mode()) and not ready() and not _present()
 
 
 class _SubmoduleFinder:
     """Finds submodules the engine's bundled copy of a package lacks, in the add-on's complete copy.
 
     PyInstaller bundles only the parts of a package the engine imports (FastAPI's jinja2, say), and Python then
-    searches only that package's own folder for its submodules, so diffusers' `import jinja2.meta` would fail.
+    searches only that package's own folder for its submodules, so diffusers' `import jinja2.meta` would fail. The
+    same goes for the standard library (torch's `import unittest.mock`, when the engine bundled only `unittest`).
     This finder runs last (after the bundled and normal finders gave up) and looks in the add-on instead."""
 
     def find_spec(self, name, path=None, target=None):
@@ -82,22 +125,22 @@ class _SubmoduleFinder:
         parts = name.split(".")
         if len(parts) < 2:
             return None  # top-level packages are found through sys.path
-        folder = _site().joinpath(*parts[:-1])
-        return PathFinder.find_spec(name, [str(folder)]) if folder.is_dir() else None
+        folders = [root.joinpath(*parts[:-1]) for root in (_site(), *_stdlib())]
+        # a folder inside the Windows stdlib zip isn't a real folder; PathFinder still searches it
+        return PathFinder.find_spec(name, [str(f) for f in folders if f.is_dir() or ".zip" in str(f)])
 
 
 def activate() -> bool:
     """Make an installed add-on importable in this (frozen) engine. Safe to call again; True when active."""
     if not frozen() or not ready():
         return False
-    major_minor = "".join(_ver().split(".")[:2])
-    for path in (_site(), PY_DIR / f"python{major_minor}.zip", PY_DIR):
+    for path in (_site(), *_stdlib()):
         # appended: the engine's own (bundled) modules still win; the add-on fills in what's missing, including
         # standard-library modules PyInstaller left out because the engine itself never imports them
         if str(path) not in sys.path:
             sys.path.append(str(path))
     for dll_dir in (PY_DIR, _site() / "torch" / "lib"):
-        if dll_dir.exists():
+        if dll_dir.exists() and hasattr(os, "add_dll_directory"):  # Windows
             os.add_dll_directory(str(dll_dir))
     if not any(isinstance(f, _SubmoduleFinder) for f in sys.meta_path):
         sys.meta_path.append(_SubmoduleFinder())
@@ -108,7 +151,10 @@ def activate() -> bool:
 def status() -> dict:
     with _lock:
         state = dict(_state)
-    return {"needed": needed() and not ready(), "ready": ready(), "folder": str(ADDON_DIR), **state}
+    venv = _mode() == "venv"
+    return {"needed": needed(), "ready": ready(), "scope": "music" if MAC else "all",
+            "size": "about 1 GB" if MAC else "about 3 GB", "folder": str(Path(sys.prefix) if venv else ADDON_DIR),
+            **state}
 
 
 def _set(**kw) -> None:
@@ -134,10 +180,54 @@ def _fetch(url: str, dest: Path, stage: str) -> None:
 
 
 def _python() -> Path:
-    return PY_DIR / "python.exe"
+    if _mode() == "venv":
+        return Path(sys.executable)
+    return PY_DIR / "python.exe" if sys.platform == "win32" else PY_DIR / "bin" / "python3"
 
 
 def _prepare_python() -> None:
+    if _mode() == "standalone":
+        _prepare_standalone()
+    elif _mode() == "embed":
+        _prepare_embed()
+
+
+def _standalone() -> tuple[str, str]:
+    """python-build-standalone's newest Mac build of the engine's Python (same minor version, so the same ABI):
+    (download url, sha256). Its small release index and checksum list, not GitHub's API (too slow to list)."""
+    arch = {"arm64": "aarch64"}.get(platform.machine(), platform.machine())
+    latest = requests.get(STANDALONE_LATEST, timeout=30)
+    latest.raise_for_status()
+    prefix = latest.json()["asset_url_prefix"]
+    sums = requests.get(f"{prefix}/SHA256SUMS", timeout=30)
+    sums.raise_for_status()
+    minor = ".".join(_ver().split(".")[:2])
+    name = re.compile(rf"^cpython-{re.escape(minor)}\.\d+\+\d+-{arch}-apple-darwin-install_only\.tar\.gz$")
+    for line in sums.text.splitlines():
+        digest, _, file = line.strip().partition("  ")
+        if name.match(file):
+            return f"{prefix}/{file}", digest
+    raise RuntimeError(f"No portable Python {minor} for this Mac was found to install the add-on into.")
+
+
+def _prepare_standalone() -> None:
+    """A portable Python of the engine's version (it comes with pip)."""
+    if _python().exists() and (_site() / "pip").exists():
+        return
+    _set(stage="Finding Python")
+    url, digest = _standalone()
+    archive = ADDON_DIR / url.rsplit("/", 1)[-1]
+    if not archive.exists():
+        _fetch(url, archive, "Downloading Python")
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
+        archive.unlink()
+        raise RuntimeError("The Python download was damaged. Try again.")
+    shutil.rmtree(PY_DIR, ignore_errors=True)
+    with tarfile.open(archive) as t:
+        t.extractall(ADDON_DIR, filter="data")  # the archive holds python/...
+
+
+def _prepare_embed() -> None:
     """The embeddable Python, with `import site` switched on so pip and site-packages work."""
     if _python().exists() and (_site() / "pip").exists():
         return
@@ -158,7 +248,7 @@ def _prepare_python() -> None:
 
 
 def _run(cmd: list[str], on_line=None) -> None:
-    proc = subprocess.Popen(cmd, cwd=PY_DIR, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    proc = subprocess.Popen(cmd, cwd=ADDON_DIR, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace", bufsize=1,
                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     tail: list[str] = []
@@ -186,9 +276,11 @@ def _install_packages() -> None:
     fetched = 0  # bytes really downloaded, for the speed
     start = time.time()
 
+    approx = MAC_APPROX_BYTES if MAC else APPROX_BYTES
+
     def show() -> None:
         got = finished + current["done"]
-        _set(done=got, total=max(APPROX_BYTES, got), speed=int(fetched / max(time.time() - start, 0.1)))
+        _set(done=got, total=max(approx, got), speed=int(fetched / max(time.time() - start, 0.1)))
 
     def on_line(line: str) -> None:
         nonlocal finished, fetched
@@ -208,26 +300,30 @@ def _install_packages() -> None:
             _set(stage=f"Downloading {m.group(2)}")
             show()
         elif line.startswith("Installing collected packages"):
-            _set(stage="Installing (a few minutes, unpacking ~6 GB)", done=APPROX_BYTES, total=APPROX_BYTES, speed=0)
+            _set(stage="Installing (a few minutes)", done=approx, total=approx, speed=0)
         elif line.startswith(("Building wheel", "Preparing metadata")):
             _set(stage="Preparing packages")
 
-    _set(stage="Downloading packages", done=0, total=APPROX_BYTES)
+    _set(stage="Downloading packages", done=0, total=approx)
+    packages = MAC_PACKAGES if MAC else ["--extra-index-url", TORCH_INDEX, *PINNED]
     _run([str(_python()), "-m", "pip", "install", "--no-warn-script-location", "--disable-pip-version-check",
-          "--progress-bar", "raw", "--extra-index-url", TORCH_INDEX, *PINNED], on_line)
+          "--progress-bar", "raw", *packages], on_line)
 
 
 def _install() -> None:
     try:
         ADDON_DIR.mkdir(parents=True, exist_ok=True)
-        free = shutil.disk_usage(ADDON_DIR).free
-        if free < 10e9:
-            raise RuntimeError(f"The AI add-on needs about 10 GB free on {ADDON_DIR.anchor} ({free / 1e9:.1f} GB free).")
+        free = shutil.disk_usage(_python().parent if _mode() == "venv" else ADDON_DIR).free
+        need = 3e9 if MAC else 10e9
+        if free < need:
+            raise RuntimeError(f"The AI add-on needs about {need / 1e9:.0f} GB free disk space ({free / 1e9:.1f} GB free).")
         _prepare_python()
         _install_packages()
-        MARKER.write_text(json.dumps({"python": _ver(), "packages": PINNED,
-                                      "installed": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=2))
+        if _mode() != "venv":
+            MARKER.write_text(json.dumps({"python": _ver(), "packages": MAC_PACKAGES if MAC else PINNED,
+                                          "installed": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=2))
         activate()
+        importlib.invalidate_caches()  # the new packages can be imported without a restart
         _set(stage="Installed", error="")
     except Exception as e:
         _set(error=f"{type(e).__name__}: {str(e).strip()[-600:]}", stage="")
@@ -237,6 +333,9 @@ def _install() -> None:
 
 def install() -> bool:
     """Start installing in the background (no-op while one runs). Progress comes from status()."""
+    if not _mode():
+        _set(error="The AI add-on can't be installed on this system.")
+        return False
     with _lock:
         if _state["installing"]:
             return False

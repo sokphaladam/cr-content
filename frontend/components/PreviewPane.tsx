@@ -24,7 +24,7 @@ function SongPlayer({ detail }: { detail: VideoDetail }) {
       <div className="grid gap-1">
         <p lang={detail.lang} className="m-0 font-display text-2xl leading-tight font-extrabold">{detail.title}</p>
         {detail.song && (detail.song.genre || detail.song.bpm > 0) && (
-          <p className="m-0 text-[13px] text-white/60">{[detail.song.genre, detail.song.bpm > 0 ? `${detail.song.bpm} bpm` : ""].filter(Boolean).join(", ")}</p>
+          <p className="m-0 text-base text-white/60">{[detail.song.genre, detail.song.bpm > 0 ? `${detail.song.bpm} bpm` : ""].filter(Boolean).join(", ")}</p>
         )}
       </div>
       <audio key={detail.name} src={outputUrl(detail.name, "song.mp3")} controls className="w-full" />
@@ -62,7 +62,7 @@ function SongCard({
   const [settings, setSettings] = useState<MusicVideoSettings>(() => settingsOf(detail));
   const sample = detail.song?.sections.flatMap((s) => s.lyrics).find((l) => l.trim()) ?? detail.title;
   return (
-    <section className="grid gap-3 rounded-xl border border-line bg-panel p-3.5">
+    <section className="grid gap-3 card p-3.5">
       <div className="grid gap-1.5">
         <Button variant="secondary" icon={<ListMusic className="size-4" />} onClick={() => onOpenTiming(detail.name)}>
           Edit lyric timing
@@ -79,14 +79,14 @@ function SongCard({
         <Button variant={versions.length ? "secondary" : "primary"} icon={<Film className="size-4" />} onClick={() => onMakeVideo(detail.name, settings)}>
           {versions.length ? "Make a new version" : "Make music video"}
         </Button>
-        <p className="m-0 text-xs text-ink-soft">
+        <p className="m-0 text-sm text-ink-soft">
           {detail.aspect === "16:9" ? "16:9 landscape" : "9:16 vertical"}. Footage cut on the beat with karaoke lyrics, using the timing as it is now. Takes a few
           minutes{own ? ", longer for a full song" : ""}. Earlier versions are kept.
         </p>
       </div>
       {versions.length > 0 && (
         <div className="grid gap-1">
-          <h3 className="m-0 text-sm font-semibold">Music videos ({versions.length})</h3>
+          <h3 className="m-0 text-md font-semibold">Music videos ({versions.length})</h3>
           <ul className="m-0 grid list-none gap-0.5 p-0">
             {versions.map((v, i) => (
               <li key={v.name}>
@@ -101,9 +101,9 @@ function SongCard({
                   >
                     {!v.thumb && <Film className="size-3.5" />}
                   </span>
-                  <span className="min-w-0 text-[13px]">
+                  <span className="min-w-0 text-base">
                     <span className="block font-semibold text-ink">Version {versions.length - i}</span>
-                    <span className="block text-xs text-ink-soft">{relativeTime(v.created)}</span>
+                    <span className="block text-sm text-ink-soft">{relativeTime(v.created)}</span>
                   </span>
                 </button>
               </li>
@@ -111,11 +111,11 @@ function SongCard({
           </ul>
         </div>
       )}
-      <h3 className="m-0 text-sm font-semibold">Lyrics</h3>
-      <div lang={detail.lang} className="grid max-h-[260px] gap-3 overflow-auto text-[13px] leading-relaxed">
+      <h3 className="m-0 text-md font-semibold">Lyrics</h3>
+      <div lang={detail.lang} className="grid max-h-[260px] gap-3 overflow-auto text-base leading-relaxed">
         {detail.song?.sections.map((s, i) => (
           <div key={i}>
-            <p className="m-0 text-xs font-semibold text-ink-soft">
+            <p className="m-0 text-sm font-semibold text-ink-soft">
               {s.name}
               {s.seconds > 0 ? ` · ${s.seconds}s` : ""}
             </p>
@@ -161,7 +161,7 @@ function SongCard({
 function Phone({ children, landscape = false }: { children: React.ReactNode; landscape?: boolean }) {
   return (
     <div
-      className={`mx-auto w-full shrink-0 bg-ink shadow-[0_24px_48px_-24px_rgb(24_32_46/0.55)] ${
+      className={`mx-auto w-full shrink-0 bg-media shadow-[0_24px_48px_-24px_rgb(24_32_46/0.55)] ${
         landscape ? "aspect-video rounded-xl p-1.5" : "aspect-[9/16] max-w-[300px] rounded-[32px] p-2"
       }`}
     >
@@ -233,17 +233,17 @@ function Progress({ job, title }: { job: Job | null; title: string }) {
   const finished = job?.status === "done";
   return (
     <div className="flex h-full flex-col gap-3.5 px-5 pt-7 pb-4">
-      <p className="m-0 font-display text-[17px] leading-tight font-bold">{title}</p>
+      <p className="m-0 font-display text-xl leading-tight font-bold">{title}</p>
       <ol className="m-0 grid list-none gap-2 p-0">
         {stepsFor(job).map((label, i) => {
           const n = i + 1;
           const done = finished || n < step;
           const active = !finished && n === step;
           return (
-            <li key={label} className={`flex items-center gap-2.5 text-sm ${done ? "text-white/85" : active ? "font-semibold text-white" : "text-white/45"}`}>
+            <li key={label} className={`flex items-center gap-2.5 text-md ${done ? "text-white/85" : active ? "font-semibold text-white" : "text-white/45"}`}>
               <span
-                className={`grid size-[22px] place-items-center rounded-full text-xs font-semibold ${
-                  done ? "bg-white/15" : active ? "animate-pulse bg-caption text-ink" : "border border-white/30"
+                className={`grid size-[22px] place-items-center rounded-full text-sm font-semibold ${
+                  done ? "bg-white/15" : active ? "animate-pulse bg-caption text-media" : "border border-white/30"
                 }`}
               >
                 {done ? <Check className="size-3.5" /> : n}
@@ -253,7 +253,7 @@ function Progress({ job, title }: { job: Job | null; title: string }) {
           );
         })}
       </ol>
-      <pre ref={log} aria-live="polite" className="m-0 flex-1 overflow-auto font-mono text-[11px] leading-normal break-words whitespace-pre-wrap text-white/55">
+      <pre ref={log} aria-live="polite" className="m-0 flex-1 overflow-auto font-mono text-xs leading-normal break-words whitespace-pre-wrap text-white/55">
         {job?.log.length ? job.log.join("\n") : job?.status === "queued" ? "Waiting for the previous render to finish…" : "Starting…"}
         {job?.status === "error" && <span className="mt-2 block text-[#ff9a8f]">{job.error}</span>}
       </pre>
@@ -268,12 +268,12 @@ function FactsCard({ detail }: { detail: VideoDetail }) {
   const comment = detail.script?.pinned_comment ?? "";
   if (!facts.length && !comment) return null;
   return (
-    <section aria-labelledby={`facts-${detail.name}`} className="grid gap-2 rounded-xl border border-line bg-panel p-3.5">
-      <h3 id={`facts-${detail.name}`} className="m-0 font-display text-[14.5px] font-bold">
+    <section aria-labelledby={`facts-${detail.name}`} className="grid gap-2 card p-3.5">
+      <h3 id={`facts-${detail.name}`} className="m-0 font-display text-md font-bold">
         Fact check
       </h3>
       {facts.length > 0 && (
-        <ul className="m-0 grid gap-1 pl-4 text-[12.5px] leading-snug text-ink-soft">
+        <ul className="m-0 grid gap-1 pl-4 text-sm leading-snug text-ink-soft">
           {facts.map((f, i) => (
             <li key={i}>{f}</li>
           ))}
@@ -281,7 +281,7 @@ function FactsCard({ detail }: { detail: VideoDetail }) {
       )}
       {comment && (
         <>
-          <p className="m-0 rounded-lg bg-paper px-2.5 py-2 text-[12.5px] leading-snug whitespace-pre-line">{comment}</p>
+          <p className="m-0 rounded-lg bg-paper px-2.5 py-2 text-sm leading-snug whitespace-pre-line">{comment}</p>
           <Button
             size="sm"
             variant="secondary"
@@ -340,8 +340,8 @@ ${o.description}
 `);
 
   return (
-    <section aria-label="Post text" className="mx-auto w-full max-w-[300px] rounded-xl border border-line bg-panel">
-      <pre lang={detail.lang} className="m-0 max-h-[160px] overflow-auto p-3.5 font-sans text-[13px] leading-relaxed whitespace-pre-wrap">
+    <section aria-label="Post text" className="mx-auto w-full max-w-[300px] card">
+      <pre lang={detail.lang} className="m-0 max-h-[160px] overflow-auto p-3.5 font-sans text-base leading-relaxed whitespace-pre-wrap">
         {post || "No caption saved for this video."}
       </pre>
       <div className="grid gap-2 border-t border-line p-3.5">
@@ -356,25 +356,25 @@ ${o.description}
           value={postIdea}
           onChange={(e) => setPostIdea(e.target.value)}
           placeholder="Mysterious and curious, aimed at travel lovers, mention the 3 tips"
-          className="field-input resize-y py-1.5 text-[13px] leading-snug"
+          className="field-input resize-y py-1.5 text-base leading-snug"
         />
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[12px] text-ink-soft">Tone, audience or words to include.</span>
+          <span className="text-sm text-ink-soft">Tone, audience or words to include.</span>
           <Button size="sm" variant={options && !postIdea ? "ghost" : "primary"} icon={<Sparkles className="size-3.5" />} loading={suggesting} onClick={suggest}>
             {options ? "New ideas" : "Suggest titles"}
           </Button>
         </div>
-        {suggesting && <p className="m-0 text-[12.5px] text-ink-soft">Claude is writing titles and descriptions from different angles…</p>}
+        {suggesting && <p className="m-0 text-sm text-ink-soft">Claude is writing titles and descriptions from different angles…</p>}
         {options && (
           <ul className={`m-0 grid list-none gap-2 p-0 ${suggesting ? "opacity-50" : ""}`}>
             {options.map((o, i) => (
               <li key={`${i}-${o.title}`} className={`grid gap-1.5 rounded-lg border p-2.5 ${isCurrent(o) ? "border-cobalt" : "border-line"}`}>
-                <span className="text-[10.5px] font-semibold tracking-wide text-ink-soft uppercase">
+                <span className="text-2xs font-semibold tracking-wide text-ink-soft uppercase">
                   {i === 0 ? `${o.angle} · Top pick` : o.angle}
                 </span>
-                <p lang={detail.lang} className="m-0 font-display text-[14.5px] leading-snug font-bold">{o.title}</p>
-                <p lang={detail.lang} className="m-0 text-[12.5px] leading-snug whitespace-pre-wrap text-ink-soft">{o.description}</p>
-                <p className="m-0 text-[12px] leading-snug text-cobalt">{o.hashtags.map((h) => `#${h}`).join(" ")}</p>
+                <p lang={detail.lang} className="m-0 font-display text-md leading-snug font-bold">{o.title}</p>
+                <p lang={detail.lang} className="m-0 text-sm leading-snug whitespace-pre-wrap text-ink-soft">{o.description}</p>
+                <p className="m-0 text-sm leading-snug text-cobalt">{o.hashtags.map((h) => `#${h}`).join(" ")}</p>
                 <div className="flex gap-0.5">
                   <Button
                     size="sm"
@@ -532,7 +532,7 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
     i.text === saved.text && i.at === saved.at && i.style === saved.style && i.emphasis === saved.emphasis && (i.image ?? "") === saved.image;
 
   return (
-    <section aria-label="Thumbnail" className="mx-auto grid w-full max-w-[300px] gap-3 rounded-xl border border-line bg-panel p-3.5">
+    <section aria-label="Thumbnail" className="mx-auto grid w-full max-w-[300px] gap-3 card p-3.5">
       <div className="grid gap-2">
         <label className="field-label" htmlFor={`cover-idea-${detail.name}`}>
           Cover idea <span className="font-normal">optional</span>
@@ -545,15 +545,15 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
           value={coverIdea}
           onChange={(e) => setCoverIdea(e.target.value)}
           placeholder="A silhouette against a neon city at night, the headline asks a question"
-          className="field-input resize-y py-1.5 text-[13px] leading-snug"
+          className="field-input resize-y py-1.5 text-base leading-snug"
         />
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[12px] text-ink-soft">Describe the picture, words or mood you want.</span>
+          <span className="text-sm text-ink-soft">Describe the picture, words or mood you want.</span>
           <Button size="sm" variant={ideas && !coverIdea ? "ghost" : "primary"} icon={<Sparkles className="size-3.5" />} loading={suggesting} onClick={suggest}>
             {ideas ? "New ideas" : "Suggest covers"}
           </Button>
         </div>
-        {suggesting && <p className="m-0 text-[12.5px] text-ink-soft">Claude is picking frames, writing headlines and designing each cover… about a minute.</p>}
+        {suggesting && <p className="m-0 text-sm text-ink-soft">Claude is picking frames, writing headlines and designing each cover… about a minute.</p>}
         {ideas && (
           <>
             <div className={`grid grid-cols-4 gap-1.5 ${suggesting ? "opacity-50" : ""}`}>
@@ -565,14 +565,14 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
                   onClick={() => generate({ text: idea.text, at: idea.at, style: idea.style, emphasis: idea.emphasis, image: idea.image ?? "", design: idea.design })}
                   title={`Use “${idea.text}” (${idea.style}, ${idea.image ? "stock photo" : `${idea.at.toFixed(1)} s`})`}
                   aria-label={`Use cover: ${idea.text}`}
-                  className={`relative ${detail.aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"} cursor-pointer overflow-hidden rounded-md bg-ink outline outline-offset-1 transition hover:brightness-110 disabled:cursor-wait ${
+                  className={`relative ${detail.aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"} cursor-pointer overflow-hidden rounded-md bg-media outline outline-offset-1 transition hover:brightness-110 disabled:cursor-wait ${
                     isCurrent(idea) ? "outline-2 outline-cobalt" : "outline-1 outline-line"
                   }`}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element -- local engine file */}
                   <img src={`${outputUrl(detail.name, idea.file)}?v=${ideasV}`} alt="" className="h-full w-full object-cover" />
                   {idea.image && (
-                    <span className="absolute inset-x-0 bottom-0 bg-black/60 py-px text-center text-[9px] font-semibold text-white">Photo</span>
+                    <span className="absolute inset-x-0 bottom-0 bg-black/60 py-px text-center text-2xs font-semibold text-white">Photo</span>
                   )}
                   {isCurrent(idea) && (
                     <span className="absolute top-1 right-1 grid size-4 place-items-center rounded-full bg-cobalt text-white">
@@ -582,12 +582,12 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
                 </button>
               ))}
             </div>
-            <p className="m-0 text-[12px] text-ink-soft">{ideas.note || "Click one to use it, then fine-tune below."}</p>
+            <p className="m-0 text-sm text-ink-soft">{ideas.note || "Click one to use it, then fine-tune below."}</p>
           </>
         )}
       </div>
       <div className="flex gap-3">
-        <div className={`relative shrink-0 overflow-hidden rounded-md bg-ink ${detail.aspect === "16:9" ? "aspect-video w-[132px]" : "aspect-[9/16] w-[84px]"}`}>
+        <div className={`relative shrink-0 overflow-hidden rounded-md bg-media ${detail.aspect === "16:9" ? "aspect-video w-[132px]" : "aspect-[9/16] w-[84px]"}`}>
           {image && image !== saved.image ? (
             // eslint-disable-next-line @next/next/no-img-element -- local engine file
             <img src={fileUrl(image)} alt="Chosen background photo" className="h-full w-full object-cover" />
@@ -622,7 +622,7 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="No headline: just the frame"
-            className="field-input resize-none py-1.5 text-[13px] leading-snug"
+            className="field-input resize-none py-1.5 text-base leading-snug"
           />
         </div>
       </div>
@@ -637,14 +637,14 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
           value={emphasis}
           onChange={(e) => setEmphasis(e.target.value)}
           placeholder="Auto: a number or the key word"
-          className="field-input h-8 text-[13px]"
+          className="field-input h-8 text-base"
         />
       </div>
       <div className="grid justify-items-start gap-1">
         <span className="field-label">Style</span>
         <Segmented name="thumb-style" size="sm" value={style} options={THUMB_STYLES} onChange={setStyle} />
         {style === "designed" && (
-          <span className="text-[12px] text-ink-soft">Claude lays out the whole cover. New words keep the design; the first one takes a minute.</span>
+          <span className="text-sm text-ink-soft">Claude lays out the whole cover. New words keep the design; the first one takes a minute.</span>
         )}
       </div>
       <div className="grid gap-1">
@@ -743,9 +743,9 @@ export function PreviewPane({
   const showSong = isSong && !showVideo;
 
   return (
-    <div className="grid content-start gap-4 p-5">
-      <div className="flex h-8 items-center justify-between">
-        <h2 className="m-0 font-display text-base font-bold">
+    <div className="grid content-start">
+      <div className="pane-header sticky top-0 z-10 px-5">
+        <h2 className="pane-title m-0">
           {showProgress ? (job?.kind === "song" ? "Composing" : job?.kind === "lyrics_sync" ? "Syncing lyrics" : "Rendering") : showVideo ? (detail?.kind === "music_video" ? "Music video" : "Video") : showSong ? "Song" : "Preview"}
         </h2>
         {canToggle && (
@@ -762,65 +762,67 @@ export function PreviewPane({
         )}
       </div>
 
-      <Phone landscape={!showProgress && !scene && detail?.aspect === "16:9"}>
-        {showProgress ? (
-          <Progress job={job} title={job?.kind === "excel" ? job.title : jobTitle} />
-        ) : showVideo && detail ? (
-          <video
-            key={detail.name}
-            src={`${outputUrl(detail.name, "video.mp4")}?v=${encodeURIComponent(detail.created)}`}
-            controls
-            playsInline
-            className="block h-full w-full bg-black object-cover"
-          />
-        ) : showSong && detail ? (
-          <SongPlayer detail={detail} />
-        ) : scene && live?.timeline.active ? (
-          <LiveFrame timeline={live.timeline} lang={lang} edit={live.edit} />
-        ) : scene ? (
-          <ScenePreview scene={scene} index={sceneIndex} total={sceneCount} lang={lang} />
-        ) : (
-          <div className="grid h-full place-items-center p-7 text-center">
-            <p className="m-0 font-display text-2xl leading-tight font-extrabold">
-              <mark>Your video</mark> shows up here
-            </p>
-          </div>
-        )}
-      </Phone>
-
-      {!showProgress && !showVideo && scene && live && <LiveControls timeline={live.timeline} music={live.music} />}
-      {!showProgress && !showVideo && scene && live?.options && (
-        <CaptionPanel style={live.edit.captions} onChange={live.edit.setCaptions} options={live.options} lang={lang} />
-      )}
-      {!showProgress && !showVideo && scene && !live && (
-        <p className="m-0 text-center text-xs text-ink-soft">Approximate look of the scene you&apos;re editing. Click a scene to preview it.</p>
-      )}
-      {showVideo && detail && <ThumbnailCard key={`thumb-${detail.name}`} detail={detail} onChange={onThumbnail} />}
-      {showVideo && detail?.kind === "music_video" && (
-        <section className="grid gap-1.5 rounded-xl border border-line bg-panel p-3.5">
-          {detail.song_folder ? (
-            <>
-              <Button variant="secondary" icon={<ListMusic className="size-4" />} onClick={() => onOpenTiming(detail.song_folder)}>
-                Edit lyric timing
-              </Button>
-              {detail.idea && (
-                <p className="m-0 text-xs text-ink-soft">
-                  Made with the idea: <span className="text-ink">{detail.idea}</span>
-                </p>
-              )}
-              <p className="m-0 text-xs text-ink-soft">This video stays as it is. Fix the timing, then make a new version from the song.</p>
-            </>
+      <div className="grid content-start gap-4 p-5">
+        <Phone landscape={!showProgress && !scene && detail?.aspect === "16:9"}>
+          {showProgress ? (
+            <Progress job={job} title={job?.kind === "excel" ? job.title : jobTitle} />
+          ) : showVideo && detail ? (
+            <video
+              key={detail.name}
+              src={`${outputUrl(detail.name, "video.mp4")}?v=${encodeURIComponent(detail.created)}`}
+              controls
+              playsInline
+              className="block h-full w-full bg-black object-cover"
+            />
+          ) : showSong && detail ? (
+            <SongPlayer detail={detail} />
+          ) : scene && live?.timeline.active ? (
+            <LiveFrame timeline={live.timeline} lang={lang} edit={live.edit} />
+          ) : scene ? (
+            <ScenePreview scene={scene} index={sceneIndex} total={sceneCount} lang={lang} />
           ) : (
-            <p className="m-0 text-xs text-ink-soft">The song this video was made from has been deleted, so its timing can&apos;t be edited.</p>
+            <div className="grid h-full place-items-center p-7 text-center">
+              <p className="m-0 font-display text-2xl leading-tight font-extrabold">
+                <mark>Your video</mark> shows up here
+              </p>
+            </div>
           )}
-        </section>
-      )}
-      {isSong && detail && (
-        <SongCard key={`song-${detail.name}`} detail={detail} onDelete={onDeleteVideo} onMakeVideo={onMakeMusicVideo} onOpenTiming={onOpenTiming} onSelectVideo={onSelectVideo} />
-      )}
-      {showVideo && detail && <PostCard key={`post-${detail.name}`} detail={detail} onDelete={onDeleteVideo} />}
-      {showVideo && detail && <FactsCard key={`facts-${detail.name}`} detail={detail} />}
-      {showVideo && detail && <PublishCard key={`publish-${detail.name}`} detail={detail} onOpenSettings={onOpenSettings} />}
+        </Phone>
+
+        {!showProgress && !showVideo && scene && live && <LiveControls timeline={live.timeline} music={live.music} />}
+        {!showProgress && !showVideo && scene && live?.options && (
+          <CaptionPanel style={live.edit.captions} onChange={live.edit.setCaptions} options={live.options} lang={lang} />
+        )}
+        {!showProgress && !showVideo && scene && !live && (
+          <p className="m-0 text-center text-sm text-ink-soft">Approximate look of the scene you&apos;re editing. Click a scene to preview it.</p>
+        )}
+        {showVideo && detail && <ThumbnailCard key={`thumb-${detail.name}`} detail={detail} onChange={onThumbnail} />}
+        {showVideo && detail?.kind === "music_video" && (
+          <section className="grid gap-1.5 card p-3.5">
+            {detail.song_folder ? (
+              <>
+                <Button variant="secondary" icon={<ListMusic className="size-4" />} onClick={() => onOpenTiming(detail.song_folder)}>
+                  Edit lyric timing
+                </Button>
+                {detail.idea && (
+                  <p className="m-0 text-sm text-ink-soft">
+                    Made with the idea: <span className="text-ink">{detail.idea}</span>
+                  </p>
+                )}
+                <p className="m-0 text-sm text-ink-soft">This video stays as it is. Fix the timing, then make a new version from the song.</p>
+              </>
+            ) : (
+              <p className="m-0 text-sm text-ink-soft">The song this video was made from has been deleted, so its timing can&apos;t be edited.</p>
+            )}
+          </section>
+        )}
+        {isSong && detail && (
+          <SongCard key={`song-${detail.name}`} detail={detail} onDelete={onDeleteVideo} onMakeVideo={onMakeMusicVideo} onOpenTiming={onOpenTiming} onSelectVideo={onSelectVideo} />
+        )}
+        {showVideo && detail && <PostCard key={`post-${detail.name}`} detail={detail} onDelete={onDeleteVideo} />}
+        {showVideo && detail && <FactsCard key={`facts-${detail.name}`} detail={detail} />}
+        {showVideo && detail && <PublishCard key={`publish-${detail.name}`} detail={detail} onOpenSettings={onOpenSettings} />}
+      </div>
     </div>
   );
 }

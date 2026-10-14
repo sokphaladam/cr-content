@@ -15,7 +15,7 @@ import {
   type PublishAccounts,
 } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
-import { PLATFORM_NAMES } from "./Settings";
+import { PLATFORM_NAMES, PLATFORMS } from "./Settings";
 import { Button, IconButton, Segmented, useToast } from "./ui";
 
 const PLATFORM_LABEL: Record<string, string> = { tiktok: "TikTok", youtube: "YouTube Shorts", instagram: "Instagram Reels", x: "X" };
@@ -60,9 +60,9 @@ function when(at: string) {
 
 function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="rounded-xl border border-line bg-panel">
+    <section className="card">
       <header className="flex min-h-12 items-center justify-between gap-3 border-b border-line px-4 py-2">
-        <h2 className="m-0 font-display text-[15.5px] font-bold">{title}</h2>
+        <h2 className="card-title m-0">{title}</h2>
         {action}
       </header>
       <div className="p-4">{children}</div>
@@ -94,13 +94,13 @@ function NewCampaign({ claudeReady, onCreated }: { claudeReady: boolean; onCreat
   return (
     <div className="mx-auto grid max-w-[720px] gap-6 py-4">
       <header>
-        <h1 className="m-0 font-display text-[28px] leading-tight font-extrabold tracking-tight">Add a campaign</h1>
-        <p className="m-0 mt-1 max-w-[60ch] text-[14px] text-ink-soft">
-          Open the campaign on Whop, select everything on the page (Ctrl+A), copy it and paste it here. Claude pulls out the brief, the content
+        <h1 className="page-title m-0">Add a campaign</h1>
+        <p className="page-intro m-0 mt-1">
+          Open the campaign on Whop, select everything on the page (Select All), copy it and paste it here. Claude pulls out the brief, the content
           requirements and the links to the reference materials.
         </p>
       </header>
-      <div className="grid gap-4 rounded-xl border border-line bg-panel p-4">
+      <div className="grid gap-4 card p-4">
         <label className="grid gap-1.5">
           <span className="field-label">
             Campaign link <span className="font-normal">optional</span>
@@ -111,14 +111,14 @@ function NewCampaign({ claudeReady, onCreated }: { claudeReady: boolean; onCreat
           <span className="field-label">Campaign page</span>
           <textarea
             rows={12}
-            className="field-input resize-y text-[13.5px] leading-relaxed"
+            className="field-input resize-y text-base leading-relaxed"
             placeholder={"Paste the whole campaign: title, pay rate, budget, platforms, the brief, content requirements and the links to the content you may clip."}
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
         </label>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <span className="text-[12.5px] text-ink-soft">
+          <span className="text-sm text-ink-soft">
             {claudeReady ? "Takes about 20 seconds." : "Claude isn't set up. Add your Claude key in Settings first."}
           </span>
           <Button variant="primary" loading={reading} disabled={!claudeReady || (!text.trim() && !url.trim())} onClick={read}>
@@ -181,7 +181,7 @@ function RequirementsEditor({ value, onSave }: { value: CampaignRequirements; on
       <div className="grid gap-4 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]">
         <div className="grid gap-1.5">
           <span className="field-label">Clip length</span>
-          <span className="flex items-center gap-1.5 text-[13px] text-ink-soft">
+          <span className="flex items-center gap-1.5 text-base text-ink-soft">
             <input aria-label="Shortest clip, seconds" type="number" min={3} max={600} className="field-input h-9 w-16 py-0" value={draft.min_seconds} onChange={(e) => set({ min_seconds: Number(e.target.value) })} />
             to
             <input aria-label="Longest clip, seconds" type="number" min={5} max={600} className="field-input h-9 w-16 py-0" value={draft.max_seconds} onChange={(e) => set({ max_seconds: Number(e.target.value) })} />
@@ -190,11 +190,11 @@ function RequirementsEditor({ value, onSave }: { value: CampaignRequirements; on
         </div>
         <label className="grid gap-1.5">
           <span className="field-label">Required hashtags</span>
-          <input className="field-input h-9 py-0 text-[13px]" value={draft.hashtagsText} onChange={(e) => set({ hashtagsText: e.target.value })} placeholder="#brand #topic" />
+          <input className="field-input h-9 py-0 text-base" value={draft.hashtagsText} onChange={(e) => set({ hashtagsText: e.target.value })} placeholder="#brand #topic" />
         </label>
         <label className="grid gap-1.5">
           <span className="field-label">Accounts to tag</span>
-          <input className="field-input h-9 py-0 text-[13px]" value={draft.mentionsText} onChange={(e) => set({ mentionsText: e.target.value })} placeholder="@brand" />
+          <input className="field-input h-9 py-0 text-base" value={draft.mentionsText} onChange={(e) => set({ mentionsText: e.target.value })} placeholder="@brand" />
         </label>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -202,14 +202,14 @@ function RequirementsEditor({ value, onSave }: { value: CampaignRequirements; on
           <span className="field-label">
             Caption must include <span className="font-normal">one per line</span>
           </span>
-          <textarea rows={2} className="field-input resize-y text-[13px]" value={draft.mustText} onChange={(e) => set({ mustText: e.target.value })} placeholder="link in bio" />
+          <textarea rows={2} className="field-input resize-y text-base" value={draft.mustText} onChange={(e) => set({ mustText: e.target.value })} placeholder="link in bio" />
         </label>
         <div className="grid content-start gap-3">
           <label className="grid gap-1.5">
             <span className="field-label">Ad disclosure</span>
-            <input className="field-input h-9 py-0 text-[13px]" value={draft.disclosure} onChange={(e) => set({ disclosure: e.target.value })} placeholder="#ad" />
+            <input className="field-input h-9 py-0 text-base" value={draft.disclosure} onChange={(e) => set({ disclosure: e.target.value })} placeholder="#ad" />
           </label>
-          <label className="flex items-center gap-2 text-[13px] font-semibold">
+          <label className="flex items-center gap-2 text-base font-semibold">
             <input type="checkbox" className="size-4 accent-cobalt" checked={draft.captions} onChange={(e) => set({ captions: e.target.checked })} />
             Burn in captions
           </label>
@@ -220,13 +220,13 @@ function RequirementsEditor({ value, onSave }: { value: CampaignRequirements; on
           <span className="field-label">
             Content rules <span className="font-normal">one per line</span>
           </span>
-          <textarea rows={5} className="field-input resize-y text-[13px] leading-relaxed" value={draft.rulesText} onChange={(e) => set({ rulesText: e.target.value })} />
+          <textarea rows={5} className="field-input resize-y text-base leading-relaxed" value={draft.rulesText} onChange={(e) => set({ rulesText: e.target.value })} />
         </label>
         <label className="grid gap-1.5">
           <span className="field-label">
             Not allowed <span className="font-normal">one per line</span>
           </span>
-          <textarea rows={5} className="field-input resize-y text-[13px] leading-relaxed" value={draft.avoidText} onChange={(e) => set({ avoidText: e.target.value })} />
+          <textarea rows={5} className="field-input resize-y text-base leading-relaxed" value={draft.avoidText} onChange={(e) => set({ avoidText: e.target.value })} />
         </label>
       </div>
       {dirty && (
@@ -318,12 +318,12 @@ function References({
         </Button>
       }
     >
-      <p className="m-0 mb-3 text-[13px] text-ink-soft">
+      <p className="m-0 mb-3 text-base text-ink-soft">
         Videos are downloaded and transcribed so Claude can pick the moments. Folders (Google Drive, Dropbox) can&apos;t be downloaded automatically: download the
         files and add them here.
       </p>
-      {busy && <p className="m-0 mb-3 rounded-lg bg-caption/25 px-3 py-2 text-[13px]">{preparing?.log.at(-1) ?? "Waiting for the current render to finish…"}</p>}
-      {preparing?.status === "error" && <p className="m-0 mb-3 text-[13px] text-danger">{preparing.error}</p>}
+      {busy && <p className="m-0 mb-3 rounded-lg bg-caption/25 px-3 py-2 text-base">{preparing?.log.at(-1) ?? "Waiting for the current render to finish…"}</p>}
+      {preparing?.status === "error" && <p className="m-0 mb-3 text-base text-danger">{preparing.error}</p>}
       {campaign.references.length > 0 && (
         <ul className="m-0 mb-3 grid list-none divide-y divide-line rounded-lg border border-line p-0">
           {campaign.references.map((r) => {
@@ -334,8 +334,8 @@ function References({
                   <RefIcon kind={r.kind} />
                 </span>
                 <span className="min-w-0">
-                  <span className="block truncate text-[13.5px] font-semibold">{r.title || r.url || "Untitled"}</span>
-                  <span className="flex min-w-0 items-center gap-2 text-[12px]">
+                  <span className="block truncate text-base font-semibold">{r.title || r.url || "Untitled"}</span>
+                  <span className="flex min-w-0 items-center gap-2 text-sm">
                     <span className={`shrink-0 font-semibold ${st.tone === "ok" ? "text-ok" : st.tone === "warn" ? "text-warn" : "text-ink-soft"}`}>{st.text}</span>
                     {r.url && (
                       <a href={r.url} target="_blank" rel="noreferrer" className="inline-flex min-w-0 items-center gap-0.5 truncate text-cobalt">
@@ -344,7 +344,7 @@ function References({
                       </a>
                     )}
                   </span>
-                  {r.note && <span className="block text-[12px] text-ink-soft">{r.note}</span>}
+                  {r.note && <span className="block text-sm text-ink-soft">{r.note}</span>}
                 </span>
                 <IconButton label={`Remove ${r.title || "reference"}`} tone="danger" onClick={async () => onChange(await api.removeReference(campaign.id, r.id))}>
                   <X className="size-4" />
@@ -363,7 +363,7 @@ function References({
       >
         <input
           aria-label="Reference link"
-          className="field-input h-9 min-w-[200px] flex-1 py-0 text-[13px]"
+          className="field-input h-9 min-w-[200px] flex-1 py-0 text-base"
           placeholder="Paste a YouTube, Drive or video link"
           value={link}
           onChange={(e) => setLink(e.target.value)}
@@ -386,7 +386,7 @@ function ClipCard({ clip, onOpen }: { clip: CampaignClip; onOpen: () => void }) 
   const toast = useToast();
   const uploads = Object.entries(clip.published) as [Platform, NonNullable<CampaignClip["published"][Platform]>][];
   return (
-    <li className="grid grid-cols-[72px_minmax(0,1fr)] gap-3 rounded-xl border border-line bg-panel p-2.5">
+    <li className="grid grid-cols-[72px_minmax(0,1fr)] gap-3 card p-2.5">
       <button type="button" onClick={onOpen} aria-label={`Open ${clip.title}`} className="cursor-pointer overflow-hidden rounded-lg border-0 bg-ink/[0.08] p-0">
         {clip.thumb ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -398,14 +398,14 @@ function ClipCard({ clip, onOpen }: { clip: CampaignClip; onOpen: () => void }) 
         )}
       </button>
       <div className="grid min-w-0 content-start gap-1.5">
-        <p className="m-0 line-clamp-2 text-[13.5px] leading-snug font-semibold">{clip.title}</p>
-        <p className="m-0 text-[12px] text-ink-soft">
+        <p className="m-0 line-clamp-2 text-base leading-snug font-semibold">{clip.title}</p>
+        <p className="m-0 text-sm text-ink-soft">
           {Math.round(clip.duration)}s, made {relativeTime(clip.created)}
         </p>
-        {clip.hook && <p className="m-0 line-clamp-2 text-[12px] text-ink-soft">Hook: {clip.hook}</p>}
+        {clip.hook && <p className="m-0 line-clamp-2 text-sm text-ink-soft">Hook: {clip.hook}</p>}
         <div className="flex flex-wrap gap-1">
           {uploads.map(([p, u]) => (
-            <span key={p} className="inline-flex items-center gap-1 rounded-full bg-ok/10 px-2 py-0.5 text-[11.5px] font-semibold text-ok">
+            <span key={p} className="inline-flex items-center gap-1 rounded-full bg-ok/10 px-2 py-0.5 text-xs font-semibold text-ok">
               <Check className="size-3" />
               {PLATFORM_NAMES[p]}
               {u.url && (
@@ -425,7 +425,7 @@ function ClipCard({ clip, onOpen }: { clip: CampaignClip; onOpen: () => void }) 
             </span>
           ))}
           {clip.scheduled.map((s) => (
-            <span key={s.id} className="inline-flex items-center gap-1 rounded-full bg-caption/30 px-2 py-0.5 text-[11.5px] font-semibold">
+            <span key={s.id} className="inline-flex items-center gap-1 rounded-full bg-caption/30 px-2 py-0.5 text-xs font-semibold">
               <CalendarClock className="size-3" />
               {PLATFORM_NAMES[s.platform]} {s.status === "uploading" ? "uploading" : when(s.at)}
             </span>
@@ -483,7 +483,7 @@ function MakeClips({
               ]}
             />
           </div>
-          <p className="m-0 pb-1.5 text-[12.5px] text-ink-soft">
+          <p className="m-0 pb-1.5 text-sm text-ink-soft">
             9:16, {r.min_seconds}–{r.max_seconds}s{r.captions ? ", captions" : ""}, hook on screen
           </p>
         </div>
@@ -492,16 +492,16 @@ function MakeClips({
             Direction <span className="font-normal">optional</span>
           </span>
           <input
-            className="field-input h-9 py-0 text-[13px]"
+            className="field-input h-9 py-0 text-base"
             value={idea}
             onChange={(e) => setIdea(e.target.value)}
             placeholder="Funny moments first, or: only the part about pricing"
           />
         </label>
-        {busy && <p className="m-0 rounded-lg bg-caption/25 px-3 py-2 text-[13px]">{making?.log.at(-1) ?? "Waiting for the current render to finish…"}</p>}
-        {making?.status === "error" && <p className="m-0 text-[13px] text-danger">{making.error}</p>}
+        {busy && <p className="m-0 rounded-lg bg-caption/25 px-3 py-2 text-base">{making?.log.at(-1) ?? "Waiting for the current render to finish…"}</p>}
+        {making?.status === "error" && <p className="m-0 text-base text-danger">{making.error}</p>}
         <div className="flex items-center justify-between gap-3">
-          <span className="text-[12.5px] text-ink-soft">{ready ? "Claude reads the transcripts and picks the strongest moments." : "Prepare at least one reference video first."}</span>
+          <span className="text-sm text-ink-soft">{ready ? "Claude reads the transcripts and picks the strongest moments." : "Prepare at least one reference video first."}</span>
           <Button variant="primary" icon={<Scissors className="size-4" />} loading={busy} disabled={!ready} onClick={() => onMake({ count, layout, idea })}>
             Make {count} clip{count === 1 ? "" : "s"}
           </Button>
@@ -560,7 +560,7 @@ function CampaignDetail({
     }
   }
 
-  const connected = (["youtube", "tiktok"] as Platform[]).filter((p) => accounts?.[p].connected);
+  const connected = PLATFORMS.filter((p) => accounts?.[p]?.connected);
   const unposted = campaign.clips.filter((c) => connected.some((p) => !c.published[p] && !c.scheduled.some((s) => s.platform === p)));
 
   return (
@@ -569,21 +569,21 @@ function CampaignDetail({
         <div className="min-w-0">
           <input
             aria-label="Campaign name"
-            className="-ml-1 w-full rounded-md border border-transparent bg-transparent px-1 font-display text-[26px] leading-tight font-extrabold tracking-tight hover:border-line focus:border-cobalt focus:outline-none"
+            className="-ml-1 w-full rounded-md border border-transparent bg-transparent px-1 page-title hover:border-line focus:border-cobalt focus:outline-none"
             defaultValue={campaign.name}
             key={campaign.id}
             onBlur={(e) => e.target.value.trim() && e.target.value !== campaign.name && edit({ name: e.target.value.trim() })}
           />
-          <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-ink-soft">
+          <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-base text-ink-soft">
             {campaign.brand && <span className="font-semibold text-ink">{campaign.brand}</span>}
-            {campaign.rate && <span className="rounded-md bg-caption px-1.5 py-0.5 font-semibold text-ink">{campaign.rate}</span>}
+            {campaign.rate && <span className="rounded-md bg-caption px-1.5 py-0.5 font-semibold text-media">{campaign.rate}</span>}
             {campaign.budget && <span>Budget {campaign.budget}</span>}
             {campaign.platforms.length > 0 && <span>{campaign.platforms.map((p) => PLATFORM_LABEL[p] ?? p).join(", ")}</span>}
           </p>
         </div>
         <div className="flex items-center gap-1">
           {campaign.url && (
-            <a href={campaign.url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-semibold text-ink-soft no-underline hover:bg-ink/[0.05] hover:text-ink">
+            <a href={campaign.url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-base font-semibold text-ink-soft no-underline hover:bg-ink/[0.05] hover:text-ink">
               Open on Whop <ExternalLink className="size-3.5" />
             </a>
           )}
@@ -620,12 +620,12 @@ function CampaignDetail({
           <textarea
             aria-label="Brief"
             rows={9}
-            className="field-input resize-y text-[13.5px] leading-relaxed"
+            className="field-input resize-y text-base leading-relaxed"
             value={brief}
             onChange={(e) => setBrief(e.target.value)}
             onBlur={() => brief !== campaign.brief && edit({ brief })}
           />
-          <p className="m-0 mt-2 text-[12px] text-ink-soft">Claude picks moments that serve this brief. Edits save when you click away.</p>
+          <p className="m-0 mt-2 text-sm text-ink-soft">Claude picks moments that serve this brief. Edits save when you click away.</p>
         </Panel>
         <Panel title="Content requirements">
           <RequirementsEditor key={JSON.stringify(campaign.requirements)} value={campaign.requirements} onSave={(requirements) => edit({ requirements })} />
@@ -685,7 +685,7 @@ function CampaignDetail({
         }
       >
         {campaign.clips.length === 0 ? (
-          <p className="m-0 text-[13px] text-ink-soft">Clips you make appear here, with where they&apos;re uploaded or scheduled.</p>
+          <p className="m-0 text-base text-ink-soft">Clips you make appear here, with where they&apos;re uploaded or scheduled.</p>
         ) : (
           <>
             <ul className="m-0 grid list-none gap-3 p-0 sm:grid-cols-2 xl:grid-cols-3">
@@ -693,7 +693,7 @@ function CampaignDetail({
                 <ClipCard key={c.name} clip={c} onOpen={() => onOpenVideo(c.name)} />
               ))}
             </ul>
-            <p className="m-0 mt-3 text-[12px] text-ink-soft">
+            <p className="m-0 mt-3 text-sm text-ink-soft">
               After a clip is posted, copy its link (the icon next to the platform) and submit it on the campaign page to get paid for its views.
             </p>
           </>
@@ -762,15 +762,15 @@ export function Campaigns({
   return (
     <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[272px_minmax(0,1fr)]">
       <aside aria-label="Campaigns" className="flex min-h-0 flex-col border-b border-line bg-paper md:border-r md:border-b-0">
-        <div className="flex items-center justify-between gap-2 px-4 pt-4 pb-2">
-          <h2 className="m-0 font-display text-[17px] font-bold tracking-tight">Campaigns</h2>
+        <div className="pane-header">
+          <h2 className="pane-title m-0">Campaigns</h2>
           <Button size="sm" variant="primary" icon={<Plus className="size-4" />} onClick={() => setSelected("new")}>
             Add
           </Button>
         </div>
         <ul className="m-0 grid max-h-[40vh] min-h-0 list-none content-start gap-0.5 overflow-y-auto p-2 md:max-h-none md:flex-1">
-          {list === null && <li className="p-2 text-[13px] text-ink-soft">Loading…</li>}
-          {list?.length === 0 && <li className="p-2 text-[13px] text-ink-soft">No campaigns yet. Add one from Whop to start clipping.</li>}
+          {list === null && <li className="p-2 text-base text-ink-soft">Loading…</li>}
+          {list?.length === 0 && <li className="p-2 text-base text-ink-soft">No campaigns yet. Add one from Whop to start clipping.</li>}
           {list?.map((c) => {
             const current = c.id === selected;
             return (
@@ -780,12 +780,12 @@ export function Campaigns({
                   aria-current={current || undefined}
                   onClick={() => setSelected(c.id)}
                   className={`relative grid w-full cursor-pointer gap-0.5 rounded-lg border-0 px-3 py-2 text-left transition-colors ${
-                    current ? "bg-panel shadow-[0_1px_2px_rgb(21_26_36/0.08)]" : "bg-transparent hover:bg-ink/[0.04]"
+                    current ? "bg-panel shadow-(--shadow-card)" : "bg-transparent hover:bg-ink/[0.04]"
                   }`}
                 >
                   {current && <span aria-hidden className="absolute top-2 bottom-2 left-0 w-[3px] rounded-r bg-caption" />}
-                  <span className="truncate text-[13.5px] font-semibold">{c.name}</span>
-                  <span className="truncate text-[12px] text-ink-soft">
+                  <span className="truncate text-base font-semibold">{c.name}</span>
+                  <span className="truncate text-sm text-ink-soft">
                     {[c.rate, `${c.clips} clip${c.clips === 1 ? "" : "s"}`, c.uploaded ? `${c.uploaded} posted` : ""].filter(Boolean).join(", ")}
                   </span>
                 </button>
@@ -819,7 +819,7 @@ export function Campaigns({
             onOpenSettings={onOpenSettings}
           />
         ) : (
-          <p className="m-0 text-[13px] text-ink-soft">Loading…</p>
+          <p className="m-0 text-base text-ink-soft">Loading…</p>
         )}
       </main>
     </div>

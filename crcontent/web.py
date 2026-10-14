@@ -269,9 +269,9 @@ def art_progress():
 
 @app.post("/api/addon/install")
 def addon_install():
-    """Install the AI add-on (desktop app only; ~3 GB). Progress streams from /api/art/progress."""
-    if not addons.frozen():
-        raise HTTPException(400, "This engine runs from the project's .venv: pip install -r requirements-art.txt instead.")
+    """Install the AI add-on (~3 GB; the music extras only on a Mac, ~1 GB). Progress streams from /api/art/progress."""
+    if not addons.needed() and not addons.status()["installing"]:
+        raise HTTPException(400, "The AI add-on is already installed, or can't be installed here.")
     addons.install()
     return addons.status()
 
@@ -284,7 +284,8 @@ def art_download(style: str):
     if style not in imagegen.STYLES:
         raise HTTPException(404, "Unknown art style.")
     if not imagegen.installed():
-        raise HTTPException(400, "AI scene art isn't installed. Run: pip install -r requirements-art.txt")
+        raise HTTPException(400, "AI scene art needs an NVIDIA graphics card, which Macs don't have." if addons.MAC
+                            else "AI scene art isn't installed. Install the AI add-on in Settings → AI features.")
     with art_lock:
         if art_downloads.get(style) == "downloading":
             return {"downloading": True}
@@ -310,11 +311,12 @@ def _art_check(style: str) -> None:
     if style not in imagegen.STYLES:
         raise HTTPException(400, "Pick an art style first.")
     if not imagegen.installed():
-        raise HTTPException(400, "AI scene art isn't installed. Run: pip install -r requirements-art.txt")
+        raise HTTPException(400, "AI scene art needs an NVIDIA graphics card, which Macs don't have." if addons.MAC
+                            else "AI scene art isn't installed. Install the AI add-on in Settings → AI features.")
     if not imagegen.gpu_name():
         raise HTTPException(400, "AI scene art needs an NVIDIA graphics card, and none was found.")
     if not imagegen.downloaded(style):
-        raise HTTPException(400, f"Download the {imagegen.STYLES[style]['label']} model first (Settings → AI scene art).")
+        raise HTTPException(400, f"Download the {imagegen.STYLES[style]['label']} model first (Settings → AI features).")
 
 
 class ArtDrawRequest(BaseModel):
@@ -1774,15 +1776,24 @@ def open_location(req: OpenFolderRequest):
     if not folder:
         raise HTTPException(400, "Unknown folder.")
     folder.mkdir(parents=True, exist_ok=True)
-    if not hasattr(os, "startfile"):
-        raise HTTPException(400, f"Open {folder} in your file manager.")
-    os.startfile(folder)
+    if hasattr(os, "startfile"):
+        os.startfile(folder)
+    else:
+        import subprocess
+        import sys
+
+        opener = "open" if sys.platform == "darwin" else "xdg-open"  # Finder on macOS
+        try:
+            subprocess.Popen([opener, str(folder)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except OSError:
+            raise HTTPException(400, f"Open {folder} in your file manager.")
     return {"opened": str(folder)}
 
 
 # ---------- Publishing (YouTube / TikTok uploads) ----------
 
-PLATFORM_NAMES = {"youtube": "YouTube", "tiktok": "TikTok"}
+PLATFORM_NAMES = {"youtube": "YouTube", "tiktok": "TikTok", "facebook": "Facebook", "instagram": "Instagram"}
 
 
 def _platform(platform: str) -> str:
@@ -1800,7 +1811,7 @@ def _run_publish(job_id: str, folder: Path, platform: str, **options) -> None:
         with jobs_lock:
             job.update(status="done", step=1, video=folder.name, url=info.get("url", ""), publish_at=info.get("publish_at", ""),
                        comment=info.get("comment") or None, thumbnail=info.get("thumbnail") or None,
-                       channel_name=info.get("channel_name", ""))
+                       channel_name=info.get("channel_name") or info.get("page_name") or info.get("account_name") or "")
     except Exception as e:
         _fail(job, e)
 
@@ -1972,6 +1983,9 @@ class PublishSettings(BaseModel):
     comment: bool | None = None  # youtube: post the video's pinned comment after upload
     category: str | None = None  # youtube: default category id, or "auto"
     channel: str | None = None  # youtube: the default channel's id
+    page: str | None = None  # facebook: the default Page's id
+    account_id: str | None = None  # instagram: the default account's id
+    share_to_feed: bool | None = None  # instagram: Reels also show in the profile grid
 
 
 @app.put("/api/publish/{platform}/settings")
@@ -2072,7 +2086,8 @@ def publish_video(name: str, req: PublishRequest):
         if req.tiktok_privacy not in (*publish.TIKTOK_PRIVACY, "DRAFT"):
             raise HTTPException(400, "Unknown TikTok visibility.")
         tiktok["privacy"] = req.tiktok_privacy
-    return {"jobs": {p: _queue_publish(folder, p, **(youtube if p == "youtube" else tiktok)) for p in dict.fromkeys(req.platforms)}}
+    options = {"youtube": youtube, "tiktok": tiktok}
+    return {"jobs": {p: _queue_publish(folder, p, **options.get(p, {})) for p in dict.fromkeys(req.platforms)}}
 
 
 @app.get("/api/videos/{name}/thumbnail.jpg")

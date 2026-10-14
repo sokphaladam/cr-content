@@ -1,12 +1,17 @@
 "use client";
 
-import { CalendarClock, Copy, Download, ExternalLink, FolderOpen, KeyRound, LogOut, Plus, X } from "lucide-react";
+import { CalendarClock, Copy, Download, ExternalLink, FolderOpen, KeyRound, LogOut, Monitor, Moon, Plus, Sun, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { useAppearance } from "@/lib/appearance";
+import { checkNow, install, setAutoCheck, startUpdates, useAutoCheck, useUpdates } from "@/lib/updates";
 import { AddonProgress, DownloadProgress, useArtStatus } from "./ArtControls";
-import { api, ART_STYLES, getAutostart, pickFolder, setAutostart, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
+import { api, ART_STYLES, getAutostart, isMac, pickFolder, setAutostart, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
 import { Button, IconButton, Segmented, useToast } from "./ui";
 
-export const PLATFORM_NAMES: Record<Platform, string> = { youtube: "YouTube", tiktok: "TikTok" };
+export const PLATFORM_NAMES: Record<Platform, string> = { youtube: "YouTube", tiktok: "TikTok", facebook: "Facebook", instagram: "Instagram" };
+export const PLATFORMS: Platform[] = ["youtube", "tiktok", "facebook", "instagram"];
+/** Facebook and Instagram share one Meta developer app and one sign-in. */
+const META: Platform[] = ["facebook", "instagram"];
 
 const SERVICES: { key: ServiceKey; name: string; does: string; url: string; optional?: boolean }[] = [
   { key: "ANTHROPIC_API_KEY", name: "Claude", does: "Writes scripts, lyrics, titles, descriptions and cover ideas.", url: "https://platform.claude.com/settings/keys" },
@@ -29,7 +34,7 @@ const SERVICES: { key: ServiceKey; name: string; does: string; url: string; opti
   },
 ];
 
-const ID_LABEL: Record<Platform, string> = { youtube: "Client ID", tiktok: "Client key" };
+const ID_LABEL: Record<Platform, string> = { youtube: "Client ID", tiktok: "Client key", facebook: "App ID", instagram: "App ID" };
 const HOW_TO: Record<Platform, { url: string; steps: string }> = {
   youtube: {
     url: "https://console.cloud.google.com/apis/credentials",
@@ -39,6 +44,12 @@ const HOW_TO: Record<Platform, { url: string; steps: string }> = {
     url: "https://developers.tiktok.com/apps",
     steps: "In TikTok for Developers, create a Desktop app, add Login Kit and the Content Posting API, and register the redirect URI below.",
   },
+  facebook: {
+    url: "https://developers.facebook.com/apps",
+    steps:
+      "In Meta for Developers, create an app with the use cases for managing a Page and the Instagram API (with Facebook Login), and keep it in Development mode: as its admin you can grant every permission without App Review. Instagram must be a professional (Business or Creator) account linked to your Page. Copy the App ID and secret from App settings → Basic. If Facebook asks for the redirect URI, add the one below.",
+  },
+  instagram: { url: "https://developers.facebook.com/apps", steps: "" }, // keys are set on the Facebook row
 };
 const YT_PRIVACY = [
   { value: "public", label: "Public" },
@@ -54,7 +65,7 @@ const TT_PRIVACY = [
 
 function StatusDot({ on, children }: { on: boolean; children: ReactNode }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[12.5px] font-semibold ${on ? "text-ok" : "text-ink-soft"}`}>
+    <span className={`inline-flex items-center gap-1.5 text-sm font-semibold ${on ? "text-ok" : "text-ink-soft"}`}>
       <span className={`size-1.5 rounded-full ${on ? "bg-ok" : "bg-ink-soft/40"}`} />
       {children}
     </span>
@@ -64,18 +75,18 @@ function StatusDot({ on, children }: { on: boolean; children: ReactNode }) {
 function Section({ id, title, intro, children }: { id: string; title: string; intro: string; children: ReactNode }) {
   return (
     <section id={id} aria-labelledby={`${id}-title`} className="scroll-mt-6">
-      <h2 id={`${id}-title`} className="m-0 font-display text-xl font-bold tracking-tight">
+      <h2 id={`${id}-title`} className="section-title m-0">
         {title}
       </h2>
-      <p className="mt-1 mb-4 max-w-[60ch] text-[13.5px] text-ink-soft">{intro}</p>
-      <div className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-panel">{children}</div>
+      <p className="page-intro mt-1 mb-4">{intro}</p>
+      <div className="divide-y divide-line overflow-hidden card">{children}</div>
     </section>
   );
 }
 
 /* ---------- Running in the background (desktop app) ---------- */
 
-/** Start with Windows in the tray, so scheduled uploads go out on time even when you never open the app. */
+/** Start at sign-in in the tray (menu bar on macOS), so scheduled uploads go out on time even when you never open the app. */
 function BackgroundRow() {
   const toast = useToast();
   const [on, setOn] = useState<boolean | undefined>(undefined);
@@ -86,7 +97,7 @@ function BackgroundRow() {
   if (on === undefined) return null; // the browser version: nothing to start
   return (
     <div className="grid gap-1.5 px-4 py-3">
-      <label className="flex cursor-pointer items-center gap-2 text-[13.5px] font-semibold">
+      <label className="flex cursor-pointer items-center gap-2 text-base font-semibold">
         <input
           type="checkbox"
           checked={on}
@@ -103,11 +114,12 @@ function BackgroundRow() {
             }
           }}
         />
-        Start with Windows and run in the background
+        {isMac() ? "Open at login and run in the background" : "Start with Windows and run in the background"}
       </label>
-      <p className="m-0 text-[12.5px] leading-snug text-ink-soft">
-        Shorts Studio starts in the system tray when you sign in, so scheduled uploads (TikTok included) go out on time without opening it. Closing the window
-        keeps it running in the tray; to stop it completely, right-click the tray icon → Quit.
+      <p className="m-0 text-sm leading-snug text-ink-soft">
+        {isMac()
+          ? "Shorts Studio starts in the menu bar when you log in, so scheduled uploads (TikTok included) go out on time without opening it. Closing the window keeps it running in the menu bar; to stop it completely, click the menu bar icon → Quit (or press ⌘Q)."
+          : "Shorts Studio starts in the system tray when you sign in, so scheduled uploads (TikTok included) go out on time without opening it. Closing the window keeps it running in the tray; to stop it completely, right-click the tray icon → Quit."}
       </p>
     </div>
   );
@@ -140,10 +152,10 @@ function ServiceRow({ service, state, onSaved }: { service: (typeof SERVICES)[nu
     <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="text-[14.5px] font-semibold">{service.name}</span>
+          <span className="text-md font-semibold">{service.name}</span>
           {state && <StatusDot on={isSet}>{isSet ? `Saved ${state.hint}` : service.optional ? "Optional" : "Not set"}</StatusDot>}
         </div>
-        <p className="m-0 mt-0.5 text-[13px] text-ink-soft">
+        <p className="m-0 mt-0.5 text-base text-ink-soft">
           {service.does}{" "}
           <a href={service.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-cobalt">
             Get a key <ExternalLink className="size-3" />
@@ -179,7 +191,7 @@ function ServiceRow({ service, state, onSaved }: { service: (typeof SERVICES)[nu
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder={`Paste your ${service.name} key`}
-            className="field-input h-9 min-w-0 flex-1 py-0 text-[13.5px]"
+            className="field-input h-9 min-w-0 flex-1 py-0 text-base"
           />
           <Button type="submit" size="sm" variant="primary" className="h-9" loading={saving} disabled={!value.trim()}>
             Save
@@ -193,20 +205,186 @@ function ServiceRow({ service, state, onSaved }: { service: (typeof SERVICES)[nu
   );
 }
 
-/* ---------- AI scene art (local models) ---------- */
+/* ---------- Section menu (follows the scroll) ---------- */
+
+const SECTIONS = [
+  { id: "services", label: "Services" },
+  { id: "channels", label: "Channels" },
+  { id: "queue", label: "Upload queue" },
+  { id: "scene-art", label: "AI features" },
+  { id: "appearance", label: "Appearance" },
+  { id: "storage", label: "Storage" },
+  { id: "about", label: "About & updates" },
+];
+
+function SectionNav() {
+  const [current, setCurrent] = useState(SECTIONS[0].id);
+  useEffect(() => {
+    const els = SECTIONS.map((s) => document.getElementById(s.id)).filter((el): el is HTMLElement => !!el);
+    const scroller = els[0]?.closest(".overflow-y-auto");
+    if (!scroller) return;
+    // the section whose top passed a line a third of the way down is the one being read
+    const onScroll = () => {
+      const line = scroller.getBoundingClientRect().top + scroller.clientHeight / 3;
+      const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4;
+      const passed = els.filter((el) => el.getBoundingClientRect().top <= line);
+      setCurrent((atEnd ? els[els.length - 1] : (passed[passed.length - 1] ?? els[0])).id);
+    };
+    onScroll();
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => scroller.removeEventListener("scroll", onScroll);
+  }, []);
+  return (
+    <nav aria-label="Settings sections" className="sticky top-8 grid gap-0.5 text-base">
+      {SECTIONS.map((s) => {
+        const on = s.id === current;
+        return (
+          <a
+            key={s.id}
+            href={`#${s.id}`}
+            aria-current={on ? "true" : undefined}
+            className={`rounded-md px-3 py-1.5 font-semibold no-underline transition-colors ${
+              on ? "bg-cobalt-soft text-cobalt" : "text-ink-soft hover:bg-ink/[0.05] hover:text-ink"
+            }`}
+          >
+            {s.label}
+          </a>
+        );
+      })}
+    </nav>
+  );
+}
+
+/* ---------- Appearance (theme, interface size) ---------- */
+
+function AppearanceRows() {
+  const { theme, setTheme, size, setSize } = useAppearance();
+  return (
+    <>
+      <SettingRow title="Theme" hint="System follows your computer's light or dark mode.">
+        <Segmented
+          name="theme"
+          size="sm"
+          value={theme}
+          onChange={setTheme}
+          options={[
+            { value: "system", label: <IconLabel icon={<Monitor className="size-3.5" />}>System</IconLabel> },
+            { value: "light", label: <IconLabel icon={<Sun className="size-3.5" />}>Light</IconLabel> },
+            { value: "dark", label: <IconLabel icon={<Moon className="size-3.5" />}>Dark</IconLabel> },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow title="Interface size" hint="Scales text and spacing everywhere. Compact fits more on a laptop screen.">
+        <Segmented
+          name="ui-size"
+          size="sm"
+          value={size}
+          onChange={setSize}
+          options={[
+            { value: "compact", label: "Compact" },
+            { value: "default", label: "Default" },
+            { value: "large", label: "Large" },
+          ]}
+        />
+      </SettingRow>
+    </>
+  );
+}
+
+function IconLabel({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {icon}
+      {children}
+    </span>
+  );
+}
+
+/** One setting: title and hint on the left, its control on the right (stacked on narrow screens). */
+function SettingRow({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3.5">
+      <div className="grid min-w-[200px] flex-1 gap-0.5">
+        <span className="text-md font-semibold">{title}</span>
+        {hint && <span className="text-sm text-ink-soft">{hint}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/* ---------- About & updates (desktop app) ---------- */
+
+function AboutRows() {
+  const u = useUpdates();
+  const auto = useAutoCheck();
+  useEffect(startUpdates, []);
+  if (!u.desktop) {
+    return <p className="m-0 p-4 text-base text-ink-soft">This is the browser version: update it with git pull in the project folder. The desktop app updates itself.</p>;
+  }
+  const busy = u.status === "downloading" || u.status === "installing";
+  const checked = u.checkedAt ? new Date(u.checkedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+  const pct = u.progress?.total ? Math.round((u.progress.downloaded / u.progress.total) * 100) : null;
+  return (
+    <>
+      <SettingRow
+        title={`Shorts Studio ${u.version}`}
+        hint={
+          u.status === "checking"
+            ? "Checking for updates…"
+            : u.status === "latest"
+              ? `You have the latest version. Checked ${checked}.`
+              : u.status === "available" && u.update
+                ? `Version ${u.update.version} is available.`
+                : u.status === "downloading"
+                  ? `Downloading the update${pct !== null ? ` (${pct}%)` : ""}…`
+                  : u.status === "installing"
+                    ? "Installing… the app restarts in a moment."
+                    : u.status === "error"
+                      ? u.error
+                      : "Not checked yet."
+        }
+      >
+        {u.status === "available" || (u.installFailed && u.update) ? (
+          <Button size="sm" variant="primary" icon={<Download className="size-3.5" />} onClick={() => void install()}>
+            {u.installFailed ? "Try again" : "Install and restart"}
+          </Button>
+        ) : (
+          <Button size="sm" loading={u.status === "checking"} disabled={busy} onClick={() => void checkNow()}>
+            Check now
+          </Button>
+        )}
+      </SettingRow>
+      {u.update && (u.status === "available" || busy) && u.update.notes && (
+        <div className="grid gap-1.5 px-4 py-3.5">
+          <span className="text-sm font-semibold text-ink-soft">What&apos;s new in {u.update.version}</span>
+          <p className="well m-0 max-h-56 overflow-y-auto p-3 text-sm whitespace-pre-line">{u.update.notes}</p>
+        </div>
+      )}
+      <SettingRow title="Check automatically" hint="When the app starts and every few hours. You choose when to install.">
+        <input type="checkbox" aria-label="Check for updates automatically" checked={auto} onChange={(e) => setAutoCheck(e.target.checked)} className="size-4 accent-cobalt" />
+      </SettingRow>
+    </>
+  );
+}
+
+/* ---------- AI features (local models) ---------- */
 
 function SceneArt() {
   const { status, reload } = useArtStatus();
   const [error, setError] = useState("");
-  if (!status) return <p className="m-0 p-4 text-[13px] text-ink-soft">Checking the graphics card…</p>;
+  if (!status) return <p className="m-0 p-4 text-base text-ink-soft">Checking the graphics card…</p>;
   const addon = status.addon;
-  if (!status.installed && addon && (addon.needed || addon.installing)) {
-    return (
+  const music = addon?.scope === "music";
+  const install =
+    addon && (addon.needed || addon.installing) ? (
       <div className="grid gap-2 px-4 py-4">
-        <span className="text-[14px] font-semibold">AI add-on</span>
-        <span className="max-w-[62ch] text-[13px] text-ink-soft">
-          Scene art, accurate lyric timing (Whisper) and beat-cut music videos run on your graphics card with a one-time add-on: about 3 GB to
-          download, about 6 GB on disk in {addon.folder}.
+        <span className="text-md font-semibold">{music ? "Music extras" : "AI add-on"}</span>
+        <span className="max-w-[62ch] text-base text-ink-soft">
+          {music
+            ? "Accurate lyric timing (Whisper), beat-cut music videos and vocal separation, with a one-time install"
+            : "Scene art, accurate lyric timing (Whisper) and beat-cut music videos run on your graphics card with a one-time add-on"}
+          : {addon.size} to download, into {addon.folder}. No restart needed.
         </span>
         {addon.installing ? (
           <AddonProgress addon={addon} />
@@ -226,36 +404,46 @@ function SceneArt() {
               }
             }}
           >
-            {addon.error ? "Try again" : "Install AI add-on (~3 GB)"}
+            {addon.error ? "Try again" : `${music ? "Install music extras" : "Install AI add-on"} (${addon.size.replace("about ", "~")})`}
           </Button>
         )}
-        {(error || addon.error) && <p className="m-0 max-w-[62ch] text-[12.5px] break-words whitespace-pre-wrap text-danger">{error || addon.error}</p>}
+        {(error || addon.error) && <p className="m-0 max-w-[62ch] text-sm break-words whitespace-pre-wrap text-danger">{error || addon.error}</p>}
       </div>
+    ) : null;
+  if (music) {
+    return (
+      <>
+        {install ?? (
+          <div className="px-4 py-3 text-base">
+            <StatusDot on>Music extras installed: Whisper lyric timing, beat detection, vocal separation</StatusDot>
+          </div>
+        )}
+        <p className="m-0 px-4 py-3 text-base text-ink-soft">AI scene art needs an NVIDIA graphics card, which Macs don&apos;t have, so videos use stock footage.</p>
+      </>
     );
   }
+  if (!status.installed && install) return install;
   if (!status.installed || !status.gpu) {
     return (
-      <p className="m-0 p-4 text-[13.5px] text-ink-soft">
-        {!status.installed
-          ? "Not installed. In the project folder run: pip install -r requirements-art.txt, then restart the app."
-          : "No NVIDIA graphics card was found, so videos use stock footage."}
+      <p className="m-0 p-4 text-base text-ink-soft">
+        {!status.installed ? "AI scene art isn't installed on this computer." : "No NVIDIA graphics card was found, so videos use stock footage."}
       </p>
     );
   }
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-[13.5px]">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-base">
         <StatusDot on>{status.gpu}</StatusDot>
-        <span className="text-[12.5px] text-ink-soft">Models are kept in {status.folder}</span>
+        <span className="text-sm text-ink-soft">Models are kept in {status.folder}</span>
       </div>
       {ART_STYLES.map((a) => {
         const st = status.styles[a.value];
         return (
           <div key={a.value} className="flex flex-wrap items-center gap-3 px-4 py-3">
             <div className="grid min-w-0 flex-1 gap-0.5">
-              <span className="text-[14px] font-semibold">{st.label}</span>
-              <span className="text-[12.5px] text-ink-soft">{a.hint}</span>
-              {st.error && <span className="text-[12.5px] text-danger">{st.error}</span>}
+              <span className="text-md font-semibold">{st.label}</span>
+              <span className="text-sm text-ink-soft">{a.hint}</span>
+              {st.error && <span className="text-sm text-danger">{st.error}</span>}
               {!st.downloaded && <DownloadProgress progress={st.progress} label={st.label} />}
             </div>
             {st.downloaded ? (
@@ -281,7 +469,7 @@ function SceneArt() {
           </div>
         );
       })}
-      {error && <p className="m-0 px-4 py-3 text-[13px] text-danger">{error}</p>}
+      {error && <p className="m-0 px-4 py-3 text-base text-danger">{error}</p>}
     </>
   );
 }
@@ -323,7 +511,7 @@ function Storage() {
     api.locations().then(setLoc).catch((e) => setError((e as Error).message));
   }, []);
 
-  if (!loc) return <p className={`m-0 p-4 text-[13px] ${error ? "text-danger" : "text-ink-soft"}`}>{error || "Checking folders…"}</p>;
+  if (!loc) return <p className={`m-0 p-4 text-base ${error ? "text-danger" : "text-ink-soft"}`}>{error || "Checking folders…"}</p>;
 
   const current = { data: loc.data, videos: loc.videos_default ? "" : loc.videos };
   const propose = (which: FolderKey, path: string) => {
@@ -374,11 +562,11 @@ function Storage() {
           <div key={which} className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span className="text-[14.5px] font-semibold">{FOLDERS[which].name}</span>
+                <span className="text-md font-semibold">{FOLDERS[which].name}</span>
                 {which === "videos" && loc.videos_default && <StatusDot on={false}>Inside the data folder</StatusDot>}
               </div>
-              <p className="m-0 mt-0.5 text-[13px] text-ink-soft">{FOLDERS[which].does}</p>
-              <code className="mt-1.5 block truncate text-[12.5px] text-ink" title={path}>
+              <p className="m-0 mt-0.5 text-base text-ink-soft">{FOLDERS[which].does}</p>
+              <code className="mt-1.5 block truncate text-sm text-ink" title={path}>
                 {path}
               </code>
             </div>
@@ -412,7 +600,7 @@ function Storage() {
                   value={typing.value}
                   onChange={(e) => setTyping({ which, value: e.target.value })}
                   placeholder="Full folder path, e.g. D:\Shorts Studio"
-                  className="field-input h-9 min-w-0 flex-1 py-0 text-[13.5px]"
+                  className="field-input h-9 min-w-0 flex-1 py-0 text-base"
                 />
                 <Button type="submit" size="sm" variant="primary" className="h-9" disabled={!typing.value.trim()}>
                   Next
@@ -425,10 +613,10 @@ function Storage() {
           </div>
         );
       })}
-      {loc.locked && <p className="m-0 p-4 text-[13px] text-ink-soft">The data folder is set by CRCONTENT_DATA_DIR, so it can&apos;t be changed here.</p>}
+      {loc.locked && <p className="m-0 p-4 text-base text-ink-soft">The data folder is set by CRCONTENT_DATA_DIR, so it can&apos;t be changed here.</p>}
       {pending && (
         <div className="grid gap-3 bg-caption/15 p-4">
-          <div className="text-[13.5px]">
+          <div className="text-base">
             <p className="m-0 font-semibold">Move your files?</p>
             <ul className="m-0 mt-1 grid gap-0.5 pl-4 text-ink-soft">
               {pending.data !== current.data && (
@@ -497,13 +685,13 @@ function AppKeysForm({
 
   return (
     <form
-      className="grid gap-3 rounded-lg bg-paper/70 p-3.5"
+      className="grid gap-3 rounded-lg bg-sunken p-3.5"
       onSubmit={(e) => {
         e.preventDefault();
         void save({ client_id: clientId, client_secret: secret });
       }}
     >
-      <p className="m-0 max-w-[62ch] text-[13px] text-ink-soft">
+      <p className="m-0 max-w-[62ch] text-base text-ink-soft">
         {HOW_TO[platform].steps}{" "}
         <a href={HOW_TO[platform].url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-cobalt">
           Open developer console <ExternalLink className="size-3" />
@@ -512,7 +700,7 @@ function AppKeysForm({
       <div className="grid gap-1.5">
         <span className="field-label">Redirect URI</span>
         <div className="flex items-center gap-1 rounded-md border border-line bg-panel py-0.5 pr-0.5 pl-3">
-          <code className="min-w-0 flex-1 truncate text-[12.5px]">{redirectUri}</code>
+          <code className="min-w-0 flex-1 truncate text-sm">{redirectUri}</code>
           <IconButton
             label="Copy redirect URI"
             onClick={async () => {
@@ -527,13 +715,13 @@ function AppKeysForm({
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="grid gap-1.5">
           <span className="field-label">{ID_LABEL[platform]}</span>
-          <input className="field-input h-9 py-0 text-[13px]" autoComplete="off" spellCheck={false} value={clientId} onChange={(e) => setClientId(e.target.value)} />
+          <input className="field-input h-9 py-0 text-base" autoComplete="off" spellCheck={false} value={clientId} onChange={(e) => setClientId(e.target.value)} />
         </label>
         <label className="grid gap-1.5">
           <span className="field-label">Client secret</span>
           <input
             type="password"
-            className="field-input h-9 py-0 text-[13px]"
+            className="field-input h-9 py-0 text-base"
             placeholder={account.configured && !changesApp ? "Saved. Leave empty to keep it." : ""}
             autoComplete="off"
             value={secret}
@@ -542,7 +730,7 @@ function AppKeysForm({
         </label>
       </div>
       {changesApp && account.connected && (
-        <p className="m-0 text-[12.5px] text-warn">Saving a different app disconnects {account.account}. Connect again afterwards.</p>
+        <p className="m-0 text-sm text-warn">Saving a different app disconnects {account.account}. Connect again afterwards.</p>
       )}
       <div className="flex items-center gap-1">
         <Button type="submit" size="sm" variant="primary" loading={saving} disabled={!clientId.trim() || (!secret.trim() && (!account.configured || changesApp))}>
@@ -576,7 +764,7 @@ function PostingTimes({
   const [adding, setAdding] = useState("12:00");
   const add = () => adding && !account.times.includes(adding) && onChange({ times: [...account.times, adding] });
   return (
-    <div className="grid gap-2.5 rounded-lg bg-paper/70 p-3">
+    <div className="grid gap-2.5 rounded-lg bg-sunken p-3">
       <div className="flex flex-wrap items-center gap-3">
         <span className="field-label">New renders upload</span>
         <Segmented
@@ -594,7 +782,7 @@ function PostingTimes({
         <>
           <div className="flex flex-wrap items-center gap-1.5">
             {account.times.map((t) => (
-              <span key={t} className="inline-flex h-7 items-center gap-1 rounded-full border border-line bg-panel pr-1 pl-2.5 text-[12.5px] font-semibold tabular-nums">
+              <span key={t} className="inline-flex h-7 items-center gap-1 rounded-full border border-line bg-panel pr-1 pl-2.5 text-sm font-semibold tabular-nums">
                 {t}
                 <button
                   type="button"
@@ -611,7 +799,7 @@ function PostingTimes({
               <input
                 aria-label="Posting time to add"
                 type="time"
-                className="field-input h-7 w-[110px] py-0 text-[12.5px]"
+                className="field-input h-7 w-[110px] py-0 text-sm"
                 value={adding}
                 onChange={(e) => setAdding(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && add()}
@@ -621,7 +809,7 @@ function PostingTimes({
               </IconButton>
             </span>
           </div>
-          <p className="m-0 text-[12px] text-ink-soft">Each new video takes the next free time, one per slot, so a batch of clips spreads over the days.</p>
+          <p className="m-0 text-sm text-ink-soft">Each new video takes the next free time, one per slot, so a batch of clips spreads over the days.</p>
         </>
       )}
     </div>
@@ -649,12 +837,12 @@ function YouTubeChannels({ accounts, setAccounts }: { accounts: PublishAccounts;
         {channels.map((c) => {
           const isDefault = c.id === a.channel;
           return (
-            <li key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-paper/70 py-1.5 pr-1.5 pl-3">
-              <span className="min-w-0 truncate text-[13.5px] font-semibold">{c.name || c.id}</span>
+            <li key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-sunken py-1.5 pr-1.5 pl-3">
+              <span className="min-w-0 truncate text-base font-semibold">{c.name || c.id}</span>
               {isDefault && channels.length > 1 && (
-                <span className="rounded-full bg-cobalt/10 px-2 py-0.5 text-[11.5px] font-semibold text-cobalt">Default</span>
+                <span className="rounded-full bg-cobalt/10 px-2 py-0.5 text-xs font-semibold text-cobalt">Default</span>
               )}
-              {!c.can_comment && (a.comment ?? true) && <span className="text-[12px] text-warn">Connect again to allow comments</span>}
+              {!c.can_comment && (a.comment ?? true) && <span className="text-sm text-warn">Connect again to allow comments</span>}
               <span className="ml-auto flex items-center gap-1">
                 {!isDefault && (
                   <Button size="sm" variant="ghost" onClick={() => run(api.publishSettings("youtube", { channel: c.id }))}>
@@ -676,7 +864,7 @@ function YouTubeChannels({ accounts, setAccounts }: { accounts: PublishAccounts;
         })}
       </ul>
       {channels.length > 1 && (
-        <p className="m-0 text-[12px] text-ink-soft">
+        <p className="m-0 text-sm text-ink-soft">
           Uploads go to the default channel unless you pick another on the video&apos;s Upload card. Auto-uploads and set-time uploads always use the default.
         </p>
       )}
@@ -689,6 +877,8 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
   const a = accounts[platform];
   const youtube = platform === "youtube" && !!a.channels; // an older engine has no channel list: one account only
   const multi = youtube && (a.channels?.length ?? 0) > 1;
+  const meta = META.includes(platform);
+  const sharesKeys = platform === "instagram"; // its app keys are the Meta app's, edited on the Facebook row
   const [editingKeys, setEditingKeys] = useState(false);
   const [signInUrl, setSignInUrl] = useState("");
 
@@ -714,14 +904,24 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
   return (
     <div className="grid gap-4 p-4">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className="text-[14.5px] font-semibold">{PLATFORM_NAMES[platform]}</span>
+        <span className="text-md font-semibold">{PLATFORM_NAMES[platform]}</span>
         <StatusDot on={a.connected}>
-          {!a.connected ? (a.configured ? "Not connected" : "Needs app keys") : multi ? `${a.channels?.length} channels` : a.account}
+          {!a.connected
+            ? a.no_linked_account
+              ? "No Instagram account linked"
+              : a.configured
+                ? "Not connected"
+                : sharesKeys
+                  ? "Needs the Meta app keys"
+                  : "Needs app keys"
+            : multi
+              ? `${a.channels?.length} channels`
+              : a.account}
         </StatusDot>
         <span className="ml-auto flex items-center gap-1">
           {a.configured && !a.connected && (
             <Button size="sm" variant="primary" loading={a.connecting} onClick={connect}>
-              Connect
+              {a.no_linked_account ? "Connect again" : "Connect"}
             </Button>
           )}
           {a.configured && a.connected && youtube && (
@@ -729,12 +929,18 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
               Add channel
             </Button>
           )}
-          {a.connected && !youtube && (
-            <Button size="sm" variant="ghost" icon={<LogOut className="size-3.5" />} onClick={async () => setAccounts(await api.disconnectPlatform(platform))}>
+          {(a.connected || (meta && accounts.facebook.connected)) && !youtube && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<LogOut className="size-3.5" />}
+              title={meta ? "Facebook and Instagram share one sign-in: this disconnects both" : undefined}
+              onClick={async () => setAccounts(await api.disconnectPlatform(platform))}
+            >
               Disconnect
             </Button>
           )}
-          {a.configured && (
+          {a.configured && !sharesKeys && (
             <Button size="sm" variant="ghost" icon={<KeyRound className="size-3.5" />} aria-expanded={editingKeys} onClick={() => setEditingKeys((v) => !v)}>
               App keys
             </Button>
@@ -742,7 +948,7 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
         </span>
       </div>
       {a.connecting && signInUrl && (
-        <p className="m-0 text-[12.5px] break-all text-ink-soft">
+        <p className="m-0 text-sm break-all text-ink-soft">
           Waiting for the sign-in in your browser. If no browser opened,{" "}
           <a href={signInUrl} target="_blank" rel="noreferrer" className="text-cobalt">
             open the sign-in page
@@ -751,12 +957,26 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
         </p>
       )}
       {youtube && a.connecting && a.connected && (
-        <p className="m-0 text-[12.5px] text-ink-soft">
+        <p className="m-0 text-sm text-ink-soft">
           On Google&apos;s sign-in, pick the account (or brand account) that owns the channel to add. Signing in to a channel that&apos;s already here renews it.
         </p>
       )}
       {youtube && a.connected && <YouTubeChannels accounts={accounts} setAccounts={setAccounts} />}
-      {(!a.configured || editingKeys) && (
+      {sharesKeys && !a.configured && (
+        <p className="m-0 text-sm text-ink-soft">Instagram uses the same Meta app as Facebook: add its App ID and secret on the Facebook row above.</p>
+      )}
+      {meta && a.no_linked_account && (
+        <p className="m-0 text-sm text-warn">
+          None of your Pages has an Instagram account linked. Switch Instagram to a professional (Business or Creator) account, link it to your Page in the
+          Instagram app (Settings → Account Center or Edit profile → Page), then press Connect again and allow Instagram.
+        </p>
+      )}
+      {meta && !a.connected && a.configured && !a.no_linked_account && (
+        <p className="m-0 text-sm text-ink-soft">
+          One sign-in connects both Facebook and Instagram. When Facebook asks, choose your Page and its Instagram account and allow every permission.
+        </p>
+      )}
+      {(!a.configured || editingKeys) && !sharesKeys && (
         <AppKeysForm
           key={`${platform}-${a.client_id}`}
           platform={platform}
@@ -774,16 +994,40 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
           {platform === "tiktok" && (
             <label className="grid gap-1.5">
               <span className="field-label">Upload as</span>
-              <select className="field-input h-9 py-0 text-[13px]" value={a.mode} onChange={(e) => change({ mode: e.target.value as "direct" | "draft" })}>
+              <select className="field-input h-9 py-0 text-base" value={a.mode} onChange={(e) => change({ mode: e.target.value as "direct" | "draft" })}>
                 <option value="direct">Post directly</option>
                 <option value="draft">TikTok draft</option>
               </select>
             </label>
           )}
-          {!(platform === "tiktok" && a.mode === "draft") && (
+          {platform === "facebook" && (a.pages?.length ?? 0) > 1 && (
+            <label className="grid gap-1.5">
+              <span className="field-label">Post to Page</span>
+              <select className="field-input h-9 py-0 text-base" value={a.page} onChange={(e) => change({ page: e.target.value })}>
+                {a.pages?.map((pg) => (
+                  <option key={pg.id} value={pg.id}>
+                    {pg.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {platform === "instagram" && (a.accounts?.length ?? 0) > 1 && (
+            <label className="grid gap-1.5">
+              <span className="field-label">Post to account</span>
+              <select className="field-input h-9 py-0 text-base" value={a.account_id} onChange={(e) => change({ account_id: e.target.value })}>
+                {a.accounts?.map((ac) => (
+                  <option key={ac.id} value={ac.id}>
+                    {ac.name} ({ac.page})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {(platform === "youtube" || (platform === "tiktok" && a.mode !== "draft")) && (
             <label className="grid gap-1.5">
               <span className="field-label">Who can watch</span>
-              <select className="field-input h-9 py-0 text-[13px]" value={a.privacy} onChange={(e) => change({ privacy: e.target.value })}>
+              <select className="field-input h-9 py-0 text-base" value={a.privacy} onChange={(e) => change({ privacy: e.target.value })}>
                 {(platform === "youtube" ? YT_PRIVACY : TT_PRIVACY).map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
@@ -792,14 +1036,14 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
               </select>
             </label>
           )}
-          <label className="flex items-center gap-2 self-end pb-2 text-[13px] font-semibold">
+          <label className="flex items-center gap-2 self-end pb-2 text-base font-semibold">
             <input type="checkbox" checked={a.auto} onChange={(e) => change({ auto: e.target.checked })} className="size-4 accent-cobalt" />
             Upload new renders automatically
           </label>
           {platform === "youtube" && accounts.youtube_categories && (
             <label className="grid gap-1.5">
               <span className="field-label">Category</span>
-              <select className="field-input h-9 py-0 text-[13px]" value={a.category ?? "auto"} onChange={(e) => change({ category: e.target.value })}>
+              <select className="field-input h-9 py-0 text-base" value={a.category ?? "auto"} onChange={(e) => change({ category: e.target.value })}>
                 <option value="auto">Auto (Music for music videos, else People &amp; Blogs)</option>
                 {Object.entries(accounts.youtube_categories).map(([id, name]) => (
                   <option key={id} value={id}>
@@ -809,8 +1053,21 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
               </select>
             </label>
           )}
+          {platform === "instagram" && (
+            <label className="flex items-center gap-2 text-base font-semibold sm:col-span-3">
+              <input type="checkbox" checked={a.share_to_feed ?? true} onChange={(e) => change({ share_to_feed: e.target.checked })} className="size-4 accent-cobalt" />
+              Also show Reels in the profile grid
+            </label>
+          )}
+          {meta && (
+            <p className="m-0 text-sm text-ink-soft sm:col-span-3">
+              {platform === "facebook"
+                ? "Vertical videos up to 90 seconds post as public Reels; longer or landscape videos as regular Page videos."
+                : "Videos post as public Reels, with your thumbnail's frame as the cover."}
+            </p>
+          )}
           {platform === "youtube" && (
-            <label className="flex items-center gap-2 text-[13px] font-semibold sm:col-span-3">
+            <label className="flex items-center gap-2 text-base font-semibold sm:col-span-3">
               <input type="checkbox" checked={a.comment ?? true} onChange={(e) => change({ comment: e.target.checked })} className="size-4 accent-cobalt" />
               Post Claude&apos;s fact-check comment after upload (a comment you write is always posted)
             </label>
@@ -818,13 +1075,13 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
         </div>
       )}
       {platform === "youtube" && !youtube && a.connected && (a.comment ?? true) && a.can_comment === false && (
-        <p className="m-0 text-[12.5px] text-warn">
+        <p className="m-0 text-sm text-warn">
           To post comments, YouTube needs one more permission: press Disconnect, then Connect, and allow it. Until then the comment is only shown for you to copy.
         </p>
       )}
       {a.connected && a.auto && <PostingTimes platform={platform} account={a} onChange={change} />}
       {platform === "tiktok" && a.connected && a.mode === "direct" && a.privacy !== "SELF_ONLY" && (
-        <p className="m-0 text-[12.5px] text-ink-soft">
+        <p className="m-0 text-sm text-ink-soft">
           Until TikTok audits your developer app, direct posts can only be &ldquo;Only me&rdquo;. Choose TikTok draft to post publicly from the app.
         </p>
       )}
@@ -844,17 +1101,17 @@ function UploadQueue() {
     const t = window.setInterval(load, 15000);
     return () => window.clearInterval(t);
   }, []);
-  if (items === null) return <p className="m-0 p-4 text-[13px] text-ink-soft">Loading…</p>;
+  if (items === null) return <p className="m-0 p-4 text-base text-ink-soft">Loading…</p>;
   if (items.length === 0) {
-    return <p className="m-0 p-4 text-[13px] text-ink-soft">Nothing scheduled. Schedule a video from its Upload card, or turn on auto-upload at set times.</p>;
+    return <p className="m-0 p-4 text-base text-ink-soft">Nothing scheduled. Schedule a video from its Upload card, or turn on auto-upload at set times.</p>;
   }
   return (
     <ul className="m-0 list-none divide-y divide-line p-0">
       {items.slice(0, 30).map((i) => (
         <li key={i.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5">
           <span className="min-w-0">
-            <span className="block truncate text-[13.5px] font-semibold">{i.title}</span>
-            <span className="flex flex-wrap items-center gap-x-2 text-[12px] text-ink-soft">
+            <span className="block truncate text-base font-semibold">{i.title}</span>
+            <span className="flex flex-wrap items-center gap-x-2 text-sm text-ink-soft">
               <CalendarClock className="size-3.5" />
               {PLATFORM_NAMES[i.platform]}
               {i.channel_name ? ` (${i.channel_name})` : ""},{" "}
@@ -867,7 +1124,7 @@ function UploadQueue() {
                 </a>
               )}
             </span>
-            {i.error && <span className="block text-[12px] text-danger">{i.error}</span>}
+            {i.error && <span className="block text-sm text-danger">{i.error}</span>}
           </span>
           {i.status === "scheduled" && (
             <Button
@@ -903,7 +1160,7 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
   }, []);
 
   // while a sign-in is open in the browser, check every few seconds whether it finished
-  const connecting = !!accounts && (accounts.youtube.connecting || accounts.tiktok.connecting);
+  const connecting = !!accounts && PLATFORMS.some((p) => accounts[p]?.connecting);
   useEffect(() => {
     if (!connecting) return;
     const t = window.setInterval(() => api.publishAccounts().then(setAccounts).catch(() => {}), 2500);
@@ -914,29 +1171,13 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto grid max-w-[880px] gap-10 px-4 py-8 sm:px-8 lg:grid-cols-[160px_minmax(0,1fr)]">
         <aside className="hidden lg:block">
-          <nav aria-label="Settings sections" className="sticky top-8 grid gap-1 text-[13.5px]">
-            <a href="#services" className="rounded-md px-2 py-1.5 font-semibold text-ink no-underline hover:bg-ink/[0.05]">
-              Services
-            </a>
-            <a href="#channels" className="rounded-md px-2 py-1.5 font-semibold text-ink no-underline hover:bg-ink/[0.05]">
-              Channels
-            </a>
-            <a href="#queue" className="rounded-md px-2 py-1.5 font-semibold text-ink no-underline hover:bg-ink/[0.05]">
-              Upload queue
-            </a>
-            <a href="#scene-art" className="rounded-md px-2 py-1.5 font-semibold text-ink no-underline hover:bg-ink/[0.05]">
-              AI scene art
-            </a>
-            <a href="#storage" className="rounded-md px-2 py-1.5 font-semibold text-ink no-underline hover:bg-ink/[0.05]">
-              Storage
-            </a>
-          </nav>
+          <SectionNav />
         </aside>
         <div className="grid min-w-0 gap-10">
           <header>
-            <h1 className="m-0 font-display text-[28px] leading-tight font-extrabold tracking-tight">Settings</h1>
-            <p className="m-0 mt-1 text-[14px] text-ink-soft">Keys and accounts are saved on this computer only.</p>
-            {error && <p className="m-0 mt-3 text-[13.5px] text-danger">{error}</p>}
+            <h1 className="page-title m-0">Settings</h1>
+            <p className="page-intro m-0 mt-1">Keys and accounts are saved on this computer only.</p>
+            {error && <p className="m-0 mt-3 text-base text-danger">{error}</p>}
           </header>
           <Section id="services" title="Services" intro="The AI and media services the studio uses. Changes apply right away, no restart needed.">
             {SERVICES.map((s) => (
@@ -957,28 +1198,34 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
             intro="Connect the accounts your videos upload to. Each one uses your own developer app, then you sign in once."
           >
             {accounts ? (
-              (["youtube", "tiktok"] as Platform[]).map((p) => <ChannelRow key={p} platform={p} accounts={accounts} setAccounts={setAccounts} />)
+              PLATFORMS.filter((p) => accounts[p]).map((p) => <ChannelRow key={p} platform={p} accounts={accounts} setAccounts={setAccounts} />)
             ) : (
-              <p className="m-0 p-4 text-[13px] text-ink-soft">Checking accounts…</p>
+              <p className="m-0 p-4 text-base text-ink-soft">Checking accounts…</p>
             )}
           </Section>
           <Section
             id="queue"
             title="Upload queue"
-            intro="Scheduled uploads go out while the app runs (also in the background, from the tray). Anything that came due while it wasn't running goes out when it starts."
+            intro="Scheduled uploads go out while the app runs (also in the background, from the tray or menu bar). Anything that came due while it wasn't running goes out when it starts."
           >
             <BackgroundRow />
             <UploadQueue />
           </Section>
           <Section
             id="scene-art"
-            title="AI scene art"
-            intro="Anime, cinematic or flat 2D pictures for your scenes and music videos, drawn on your own graphics card for free. Each look is a one-time download."
+            title="AI features"
+            intro="Accurate lyric timing, beat-cut music videos and AI scene art (anime, cinematic or flat 2D pictures), running on this computer for free after a one-time download."
           >
             <SceneArt />
           </Section>
+          <Section id="appearance" title="Appearance" intro="How the studio looks on this computer.">
+            <AppearanceRows />
+          </Section>
           <Section id="storage" title="Storage" intro="Where your library is kept. Changing a folder moves the files there.">
             <Storage />
+          </Section>
+          <Section id="about" title="About & updates" intro="New versions come from the project's releases on GitHub and install with one click.">
+            <AboutRows />
           </Section>
         </div>
       </div>

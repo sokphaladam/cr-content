@@ -54,7 +54,7 @@ export function DownloadProgress({ progress, label }: { progress: ArtStatus["sty
       >
         <div className="h-full rounded-full bg-cobalt transition-[width] duration-300 ease-linear" style={{ width: `${exact}%` }} />
       </div>
-      <span className="text-[12px] text-ink-soft tabular-nums">
+      <span className="text-sm text-ink-soft tabular-nums">
         {gb(progress.done)} of {progress.total ? `${gb(progress.total)} GB · ${pct}%` : "about 7 GB"}
         {progress.active && !!progress.speed && ` · ${mbps(progress.speed)}`}
         {progress.active && progress.eta != null && ` · ${eta(progress.eta)} left`}
@@ -73,7 +73,7 @@ export function AddonProgress({ addon }: { addon: NonNullable<ArtStatus["addon"]
       <div role="progressbar" aria-label="Installing the AI add-on" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.floor(pct)} className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
         <div className={`h-full rounded-full bg-cobalt transition-[width] duration-300 ease-linear ${addon.total ? "" : "w-1/3 animate-pulse"}`} style={addon.total ? { width: `${pct}%` } : undefined} />
       </div>
-      <span className="text-[12px] text-ink-soft tabular-nums">
+      <span className="text-sm text-ink-soft tabular-nums">
         {addon.stage || "Starting…"}
         {addon.total > 0 && ` · ${gb(addon.done)} of ${gb(addon.total)} GB`}
         {!!addon.speed && ` · ${mbps(addon.speed)}`}
@@ -87,11 +87,12 @@ export function AddonProgress({ addon }: { addon: NonNullable<ArtStatus["addon"]
 export function artBlocker(status: ArtStatus | null, style: ArtStyle | ""): string {
   if (!style) return "";
   if (!status) return "Checking the AI art engine…";
+  if (status.addon?.scope === "music") return "AI scene art needs an NVIDIA graphics card, which Macs don't have. Stock footage will be used.";
   if (!status.installed) {
     if (status.addon?.installing) return "Installing the AI add-on…";
     return status.addon?.needed
-      ? "AI scene art needs the AI add-on (one-time, about 3 GB). Install it in Settings → AI scene art."
-      : "AI scene art isn't installed. Run: pip install -r requirements-art.txt, then restart the engine.";
+      ? `AI scene art needs the AI add-on (one-time, ${status.addon.size}). Install it in Settings → AI features.`
+      : "AI scene art isn't installed on this computer.";
   }
   if (!status.gpu) return "AI scene art needs an NVIDIA graphics card, and none was found. Stock footage will be used.";
   const s = status.styles[style];
@@ -128,7 +129,7 @@ export function ArtStylePicker({
         options={[{ value: "stock", label: stockLabel }, ...ART_STYLES.map((s) => ({ value: s.value, label: s.label }))]}
       />
       {value && (
-        <p className="m-0 flex flex-wrap items-center gap-2 text-[12.5px] text-ink-soft">
+        <p className="m-0 flex flex-wrap items-center gap-2 text-sm text-ink-soft">
           {blocker || `${ART_STYLES.find((s) => s.value === value)?.hint}. Drawn on your ${status?.gpu ?? "GPU"}, free.`}
           {style && !style.downloaded && !style.downloading && status?.installed && status.gpu && (
             <Button
@@ -195,7 +196,7 @@ export function ScenePicture({
   }
 
   return (
-    <div className="grid gap-2 rounded-lg border border-line/70 bg-paper/60 p-2.5">
+    <div className="grid gap-2 rounded-lg border border-line/70 bg-sunken p-2.5">
       <div className="flex items-center justify-between gap-2">
         <label className="field-label" htmlFor={`art-${scene.uid}`}>
           Picture
@@ -215,12 +216,12 @@ export function ScenePicture({
         value={scene.art_prompt ?? ""}
         onChange={(e) => onChange({ art_prompt: e.target.value })}
         placeholder={scene.media ? "Your chosen footage is used for this scene." : "Written by Claude when you press Plan pictures or render. Or describe it yourself."}
-        className="field-input field-sizing-content min-h-[52px] resize-none text-[13px] leading-snug"
+        className="field-input field-sizing-content min-h-[52px] resize-none text-base leading-snug"
       />
       <div className="flex flex-wrap items-center gap-1.5">
         <select
           aria-label="Camera move"
-          className="field-input h-7 w-auto py-0 text-[12px]"
+          className="field-input h-7 w-auto py-0 text-sm"
           value={scene.motion || ""}
           onChange={(e) => onChange({ motion: e.target.value as Motion | "" })}
         >
@@ -239,8 +240,8 @@ export function ScenePicture({
               type="button"
               aria-pressed={on}
               onClick={() => onChange({ effects: on ? effects.filter((x) => x !== e) : [...effects, e] })}
-              className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded-full border px-2.5 text-[12px] font-semibold transition-colors ${
-                on ? "border-cobalt bg-cobalt/10 text-cobalt" : "border-line bg-panel text-ink-soft hover:border-ink-soft/60 hover:text-ink"
+              className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded-full border px-2.5 text-sm font-semibold transition-colors ${
+                on ? "border-cobalt bg-cobalt/10 text-cobalt" : "border-line bg-panel text-ink-soft hover:border-line-strong hover:text-ink"
               }`}
             >
               {on && <Sparkles className="size-3" aria-hidden />}
@@ -250,7 +251,7 @@ export function ScenePicture({
         })}
       </div>
       {(message.text || blocker) && (
-        <p role={message.error ? "alert" : "status"} className={`m-0 text-[12px] ${message.error ? "text-danger" : "text-ink-soft"}`}>
+        <p role={message.error ? "alert" : "status"} className={`m-0 text-sm ${message.error ? "text-danger" : "text-ink-soft"}`}>
           {message.text || blocker}
         </p>
       )}

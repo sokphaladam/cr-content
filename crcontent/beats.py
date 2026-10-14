@@ -28,7 +28,7 @@ def beat_times(audio, bpm: int, total: float, log=print) -> tuple[list[float], s
         if len(beats) >= 4:
             return [float(b) for b in beats], "librosa"
     except ImportError:
-        log("      librosa isn't installed, so cuts follow the song's bpm (pip install -r requirements-music.txt)")
+        log("      librosa isn't installed, so cuts follow the song's bpm (Settings → AI features → Install AI add-on)")
     except Exception as e:
         log(f"      ! beat detection failed ({e.__class__.__name__}); cuts follow the song's bpm")
     step = 60 / max(bpm or 120, 40)

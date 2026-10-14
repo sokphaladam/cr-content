@@ -20,7 +20,7 @@ function MediaSlot({ media, onClick, ai = false }: { media: string; onClick: () 
         aria-label="Choose background for this scene"
         className="grid aspect-[9/16] w-full cursor-pointer place-items-center rounded-lg border border-dashed border-ink-soft/50 bg-paper p-0 text-ink-soft transition-colors hover:border-cobalt hover:text-cobalt"
       >
-        <span className="grid justify-items-center gap-1 text-[11px] font-semibold">
+        <span className="grid justify-items-center gap-1 text-xs font-semibold">
           {ai ? <Sparkles className="size-4" aria-hidden /> : <ImageIcon className="size-4" aria-hidden />}
           {ai ? "AI" : "Auto"}
         </span>
@@ -36,7 +36,7 @@ function MediaSlot({ media, onClick, ai = false }: { media: string; onClick: () 
       aria-label="Change background for this scene"
       onMouseEnter={() => video.current?.play().catch(() => {})}
       onMouseLeave={() => video.current?.pause()}
-      className="relative aspect-[9/16] w-full cursor-pointer overflow-hidden rounded-lg border-0 bg-ink p-0 ring-cobalt hover:ring-2"
+      className="relative aspect-[9/16] w-full cursor-pointer overflow-hidden rounded-lg border-0 bg-media p-0 ring-cobalt hover:ring-2"
     >
       {isImagePath(media) ? (
         // eslint-disable-next-line @next/next/no-img-element -- local engine file, not a Next-optimizable asset
@@ -143,7 +143,7 @@ function Picker({
   }
 
   return (
-    <div className="grid gap-3 rounded-xl border border-line bg-paper/70 p-3">
+    <div className="grid gap-3 well p-3">
       <div className="flex flex-wrap items-center gap-2">
         <Segmented
           size="sm"
@@ -167,7 +167,7 @@ function Picker({
         >
           <div className="relative flex-1">
             <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-soft" />
-            <input aria-label="Search footage" className="field-input h-8 py-0 pl-8 text-[13px]" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input aria-label="Search footage" className="field-input h-8 py-0 pl-8 text-base" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
           <Button size="sm" type="submit">
             Search
@@ -213,7 +213,7 @@ function Picker({
                 setQ(idea);
                 void search(idea);
               }}
-              className="h-7 cursor-pointer rounded-full border border-line bg-panel px-3 text-[12.5px] font-medium text-ink hover:border-cobalt hover:text-cobalt"
+              className="h-7 cursor-pointer rounded-full border border-line bg-panel px-3 text-sm font-medium text-ink hover:border-cobalt hover:text-cobalt"
             >
               {idea}
             </button>
@@ -236,7 +236,7 @@ function Picker({
                 disabled={picking !== null}
                 aria-label={`Use this ${r.kind}${r.author ? ` by ${r.author}` : ""}`}
                 style={{ backgroundImage: `url('${r.thumb}')` }}
-                className="relative grid aspect-[9/16] w-full cursor-pointer place-items-center overflow-hidden rounded-lg border-2 border-transparent bg-ink bg-cover bg-center p-0 transition hover:border-cobalt focus-visible:border-cobalt disabled:cursor-progress"
+                className="relative grid aspect-[9/16] w-full cursor-pointer place-items-center overflow-hidden rounded-lg border-2 border-transparent bg-media bg-cover bg-center p-0 transition hover:border-cobalt focus-visible:border-cobalt disabled:cursor-progress"
               >
                 {picking === r.id && (
                   <span className="grid size-8 place-items-center rounded-full bg-black/60 text-white">
@@ -244,14 +244,14 @@ function Picker({
                   </span>
                 )}
                 {r.kind === "video" && (
-                  <span className="absolute right-1 bottom-1 rounded bg-black/65 px-1 py-0.5 text-[10.5px] leading-none text-white">{r.duration}s</span>
+                  <span className="absolute right-1 bottom-1 rounded bg-black/65 px-1 py-0.5 text-2xs leading-none text-white">{r.duration}s</span>
                 )}
               </button>
             </li>
           ))}
         </ul>
       )}
-      <p className="m-0 text-xs text-ink-soft">Free stock media: click one to use it for this scene. Or let Claude draw an original background, still or animated.</p>
+      <p className="m-0 text-sm text-ink-soft">Free stock media: click one to use it for this scene. Or let Claude draw an original background, still or animated.</p>
     </div>
   );
 }
@@ -264,7 +264,7 @@ const NEW_TEXT: TextOverlay = { text: "", at: 0, duration: 2, x: 0.5, y: 0.4, si
 /** Seconds field for an overlay's start or length. */
 function SecondsInput({ label, value, onChange, min = 0 }: { label: string; value: number; onChange: (v: number) => void; min?: number }) {
   return (
-    <label className="flex items-center gap-1 text-[12px] text-ink-soft">
+    <label className="flex items-center gap-1 text-sm text-ink-soft">
       {label}
       <input
         type="number"
@@ -272,7 +272,7 @@ function SecondsInput({ label, value, onChange, min = 0 }: { label: string; valu
         step={0.1}
         value={Number(value.toFixed(2))}
         onChange={(e) => onChange(Math.max(min, Number(e.target.value) || 0))}
-        className="field-input h-7 w-16 px-1.5 py-0 text-[12px] tabular-nums"
+        className="field-input h-7 w-16 px-1.5 py-0 text-sm tabular-nums"
       />
       s
     </label>
@@ -353,7 +353,7 @@ export function SceneCard({
   const ListenIcon = listenState === "loading" ? Spinner : listenState === "playing" ? Pause : Play;
   const uploadButton = (target: PickTarget, label: string) => (
     <label className="relative cursor-pointer">
-      <span className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-semibold text-ink-soft transition-colors hover:bg-ink/[0.05] hover:text-ink">
+      <span className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-base font-semibold text-ink-soft transition-colors hover:bg-ink/[0.05] hover:text-ink">
         <Upload className="size-3.5" aria-hidden />
         {label}
       </span>
@@ -375,7 +375,7 @@ export function SceneCard({
       onFocusCapture={onActivate}
       onPointerDown={onActivate}
       className={`group grid grid-cols-[64px_minmax(0,1fr)] gap-x-4 gap-y-3 rounded-xl border bg-panel p-4 transition-shadow sm:grid-cols-[76px_minmax(0,1fr)] ${
-        active ? "border-cobalt/60 shadow-[0_0_0_3px_rgb(47_79_216/0.12)]" : "border-line hover:border-ink-soft/40"
+        active ? "border-cobalt/60 ring-3 ring-cobalt/15" : "border-line hover:border-line-strong"
       }`}
     >
       <div className="grid content-start gap-2">
@@ -383,7 +383,7 @@ export function SceneCard({
         {layout === "split" && (
           <>
             <MediaSlot media={scene.media2 ?? ""} onClick={() => openPicker("media2")} />
-            <span className="text-center text-[11px] text-ink-soft">Bottom</span>
+            <span className="text-center text-xs text-ink-soft">Bottom</span>
           </>
         )}
       </div>
@@ -391,7 +391,7 @@ export function SceneCard({
       <div className="grid min-w-0 content-start gap-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span className="font-display text-[15px] font-extrabold text-ink">Scene {index + 1}</span>
+            <span className="font-display text-lg font-extrabold text-ink">Scene {index + 1}</span>
             {hook && <Chip tone="caption">Hook</Chip>}
           </div>
           <div className="flex items-center gap-0.5 opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
@@ -418,7 +418,7 @@ export function SceneCard({
             value={scene.narration}
             onChange={(e) => onChange({ narration: e.target.value })}
             placeholder="What the voice says in this scene"
-            className="field-input field-sizing-content min-h-[68px] resize-none text-[15px] leading-relaxed"
+            className="field-input field-sizing-content min-h-[68px] resize-none text-lg leading-relaxed"
           />
         </div>
 
@@ -427,13 +427,13 @@ export function SceneCard({
             <label className="field-label" htmlFor={`headline-${scene.uid}`}>
               Headline <span className="font-normal text-ink-soft/80">optional</span>
             </label>
-            <input id={`headline-${scene.uid}`} lang={lang} className="field-input h-9 py-0 text-[13.5px]" value={scene.on_screen_text} onChange={(e) => onChange({ on_screen_text: e.target.value })} placeholder="Text at the top" />
+            <input id={`headline-${scene.uid}`} lang={lang} className="field-input h-9 py-0 text-base" value={scene.on_screen_text} onChange={(e) => onChange({ on_screen_text: e.target.value })} placeholder="Text at the top" />
           </div>
           <div className="grid gap-1.5">
             <label className="field-label" htmlFor={`visual-${scene.uid}`}>
               Footage search
             </label>
-            <input id={`visual-${scene.uid}`} className="field-input h-9 py-0 text-[13.5px]" value={scene.visual_query} onChange={(e) => onChange({ visual_query: e.target.value })} placeholder="e.g. octopus underwater" />
+            <input id={`visual-${scene.uid}`} className="field-input h-9 py-0 text-base" value={scene.visual_query} onChange={(e) => onChange({ visual_query: e.target.value })} placeholder="e.g. octopus underwater" />
           </div>
         </div>
 
@@ -455,7 +455,7 @@ export function SceneCard({
             ]}
           />
           {(scene.media_start ?? 0) > 0 && (
-            <button type="button" className="cursor-pointer bg-transparent p-0 text-[12px] text-ink-soft underline" onClick={() => onChange({ media_start: 0 })}>
+            <button type="button" className="cursor-pointer bg-transparent p-0 text-sm text-ink-soft underline" onClick={() => onChange({ media_start: 0 })}>
               Starts {scene.media_start!.toFixed(1)}s into the clip. Reset
             </button>
           )}
@@ -493,7 +493,7 @@ export function SceneCard({
             Add text
           </Button>
           {status.text && (
-            <span role="status" className={`ml-1 text-[12.5px] ${status.error ? "text-danger" : "text-ink-soft"}`}>
+            <span role="status" className={`ml-1 text-sm ${status.error ? "text-danger" : "text-ink-soft"}`}>
               {status.text}
             </span>
           )}
@@ -502,8 +502,8 @@ export function SceneCard({
         {broll.length > 0 && (
           <ul aria-label="B-roll" className="m-0 grid list-none gap-1.5 p-0">
             {broll.map((b, k) => (
-              <li key={k} className="flex flex-wrap items-center gap-2 rounded-lg bg-paper/70 px-2 py-1.5">
-                <span className="h-9 w-6 shrink-0 overflow-hidden rounded bg-ink">
+              <li key={k} className="flex flex-wrap items-center gap-2 rounded-lg bg-sunken px-2 py-1.5">
+                <span className="h-9 w-6 shrink-0 overflow-hidden rounded bg-media">
                   {isImagePath(b.media) ? (
                     // eslint-disable-next-line @next/next/no-img-element -- local engine file
                     <img src={fileUrl(b.media)} alt="" className="h-full w-full object-cover" />
@@ -511,7 +511,7 @@ export function SceneCard({
                     <video src={`${fileUrl(b.media)}#t=0.5`} muted preload="metadata" className="h-full w-full object-cover" />
                   )}
                 </span>
-                <span className="text-[12.5px] font-semibold">B-roll</span>
+                <span className="text-sm font-semibold">B-roll</span>
                 <SecondsInput label="at" value={b.at} onChange={(v) => setBroll(k, { at: v })} />
                 <SecondsInput label="for" value={b.duration} min={0.2} onChange={(v) => setBroll(k, { duration: v })} />
                 <IconButton label="Remove this B-roll" tone="danger" onClick={() => onChange({ broll: broll.filter((_, j) => j !== k) })}>
@@ -525,13 +525,13 @@ export function SceneCard({
         {texts.length > 0 && (
           <ul aria-label="Text on screen" className="m-0 grid list-none gap-1.5 p-0">
             {texts.map((t, k) => (
-              <li key={k} className="grid gap-1.5 rounded-lg bg-paper/70 px-2 py-1.5">
+              <li key={k} className="grid gap-1.5 rounded-lg bg-sunken px-2 py-1.5">
                 <div className="flex items-center gap-2">
                   <input
                     lang={lang}
                     aria-label="Text"
                     autoFocus={!t.text}
-                    className="field-input h-8 min-w-0 flex-1 py-0 text-[13px]"
+                    className="field-input h-8 min-w-0 flex-1 py-0 text-base"
                     value={t.text}
                     placeholder="Text on screen"
                     onChange={(e) => setText(k, { text: e.target.value })}
@@ -544,16 +544,16 @@ export function SceneCard({
                 <div className="flex flex-wrap items-center gap-2">
                   <SecondsInput label="at" value={t.at} onChange={(v) => setText(k, { at: v })} />
                   <SecondsInput label="for" value={t.duration} min={0.2} onChange={(v) => setText(k, { duration: v })} />
-                  <select aria-label="Text size" className="field-input h-7 w-auto py-0 text-[12px]" value={t.size} onChange={(e) => setText(k, { size: e.target.value as TextOverlay["size"] })}>
+                  <select aria-label="Text size" className="field-input h-7 w-auto py-0 text-sm" value={t.size} onChange={(e) => setText(k, { size: e.target.value as TextOverlay["size"] })}>
                     <option value="s">Small</option>
                     <option value="m">Medium</option>
                     <option value="l">Large</option>
                   </select>
-                  <label className="flex items-center gap-1 text-[12px] text-ink-soft">
+                  <label className="flex items-center gap-1 text-sm text-ink-soft">
                     <input type="checkbox" className="size-3.5 accent-cobalt" checked={t.box} onChange={(e) => setText(k, { box: e.target.checked })} />
                     Box
                   </label>
-                  <span className="text-[11.5px] text-ink-soft">Drag it on the preview to place it.</span>
+                  <span className="text-xs text-ink-soft">Drag it on the preview to place it.</span>
                 </div>
               </li>
             ))}
@@ -563,7 +563,7 @@ export function SceneCard({
 
       {pickFor && (
         <div className="col-span-2 grid gap-1.5">
-          <p className="m-0 text-[12.5px] font-semibold text-ink-soft">
+          <p className="m-0 text-sm font-semibold text-ink-soft">
             Footage for {PICK_TITLE[pickFor]}
             {pickFor === "broll" && <span className="ml-2 inline-block align-middle">{uploadButton("broll", "Upload a cutaway")}</span>}
           </p>

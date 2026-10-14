@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Noto_Sans, Noto_Sans_Khmer } from "next/font/google";
+import { APPEARANCE_SCRIPT } from "@/lib/appearanceScript";
 import "./globals.css";
 
 const bricolage = Bricolage_Grotesque({
@@ -27,7 +28,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${bricolage.variable} ${noto.variable} ${notoKhmer.variable} antialiased`}>
+    <html lang="en" className={`${bricolage.variable} ${noto.variable} ${notoKhmer.variable} antialiased`} suppressHydrationWarning>
+      <head>
+        {/* theme and interface size before the first paint (Settings → Appearance) */}
+        <script dangerouslySetInnerHTML={{ __html: APPEARANCE_SCRIPT }} />
+      </head>
       <body className="min-h-screen">{children}</body>
     </html>
   );

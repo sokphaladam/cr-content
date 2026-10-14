@@ -4,7 +4,8 @@
   "scripts": {
     "dev": "tauri dev",
     "build:engine": "python scripts/build_engine.py",
-    "build": "npm run build:engine && tauri build --config src-tauri/tauri.bundle.json",
+    "build:ffmpeg": "python scripts/fetch_ffmpeg.py",
+    "build": "npm run build:engine && npm run build:ffmpeg && tauri build --config src-tauri/tauri.bundle.json",
     "tauri": "tauri"
   },
   "devDependencies": {

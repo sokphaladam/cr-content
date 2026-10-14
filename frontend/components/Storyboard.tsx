@@ -181,18 +181,18 @@ function FactCheck({ draft, setDraft }: { draft: Draft; setDraft: (update: (d: D
   const toast = useToast();
   const notes = draft.facts.join("\n");
   return (
-    <section aria-labelledby="fact-check" className="grid gap-4 rounded-xl border border-line bg-panel p-4 sm:p-5">
+    <section aria-labelledby="fact-check" className="grid gap-4 card p-4 sm:p-5">
       <div className="grid gap-0.5">
-        <h2 id="fact-check" className="m-0 font-display text-base font-bold">
+        <h2 id="fact-check" className="card-title m-0">
           Fact check
         </h2>
-        <p className="m-0 text-[13px] text-ink-soft">Notes to keep the voiceover accurate. They aren&apos;t in the video; share them in a pinned comment.</p>
+        <p className="m-0 text-base text-ink-soft">Notes to keep the voiceover accurate. They aren&apos;t in the video; share them in a pinned comment.</p>
       </div>
       <Field label="Notes" hint="one per line" htmlFor="facts">
         <textarea
           id="facts"
           rows={Math.min(Math.max(draft.facts.length, 2), 8)}
-          className="field-input resize-y text-[13.5px] leading-relaxed"
+          className="field-input resize-y text-base leading-relaxed"
           value={notes}
           placeholder="e.g. Based on Humphrey et al. (2020), Scientific Reports."
           onChange={(e) => setDraft((d) => ({ ...d, facts: e.target.value.split("\n") }))}
@@ -202,7 +202,7 @@ function FactCheck({ draft, setDraft }: { draft: Draft; setDraft: (update: (d: D
         <textarea
           id="pinned"
           rows={4}
-          className="field-input resize-y text-[13.5px] leading-relaxed"
+          className="field-input resize-y text-base leading-relaxed"
           value={draft.pinned_comment}
           onChange={(e) => setDraft((d) => ({ ...d, pinned_comment: e.target.value }))}
         />
@@ -233,20 +233,20 @@ function FactCheck({ draft, setDraft }: { draft: Draft; setDraft: (update: (d: D
 function SaveStatus({ state, saved }: { state: SaveState; saved: boolean }) {
   if (state === "saving")
     return (
-      <span role="status" className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-ink-soft">
+      <span role="status" className="flex shrink-0 items-center gap-1.5 text-sm text-ink-soft">
         <Spinner className="size-3.5" /> Saving
       </span>
     );
   if (state === "error")
     return (
-      <span role="alert" className="flex shrink-0 items-center gap-1.5 text-[12.5px] font-semibold text-danger">
+      <span role="alert" className="flex shrink-0 items-center gap-1.5 text-sm font-semibold text-danger">
         <CircleAlert className="size-3.5" /> Not saved. Is the engine running?
       </span>
     );
   if (!saved)
-    return <span className="hidden shrink-0 text-[12.5px] text-ink-soft md:inline">Your edits will be saved as a new draft</span>;
+    return <span className="hidden shrink-0 text-sm text-ink-soft md:inline">Your edits will be saved as a new draft</span>;
   return (
-    <span role="status" className="flex shrink-0 items-center gap-1 text-[12.5px] text-ink-soft">
+    <span role="status" className="flex shrink-0 items-center gap-1 text-sm text-ink-soft">
       <Check className="size-3.5 text-ok" /> Saved
     </span>
   );
@@ -422,7 +422,7 @@ export function Storyboard({
           <ChevronLeft className="size-5" />
         </IconButton>
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <span className="truncate text-sm font-semibold" lang={draft.lang}>
+          <span className="truncate text-md font-semibold" lang={draft.lang}>
             {draft.title || "Untitled draft"}
           </span>
           <SaveStatus state={saveState} saved={draft.id !== null} />
@@ -472,10 +472,10 @@ export function Storyboard({
               value={draft.title}
               onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value.replace(/\n/g, " ") }))}
               placeholder="Video title"
-              className="field-sizing-content w-full resize-none rounded-lg border border-transparent bg-transparent px-0 py-1 font-display text-[clamp(24px,2.6vw,32px)] leading-tight font-extrabold tracking-[-0.02em] hover:border-line hover:px-3 focus:border-cobalt focus:bg-panel focus:px-3 focus:outline-none"
+              className="field-sizing-content w-full resize-none rounded-lg border border-transparent bg-transparent px-0 py-1 page-title hover:border-line hover:px-3 focus:border-cobalt focus:bg-panel focus:px-3 focus:outline-none"
             />
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="m-0 text-[13px] text-ink-soft">
+              <p className="m-0 text-base text-ink-soft">
                 {options.langs[draft.lang].name}, {draft.scenes.length} scene{draft.scenes.length === 1 ? "" : "s"}
                 {filled < draft.scenes.length && `, ${draft.scenes.length - filled} without voiceover (skipped when rendering)`}
               </p>
@@ -495,9 +495,9 @@ export function Storyboard({
             </div>
           </div>
 
-          <section className="grid gap-3 rounded-xl border border-line bg-panel p-4">
+          <section className="grid gap-3 card p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="m-0 font-display text-base font-bold">Visuals</h2>
+              <h2 className="card-title m-0">Visuals</h2>
               {draft.art_style && (
                 <div className="flex flex-wrap items-center gap-1">
                   <Button
@@ -557,12 +557,12 @@ export function Storyboard({
             </div>
             <ArtStylePicker value={draft.art_style} onChange={(v) => setDraft((d) => ({ ...d, art_style: v }))} status={art.status} reload={art.reload} />
             {draft.art_style && draft.art_bible && (
-              <details className="text-[12.5px]">
+              <details className="text-sm">
                 <summary className="cursor-pointer font-semibold text-ink-soft">Look of the video (keeps every picture consistent)</summary>
                 <textarea
                   aria-label="Look of the video"
                   rows={3}
-                  className="field-input mt-1.5 resize-y text-[12.5px] leading-snug"
+                  className="field-input mt-1.5 resize-y text-sm leading-snug"
                   value={draft.art_bible}
                   onChange={(e) => setDraft((d) => ({ ...d, art_bible: e.target.value }))}
                 />
@@ -617,8 +617,8 @@ export function Storyboard({
             </>
           )}
 
-          <section className="grid gap-4 rounded-xl border border-line bg-panel p-4 sm:p-5">
-            <h2 className="m-0 font-display text-base font-bold">Post details</h2>
+          <section className="grid gap-4 card p-4 sm:p-5">
+            <h2 className="card-title m-0">Post details</h2>
             <Field label="Caption" htmlFor="caption">
               <textarea id="caption" lang={draft.lang} rows={2} className="field-input resize-y" value={draft.caption} onChange={(e) => setDraft((d) => ({ ...d, caption: e.target.value }))} />
             </Field>
@@ -658,7 +658,7 @@ export function Storyboard({
           </div>
         )}
         <div className="mx-auto flex max-w-[880px] flex-wrap items-end gap-3">
-          <div className="grid min-w-[150px] flex-[2] gap-1">
+          <div className="grid min-w-[180px] flex-[2] gap-1">
             <label className="field-label" htmlFor="voice">
               Voice
             </label>
@@ -691,7 +691,7 @@ export function Storyboard({
               />
             </div>
           </div>
-          <div className="grid min-w-[145px] flex-1 gap-1">
+          <div className="grid min-w-[130px] flex-1 gap-1">
             <label className="field-label" htmlFor="rate">
               Speed
             </label>
@@ -711,7 +711,7 @@ export function Storyboard({
               ))}
             </select>
           </div>
-          <div className="grid min-w-[125px] flex-1 gap-1">
+          <div className="grid min-w-[180px] flex-[1.4] gap-1">
             <label className="field-label" htmlFor="music">
               Music
             </label>

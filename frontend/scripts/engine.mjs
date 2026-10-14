@@ -8,7 +8,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const candidates = [join(root, ".venv", "Scripts", "python.exe"), join(root, ".venv", "bin", "python")];
 const python = candidates.find(existsSync);
 if (!python) {
-  console.error("Python virtualenv not found. In the project root run:\n  python -m venv .venv\n  .venv\Scripts\pip install -r requirements.txt");
+  console.error("Python virtualenv not found. In the project root run:\n  python -m venv .venv\n  .venv/bin/pip install -r requirements.txt   (Windows: .venv\\Scripts\\pip)");
   process.exit(1);
 }
 const child = spawn(python, ["app.py", "--no-browser", "--reload"], { cwd: root, stdio: "inherit" });

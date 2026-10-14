@@ -78,7 +78,7 @@ export function ExcelPlanForm({
   }
 
   return (
-    <div className="grid gap-5 rounded-xl border border-line bg-panel p-5 sm:p-6">
+    <div className="grid gap-5 card p-5 sm:p-6">
       <Field label="Content plan (.xlsx)" hint="a Scripts sheet with Ep | Time | Visual | On-screen Text | Voiceover" htmlFor="excel-file">
         <input
           id="excel-file"
@@ -99,7 +99,7 @@ export function ExcelPlanForm({
             <span className="field-label">
               {plan.episodes.length} episodes in {plan.name}
             </span>
-            <span className="flex gap-3 text-[13px]">
+            <span className="flex gap-3 text-base">
               <button type="button" className="font-semibold text-cobalt hover:underline" onClick={() => setPicked(new Set(plan.episodes.map((e) => e.ep)))}>
                 All
               </button>
@@ -113,10 +113,10 @@ export function ExcelPlanForm({
               <li key={e.ep}>
                 <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-line px-3 py-2.5 hover:bg-ink/[0.03]">
                   <input type="checkbox" checked={picked.has(e.ep)} onChange={(ev) => toggle(e.ep, ev.target.checked)} className="size-4 shrink-0 accent-cobalt" />
-                  <span className="w-11 shrink-0 text-[13px] font-semibold text-ink-soft tabular-nums">Ep {e.ep}</span>
+                  <span className="w-11 shrink-0 text-base font-semibold text-ink-soft tabular-nums">Ep {e.ep}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{e.title}</span>
-                    <span className="block text-[12.5px] text-ink-soft">
+                    <span className="block text-sm text-ink-soft">
                       {e.scenes} scenes{e.status ? ` · ${e.status}` : ""}
                     </span>
                   </span>
@@ -127,7 +127,7 @@ export function ExcelPlanForm({
         </fieldset>
       )}
 
-      <p className="m-0 text-[13px] text-ink-soft">
+      <p className="m-0 text-base text-ink-soft">
         Voiceover is spoken word for word and each Visual becomes a footage search. Sound cues in brackets aren&apos;t read out; a scene that is only a cue becomes a silent
         beat. <b className="font-semibold text-ink">Create drafts</b> to check the footage first, or <b className="font-semibold text-ink">Render</b> them all now (each
         still becomes a draft you can fix and render again). Rows marked Posted start unticked.
@@ -147,7 +147,7 @@ export function ExcelPlanForm({
           Create drafts
         </Button>
         {!plan && busy === "" && (
-          <span className="flex items-center gap-1.5 text-[13px] text-ink-soft">
+          <span className="flex items-center gap-1.5 text-base text-ink-soft">
             <FileSpreadsheet className="size-4" /> Choose a file to see its episodes
           </span>
         )}

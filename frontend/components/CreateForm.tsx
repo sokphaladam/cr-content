@@ -55,7 +55,7 @@ function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string
   }
 
   return (
-    <form onSubmit={submit} className="grid gap-5 rounded-xl border border-line bg-panel p-5 sm:p-6">
+    <form onSubmit={submit} className="grid gap-5 card p-5 sm:p-6">
       <Field label="Song file" hint="mp3, wav, m4a, flac" htmlFor="own-file">
         <input
           id="own-file"
@@ -113,7 +113,7 @@ function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string
           className="field-input resize-y py-2.5 leading-relaxed"
         />
       </Field>
-      <p className="m-0 text-[13px] text-ink-soft">
+      <p className="m-0 text-base text-ink-soft">
         The app listens to your song and lines each lyric up with the singing, then shows you the timing to check before it makes the video. Footage is
         picked for each part of the song and cut on the beat.
       </p>
@@ -227,8 +227,8 @@ export function CreateForm({
     <div className="h-full overflow-y-auto">
       <div className="mx-auto grid max-w-[720px] gap-6 px-4 py-8 sm:px-8 sm:py-14">
         <div className="grid gap-2">
-          <h1 className="m-0 font-display text-[clamp(30px,3.6vw,44px)] leading-[1.05] font-extrabold tracking-[-0.025em]">Make a new video</h1>
-          <p className="m-0 max-w-[56ch] text-[15px] text-ink-soft">
+          <h1 className="page-title m-0">Make a new video</h1>
+          <p className="page-intro m-0">
             Start from an idea and let Claude write the script, paste a script you already have, or upload a content plan in Excel. Every script becomes a draft you can edit.
           </p>
         </div>
@@ -263,7 +263,7 @@ export function CreateForm({
         {mode === "song" && songSource === "own" && <OwnSongForm onImported={onImportSong} />}
 
         {mode === "song" && songSource === "ai" && (
-          <form onSubmit={writeSong} className="grid gap-5 rounded-xl border border-line bg-panel p-5 sm:p-6">
+          <form onSubmit={writeSong} className="grid gap-5 card p-5 sm:p-6">
             <Field label="What the song is about" htmlFor="song-topic">
               <textarea
                 id="song-topic"
@@ -273,7 +273,7 @@ export function CreateForm({
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
                 placeholder="Summer love on the Phnom Penh riverside"
-                className="field-input resize-y py-3 text-lg leading-snug font-medium"
+                className="field-input resize-y py-3 text-xl leading-snug font-medium"
               />
             </Field>
 
@@ -303,7 +303,7 @@ export function CreateForm({
                 <input id="song-vocal" className="field-input" value={vocal} onChange={(e) => setVocal(e.target.value)} placeholder="Breathy female pop vocal" />
               </Field>
             </div>
-            <p className="m-0 text-[13px] text-ink-soft">
+            <p className="m-0 text-base text-ink-soft">
               Describe a sound, not a real singer. Names of real artists get turned into a description of their style, because ElevenLabs won&apos;t imitate real voices.
             </p>
 
@@ -320,7 +320,7 @@ export function CreateForm({
         )}
 
         {mode === "topic" && (
-          <form onSubmit={write} className="grid gap-5 rounded-xl border border-line bg-panel p-5 sm:p-6">
+          <form onSubmit={write} className="grid gap-5 card p-5 sm:p-6">
             <Field label="Topic" htmlFor="topic">
               <textarea
                 id="topic"
@@ -330,7 +330,7 @@ export function CreateForm({
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
                 placeholder={PLACEHOLDER[lang]}
-                className="field-input resize-y py-3 text-lg leading-snug font-medium"
+                className="field-input resize-y py-3 text-xl leading-snug font-medium"
               />
             </Field>
 
@@ -380,7 +380,7 @@ export function CreateForm({
         {mode === "excel" && <ExcelPlanForm claude={!!options?.keys.anthropic} onDrafts={onExcelDrafts} onRender={onExcelRender} />}
 
         {mode === "paste" && (
-          <form onSubmit={importPasted} className="grid gap-4 rounded-xl border border-line bg-panel p-5 sm:p-6">
+          <form onSubmit={importPasted} className="grid gap-4 card p-5 sm:p-6">
             <Field label="Script" htmlFor="pasted">
               <textarea
                 id="pasted"
@@ -389,10 +389,10 @@ export function CreateForm({
                 value={pasted}
                 onChange={(e) => setPasted(e.target.value)}
                 placeholder={PASTE_EXAMPLE}
-                className="field-input resize-y font-mono text-[13px] leading-relaxed"
+                className="field-input resize-y font-mono text-base leading-relaxed"
               />
             </Field>
-            <p className="m-0 text-[13px] text-ink-soft">
+            <p className="m-0 text-base text-ink-soft">
               English or ខ្មែរ, any layout. Voiceover is kept word for word, visual notes become footage searches, and extra notes like production tips are ignored. Emojis are removed
               from on-screen text.
             </p>

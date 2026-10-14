@@ -15,7 +15,20 @@ import sys
 from pathlib import Path
 
 APP_ID = "com.crcontent.shorts-studio"
-APP_HOME = Path(os.getenv("APPDATA") or Path.home() / ".config") / APP_ID  # Tauri's app_data_dir on Windows
+
+
+def _app_home() -> Path:
+    """Tauri's app_data_dir for APP_ID, so the engine and the desktop app agree on where engine.log etc. live."""
+    if sys.platform == "win32":
+        base = Path(os.getenv("APPDATA") or Path.home() / "AppData" / "Roaming")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.getenv("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return base / APP_ID
+
+
+APP_HOME = _app_home()
 FILE = APP_HOME / "locations.json"
 # What the data folder holds (paths saved in drafts are relative to it, so these move together).
 DATA_ENTRIES = ("drafts", "uploads", "cache", "assets", "campaigns", ".env", "accounts.json", "schedule.json")

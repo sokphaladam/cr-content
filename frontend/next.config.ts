@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
   output: "export",
   // frontend/ is its own project, even though the project root also has a package.json (the desktop app's)
   turbopack: { root: dirname(fileURLToPath(import.meta.url)) },
+  // dev only: keep Next's badge off the navigation rail's Settings button
+  devIndicators: { position: "bottom-right" },
 };
 
 export default nextConfig;

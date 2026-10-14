@@ -6,8 +6,12 @@
 // Settings (crcontent/locations.py); this app only gives it a working folder and, in release, engine.log.
 //
 // Scheduled uploads need the engine running, so closing the window only hides it: the app stays in the tray
-// (Quit there stops it), can start with Windows (`--background`: straight to the tray), and runs once: opening it
-// again shows the running window instead of starting a second engine that would post the same videos twice.
+// (Quit there stops it; the menu bar on macOS), can start at sign-in (`--background`: straight to the tray; a Run
+// registry value on Windows, a LaunchAgent on macOS), and runs once: opening it again shows the running window
+// instead of starting a second engine that would post the same videos twice.
+//
+// Updates: the page checks GitHub Releases (tauri-plugin-updater; latest.json signed with the project's key, see
+// tauri.conf.json plugins.updater) through check_update, and install_update downloads, stops the engine and restarts.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::error::Error;
@@ -23,16 +27,23 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::webview::DownloadEvent;
 use tauri::{AppHandle, Manager, RunEvent, Webview, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-/// Launched by Windows at sign-in: start in the tray, without a window.
+/// Launched at sign-in: start in the tray, without a window.
 const BACKGROUND_ARG: &str = "--background";
+#[cfg(windows)]
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+#[cfg(windows)]
 const RUN_VALUE: &str = "Shorts Studio";
+/// The tray menu's name for starting at sign-in.
+const AUTOSTART_LABEL: &str = if cfg!(target_os = "macos") { "Open at Login" } else { "Start with Windows" };
 
 /// The tray menu's "Start with Windows" tick, kept in step when Settings changes it.
 struct AutostartItem(CheckMenuItem<tauri::Wry>);
 
 /// The running engine process, killed when the app exits.
 struct Engine(Mutex<Option<Child>>);
+
+/// The update found by the last check_update, ready for install_update.
+struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
 
 fn free_port() -> std::io::Result<u16> {
     Ok(TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
@@ -65,6 +76,26 @@ fn engine_command(app: &AppHandle, work: &Path) -> Result<Command, Box<dyn Error
     Ok(Command::new(app.path().resource_dir()?.join("engine").join(exe)))
 }
 
+/// The engine's PATH: the FFmpeg bundled with the installer first (resources/ffmpeg, from scripts/fetch_ffmpeg.py),
+/// then the usual PATH. On macOS also Homebrew's folders, which apps opened from Finder don't get.
+fn engine_path(app: &AppHandle) -> std::ffi::OsString {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if !cfg!(debug_assertions) {
+        if let Ok(res) = app.path().resource_dir() {
+            dirs.push(res.join("ffmpeg"));
+        }
+    }
+    dirs.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    if cfg!(target_os = "macos") {
+        for extra in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            if !dirs.iter().any(|d| d == Path::new(extra)) {
+                dirs.push(PathBuf::from(extra));
+            }
+        }
+    }
+    std::env::join_paths(dirs).unwrap_or_default()
+}
+
 fn start_engine(app: &AppHandle, work: &Path, port: u16) -> Result<Child, Box<dyn Error>> {
     let mut cmd = engine_command(app, work)?;
     // --parent-pid: the engine exits when this app does, so it can't outlive the app even if the app crashes.
@@ -73,6 +104,7 @@ fn start_engine(app: &AppHandle, work: &Path, port: u16) -> Result<Child, Box<dy
         .current_dir(work)
         .env("PYTHONUNBUFFERED", "1")
         .stdin(Stdio::null());
+    cmd.env("PATH", engine_path(app));
     if !cfg!(debug_assertions) {
         // No console in release: keep the engine's output in a log file.
         let log = File::create(work.join("engine.log"))?;
@@ -87,22 +119,22 @@ fn start_engine(app: &AppHandle, work: &Path, port: u16) -> Result<Child, Box<dy
     Ok(cmd.spawn()?)
 }
 
+#[cfg(windows)]
 fn reg(args: &[&str]) -> bool {
+    use std::os::windows::process::CommandExt;
     let mut cmd = Command::new("reg");
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
 /// Is the app set to start (in the tray) when you sign in to Windows?
+#[cfg(windows)]
 fn autostart_enabled() -> bool {
     reg(&["query", RUN_KEY, "/v", RUN_VALUE])
 }
 
+#[cfg(windows)]
 fn set_autostart_enabled(on: bool) -> Result<(), String> {
     let ok = if on {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -114,7 +146,56 @@ fn set_autostart_enabled(on: bool) -> Result<(), String> {
     if ok { Ok(()) } else { Err("Windows didn't accept the change.".into()) }
 }
 
-/// Settings → Desktop app: start with Windows, in the tray.
+/// macOS: a LaunchAgent in ~/Library/LaunchAgents starts the app (in the menu bar) when you log in.
+#[cfg(not(windows))]
+fn launch_agent() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join("Library/LaunchAgents/com.crcontent.shorts-studio.plist"))
+}
+
+#[cfg(not(windows))]
+fn autostart_enabled() -> bool {
+    launch_agent().is_some_and(|p| p.exists())
+}
+
+#[cfg(not(windows))]
+fn set_autostart_enabled(on: bool) -> Result<(), String> {
+    let plist = launch_agent().ok_or("Your home folder wasn't found.")?;
+    if !on {
+        return match fs::remove_file(&plist) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        };
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = exe.display().to_string().replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let body = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.crcontent.shorts-studio</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{exe}</string>
+    <string>{BACKGROUND_ARG}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+</dict>
+</plist>
+"#
+    );
+    if let Some(dir) = plist.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    fs::write(&plist, body).map_err(|e| e.to_string())
+}
+
+/// Settings → Desktop app: start at sign-in, in the tray (menu bar on macOS).
 #[tauri::command]
 fn get_autostart() -> bool {
     autostart_enabled()
@@ -139,7 +220,7 @@ fn show_window(app: &AppHandle) {
 
 fn build_tray(app: &tauri::App) -> Result<(), Box<dyn Error>> {
     let open = MenuItem::with_id(app, "open", "Open Shorts Studio", true, None::<&str>)?;
-    let autostart = CheckMenuItem::with_id(app, "autostart", "Start with Windows", true, autostart_enabled(), None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(app, "autostart", AUTOSTART_LABEL, true, autostart_enabled(), None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit (stops scheduled uploads)", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &autostart, &PredefinedMenuItem::separator(app)?, &quit])?;
     app.manage(AutostartItem(autostart));
@@ -184,7 +265,7 @@ async fn pick_folder(title: String, start: Option<String>) -> Option<String> {
 fn on_download(webview: Webview, event: DownloadEvent<'_>) -> bool {
     match event {
         DownloadEvent::Requested { destination, .. } => {
-            // WebView2 proposes Downloads\<name from the server>; offer that as the default.
+            // The webview proposes Downloads/<name from the server>; offer that as the default.
             let mut dialog = rfd::FileDialog::new().set_title("Save as");
             if let Some(name) = destination.file_name() {
                 dialog = dialog.set_file_name(name.to_string_lossy());
@@ -217,6 +298,67 @@ fn on_download(webview: Webview, event: DownloadEvent<'_>) -> bool {
         }
         _ => true,
     }
+}
+
+fn stop_engine(app: &AppHandle) {
+    if let Some(engine) = app.try_state::<Engine>() {
+        if let Some(mut child) = engine.0.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Settings → About: this app's version.
+#[tauri::command]
+fn app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+/// Is there a newer version on GitHub? Its version, notes and date, or null. Remembered for install_update.
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<serde_json::Value, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+    let info = update.as_ref().map(|u| {
+        serde_json::json!({
+            "version": u.version,
+            "current": u.current_version,
+            "notes": u.body.clone().unwrap_or_default(),
+            "date": u.date.map(|d| d.to_string()).unwrap_or_default(),
+        })
+    });
+    *app.state::<PendingUpdate>().0.lock().unwrap() = update;
+    Ok(info.unwrap_or(serde_json::Value::Null))
+}
+
+/// Download the update found by check_update (the page gets `desktop-update` progress events), stop the engine so
+/// its files can be replaced, install and restart. On Windows the installer takes over and the app closes.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let update = app.state::<PendingUpdate>().0.lock().unwrap().take().ok_or("Check for updates first.")?;
+    let window = app.get_webview_window("main");
+    let (mut done, mut shown) = (0u64, -1i64);
+    let bytes = update
+        .download(
+            |chunk, total| {
+                done += chunk as u64;
+                let pct = total.map(|t| (done * 100 / t.max(1)) as i64).unwrap_or(-1);
+                if pct != shown {
+                    shown = pct;
+                    if let Some(w) = &window {
+                        let detail = serde_json::json!({ "downloaded": done, "total": total });
+                        let _ = w.eval(format!("window.dispatchEvent(new CustomEvent('desktop-update', {{ detail: {detail} }}))"));
+                    }
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    stop_engine(&app);
+    update.install(bytes).map_err(|e| e.to_string())?;
+    app.restart();
 }
 
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
@@ -254,7 +396,9 @@ fn main() {
     let app = tauri::Builder::default()
         // must come first: a second launch (a click on the shortcut while it runs in the tray) shows this one
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)))
-        .invoke_handler(tauri::generate_handler![pick_folder, get_autostart, set_autostart])
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(PendingUpdate(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![pick_folder, get_autostart, set_autostart, app_version, check_update, install_update])
         .on_window_event(|window, event| {
             // closing the window keeps the app (and its upload schedule) running in the tray
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -266,14 +410,11 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Shorts Studio");
 
-    app.run(|app, event| {
-        if let RunEvent::Exit = event {
-            if let Some(engine) = app.try_state::<Engine>() {
-                if let Some(mut child) = engine.0.lock().unwrap().take() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-            }
-        }
+    app.run(|app, event| match event {
+        RunEvent::Exit => stop_engine(app),
+        // macOS: a click on the Dock icon brings back the hidden window
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => show_window(app),
+        _ => {}
     });
 }

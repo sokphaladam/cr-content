@@ -24,7 +24,7 @@ function RailButton({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`${className} group relative grid w-full cursor-pointer justify-items-center gap-1 border-0 bg-transparent py-2 text-[10.5px] font-semibold transition-colors ${
+      className={`${className} group relative grid w-full cursor-pointer justify-items-center gap-1 border-0 bg-transparent py-2 text-2xs font-semibold transition-colors ${
         active ? "text-white" : "text-rail-ink hover:text-white"
       }`}
     >
@@ -90,7 +90,7 @@ export function NavRail({
         </RailButton>
         {keys && (
           <span
-            className="mx-auto mt-1 flex items-center gap-1 text-[10px] text-rail-ink"
+            className="mx-auto mt-1 flex items-center gap-1 text-2xs text-rail-ink"
             title={missing.length ? `Not set up yet: ${missing.join(", ")}. Open Settings.` : "Claude and stock footage are ready"}
           >
             <span className={`size-1.5 rounded-full ${missing.length ? "bg-caption" : "bg-ok"}`} />

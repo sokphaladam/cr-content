@@ -66,8 +66,8 @@ export function PictureReview({
       <div className="absolute inset-0 bg-ink/50" onClick={() => !drawing && onClose()} />
       <div className="relative flex max-h-[94vh] w-[min(560px,96vw)] flex-col overflow-hidden rounded-xl bg-paper shadow-2xl">
         <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-line bg-panel px-3.5">
-          <span className="font-display text-[15px] font-bold tabular-nums">
-            Picture {index + 1} of {items.length} <span className="text-[12.5px] font-normal text-ink-soft">· {drawn} drawn</span>
+          <span className="font-display text-lg font-bold tabular-nums">
+            Picture {index + 1} of {items.length} <span className="text-sm font-normal text-ink-soft">· {drawn} drawn</span>
           </span>
           <IconButton label="Close" onClick={onClose} disabled={drawing}>
             <X className="size-5" />
@@ -85,15 +85,15 @@ export function PictureReview({
             )}
             {!item.media && !drawing && <ImageIcon className="size-8 text-ink-soft/60" aria-hidden />}
             {drawing && (
-              <span className="absolute inset-0 grid place-content-center justify-items-center gap-1.5 text-[12.5px] font-semibold text-ink">
+              <span className="absolute inset-0 grid place-content-center justify-items-center gap-1.5 text-sm font-semibold text-ink">
                 <Spinner className="size-6" />
                 Drawing… about 40 seconds
               </span>
             )}
           </div>
           <div className="grid gap-0.5">
-            <span className="text-[13px] font-semibold">{item.label}</span>
-            {item.text && <span className="line-clamp-3 text-[12.5px] text-ink-soft italic">“{item.text}”</span>}
+            <span className="text-base font-semibold">{item.label}</span>
+            {item.text && <span className="line-clamp-3 text-sm text-ink-soft italic">“{item.text}”</span>}
           </div>
           <label className="grid gap-1">
             <span className="field-label">What the picture shows</span>
@@ -102,10 +102,10 @@ export function PictureReview({
               value={item.prompt}
               disabled={drawing}
               onChange={(e) => onPrompt(index, e.target.value)}
-              className="field-input min-h-[68px] resize-y text-[12.5px] leading-snug"
+              className="field-input min-h-[68px] resize-y text-sm leading-snug"
             />
           </label>
-          {blocker && <p className="m-0 text-[12.5px] text-danger">{blocker}</p>}
+          {blocker && <p className="m-0 text-sm text-danger">{blocker}</p>}
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-t border-line bg-panel px-3.5 py-2.5">
           <Button size="sm" variant="ghost" icon={<ChevronLeft className="size-4" />} disabled={drawing || index === 0} onClick={() => setIndex((i) => i - 1)}>

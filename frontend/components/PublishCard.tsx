@@ -2,9 +2,9 @@
 
 import { CalendarClock, ExternalLink, ImageUp, MessageSquare, Settings as SettingsIcon, Upload, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { api, outputUrl, type CommentState, type Job, type ThumbnailState, type Platform, type PublishAccounts, type Published, type ScheduledUpload, type TikTokCreator, type TikTokPrivacy, type VideoDetail, type YouTubeOptions } from "@/lib/api";
+import { api, autostartLabel, isMac, outputUrl, type CommentState, type Job, type ThumbnailState, type Platform, type PublishAccounts, type Published, type ScheduledUpload, type TikTokCreator, type TikTokPrivacy, type VideoDetail, type YouTubeOptions } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
-import { PLATFORM_NAMES as NAMES } from "./Settings";
+import { PLATFORM_NAMES as NAMES, PLATFORMS } from "./Settings";
 import { Button, IconButton, useToast } from "./ui";
 
 /** Local "YYYY-MM-DDTHH:MM" for a datetime-local input: the next full hour. */
@@ -63,7 +63,7 @@ function YouTubeExtras({ detail }: { detail: VideoDetail }) {
   const coverShown = options.thumbnail === "cover" || (options.thumbnail === "auto" && !options.short);
   return (
     <div className="grid gap-1.5">
-      <label className="grid gap-1 text-[12px] text-ink-soft">
+      <label className="grid gap-1 text-sm text-ink-soft">
         <span className="flex items-center justify-between">
           Tags
           <span className={`tabular-nums ${tagCost(typed) > TAGS_MAX ? "text-danger" : ""}`}>
@@ -71,7 +71,7 @@ function YouTubeExtras({ detail }: { detail: VideoDetail }) {
           </span>
         </span>
         <input
-          className="field-input h-8 py-0 text-[12.5px]"
+          className="field-input h-8 py-0 text-sm"
           value={text}
           placeholder="cat facts, cats, slow blink"
           onChange={(e) => setText(e.target.value)}
@@ -79,9 +79,9 @@ function YouTubeExtras({ detail }: { detail: VideoDetail }) {
           onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
         />
       </label>
-      <span className="text-[11.5px] leading-snug text-ink-soft">
+      <span className="text-xs leading-snug text-ink-soft">
         {options.custom_tags ? (
-          <button type="button" className="cursor-pointer bg-transparent p-0 text-[11.5px] text-cobalt underline" onClick={() => save({ reset_tags: true })}>
+          <button type="button" className="cursor-pointer bg-transparent p-0 text-xs text-cobalt underline" onClick={() => save({ reset_tags: true })}>
             Use the hashtags instead
           </button>
         ) : (
@@ -98,9 +98,9 @@ function YouTubeExtras({ detail }: { detail: VideoDetail }) {
             style={{ aspectRatio: detail.aspect === "16:9" ? "16/9" : "9/16" }}
           />
         )}
-        <label className="grid min-w-0 flex-1 gap-1 text-[12px] text-ink-soft">
+        <label className="grid min-w-0 flex-1 gap-1 text-sm text-ink-soft">
           Thumbnail
-          <select className="field-input h-8 py-0 text-[12.5px]" value={options.thumbnail} onChange={(e) => save({ thumbnail: e.target.value as YouTubeOptions["thumbnail"] })}>
+          <select className="field-input h-8 py-0 text-sm" value={options.thumbnail} onChange={(e) => save({ thumbnail: e.target.value as YouTubeOptions["thumbnail"] })}>
             <option value="auto">{options.short ? "Auto (YouTube picks for Shorts)" : "Auto (my cover)"}</option>
             <option value="cover">Use my cover</option>
             <option value="youtube">Let YouTube pick</option>
@@ -108,10 +108,10 @@ function YouTubeExtras({ detail }: { detail: VideoDetail }) {
         </label>
       </div>
       {options.short && options.thumbnail === "cover" && (
-        <span className="text-[11.5px] leading-snug text-ink-soft">Shorts may still show a frame in the Shorts feed; your cover shows on your channel and in search.</span>
+        <span className="text-xs leading-snug text-ink-soft">Shorts may still show a frame in the Shorts feed; your cover shows on your channel and in search.</span>
       )}
       {options.comment !== undefined && (
-        <label className="grid gap-1 text-[12px] text-ink-soft">
+        <label className="grid gap-1 text-sm text-ink-soft">
           <span className="flex items-center justify-between">
             Comment to pin
             <span className={`tabular-nums ${comment.length > COMMENT_MAX ? "text-danger" : ""}`}>{comment.length > 200 ? `${comment.length}/${COMMENT_MAX}` : ""}</span>
@@ -119,7 +119,7 @@ function YouTubeExtras({ detail }: { detail: VideoDetail }) {
           <textarea
             rows={3}
             maxLength={COMMENT_MAX}
-            className="field-input field-sizing-content min-h-[60px] resize-none text-[12.5px] leading-snug"
+            className="field-input field-sizing-content min-h-[60px] resize-none text-sm leading-snug"
             value={comment}
             placeholder="e.g. Which line hit you the most? 🎧 Full lyrics in the description."
             onChange={(e) => setComment(e.target.value)}
@@ -128,12 +128,12 @@ function YouTubeExtras({ detail }: { detail: VideoDetail }) {
         </label>
       )}
       {options.comment !== undefined && (
-        <span className="text-[11.5px] leading-snug text-ink-soft">
+        <span className="text-xs leading-snug text-ink-soft">
           Posted from your channel right after the upload; pin it in YouTube Studio → Comments (YouTube doesn&apos;t let apps pin).
           {options.custom_comment && !detail.script?.pinned_comment ? null : options.custom_comment ? (
             <>
               {" "}
-              <button type="button" className="cursor-pointer bg-transparent p-0 text-[11.5px] text-cobalt underline" onClick={() => save({ reset_comment: true })}>
+              <button type="button" className="cursor-pointer bg-transparent p-0 text-xs text-cobalt underline" onClick={() => save({ reset_comment: true })}>
                 Use the fact-check comment instead
               </button>
             </>
@@ -350,14 +350,14 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
     ? "PUBLIC_TO_EVERYONE"
     : (ttCreator?.privacy_options[0] ?? "SELF_ONLY");
   const ttChoice = ttVisibility ?? (ttAllowed.some((o) => o.value === ttDefault) ? ttDefault : ttAllowed[0].value);
-  const connected = (["youtube", "tiktok"] as Platform[]).filter((p) => accounts[p].connected);
+  const connected = PLATFORMS.filter((p) => accounts[p]?.connected);
   const busy = (p: Platform) => !!running[p] && running[p].status !== "error";
   const channels = accounts.youtube.channels ?? [];
 
   return (
-    <section aria-labelledby={`publish-${detail.name}`} className="mx-auto w-full max-w-[300px] rounded-xl border border-line bg-panel">
+    <section aria-labelledby={`publish-${detail.name}`} className="mx-auto w-full max-w-[300px] card">
       <header className="flex items-center justify-between gap-2 px-3.5 pt-3 pb-2">
-        <h3 id={`publish-${detail.name}`} className="m-0 font-display text-[14.5px] font-bold">
+        <h3 id={`publish-${detail.name}`} className="m-0 font-display text-md font-bold">
           Upload
         </h3>
         {connected.length > 1 && (
@@ -368,7 +368,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
       </header>
       {connected.length === 0 ? (
         <div className="grid gap-2 px-3.5 pb-3.5">
-          <p className="m-0 text-[12.5px] leading-snug text-ink-soft">Connect YouTube or TikTok to upload this video with its title and description.</p>
+          <p className="m-0 text-sm leading-snug text-ink-soft">Connect YouTube or TikTok to upload this video with its title and description.</p>
           <Button size="sm" variant="secondary" icon={<SettingsIcon className="size-3.5" />} onClick={onOpenSettings} className="justify-self-start">
             Set up channels
           </Button>
@@ -383,11 +383,11 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                 <li key={p} className="grid gap-1 border-t border-line px-3.5 py-2.5">
                   <div className="flex items-center gap-2">
                     {p === "youtube" && channels.length > 1 ? (
-                      <label className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px]">
+                      <label className="flex min-w-0 flex-1 items-center gap-1.5 text-base">
                         <b>{NAMES[p]}</b>
                         <select
                           aria-label="YouTube channel"
-                          className="field-input h-8 w-auto min-w-0 flex-1 py-0 text-[12.5px]"
+                          className="field-input h-8 w-auto min-w-0 flex-1 py-0 text-sm"
                           value={ytChannel || accounts.youtube.channel || ""}
                           disabled={busy(p)}
                           onChange={(e) => setYtChannel(e.target.value === accounts.youtube.channel ? "" : e.target.value)}
@@ -400,7 +400,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                         </select>
                       </label>
                     ) : (
-                      <span className="min-w-0 flex-1 truncate text-[13px]">
+                      <span className="min-w-0 flex-1 truncate text-base">
                         <b>{NAMES[p]}</b> <span className="text-ink-soft">{accounts[p].account}</span>
                       </span>
                     )}
@@ -419,7 +419,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                       </label>
                       <select
                         id={`yt-visibility-${detail.name}`}
-                        className="field-input h-8 w-auto py-0 text-[12.5px]"
+                        className="field-input h-8 w-auto py-0 text-sm"
                         value={ytVisibility ?? accounts.youtube.privacy}
                         onChange={(e) => {
                           if (e.target.value === "schedule" && ytVisibility !== "schedule") setYtAt(nextHour());
@@ -436,7 +436,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                         <input
                           type="datetime-local"
                           aria-label="Goes public at"
-                          className="field-input h-8 min-w-0 flex-1 py-0 text-[12.5px]"
+                          className="field-input h-8 min-w-0 flex-1 py-0 text-sm"
                           value={ytAt}
                           onChange={(e) => setYtAt(e.target.value)}
                         />
@@ -450,7 +450,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                       </label>
                       <select
                         id={`tt-visibility-${detail.name}`}
-                        className="field-input h-8 w-auto justify-self-start py-0 text-[12.5px]"
+                        className="field-input h-8 w-auto justify-self-start py-0 text-sm"
                         value={ttChoice}
                         onChange={(e) => {
                           if (e.target.value === "SCHEDULE" && ttVisibility !== "SCHEDULE") setTtAt(nextHour());
@@ -464,7 +464,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                         ))}
                       </select>
                       {ttCreator && ttCreator.privacy_options.length === 1 && ttCreator.privacy_options[0] === "SELF_ONLY" && (
-                        <p className="m-0 text-[11.5px] leading-snug text-ink-soft">
+                        <p className="m-0 text-xs leading-snug text-ink-soft">
                           TikTok lets this app post as &quot;Only me&quot; until TikTok audits it. Choose Drafts to post publicly from the TikTok app, or change it to
                           public there after posting.
                         </p>
@@ -474,27 +474,27 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                           <input
                             type="datetime-local"
                             aria-label="TikTok post goes public at"
-                            className="field-input h-8 min-w-0 py-0 text-[12.5px]"
+                            className="field-input h-8 min-w-0 py-0 text-sm"
                             value={ttAt}
                             onChange={(e) => setTtAt(e.target.value)}
                           />
-                          <p className="m-0 text-[11.5px] leading-snug text-ink-soft">
+                          <p className="m-0 text-xs leading-snug text-ink-soft">
                             Posts as {TT_VISIBILITY.find((o) => o.value === ttPublic)?.label} at this time. TikTok can&apos;t schedule posts from apps, so Shorts
-                            Studio posts it then. It keeps running in the tray when you close the window; turn on Settings → Start with Windows so it runs after a
-                            restart too.
+                            Studio posts it then. It keeps running in the {isMac() ? "menu bar" : "tray"} when you close the window; turn on Settings →{" "}
+                            {autostartLabel()} so it runs after a restart too.
                           </p>
                         </>
                       )}
                       {ttChoice === "DRAFT" && (
-                        <p className="m-0 text-[11.5px] leading-snug text-ink-soft">Goes to your TikTok inbox; open TikTok to add sounds or edits and post it.</p>
+                        <p className="m-0 text-xs leading-snug text-ink-soft">Goes to your TikTok inbox; open TikTok to add sounds or edits and post it.</p>
                       )}
                     </div>
                   )}
                   {p === "youtube" && !busy(p) && <YouTubeExtras key={detail.name} detail={detail} />}
                   {p === "youtube" && !busy(p) && accounts.youtube_categories && (
-                    <label className="flex items-center gap-1.5 text-[12px] text-ink-soft">
+                    <label className="flex items-center gap-1.5 text-sm text-ink-soft">
                       Category
-                      <select className="field-input h-8 w-auto min-w-0 flex-1 py-0 text-[12.5px]" value={ytCategory} onChange={(e) => setYtCategory(e.target.value)}>
+                      <select className="field-input h-8 w-auto min-w-0 flex-1 py-0 text-sm" value={ytCategory} onChange={(e) => setYtCategory(e.target.value)}>
                         <option value="">
                           Default (
                           {accounts.youtube_categories[accounts.youtube.category ?? ""] ??
@@ -510,14 +510,14 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                     </label>
                   )}
                   {p === "youtube" && !busy(p) && (ytVisibility ?? accounts.youtube.privacy) === "schedule" && (
-                    <p className="m-0 text-[11.5px] leading-snug text-ink-soft">Uploads now as private; YouTube makes it public at this time, even if the app is closed.</p>
+                    <p className="m-0 text-xs leading-snug text-ink-soft">Uploads now as private; YouTube makes it public at this time, even if the app is closed.</p>
                   )}
                   {job ? (
-                    <p className={`m-0 text-[12px] leading-snug ${job.status === "error" ? "text-danger" : "text-ink-soft"}`}>
+                    <p className={`m-0 text-sm leading-snug ${job.status === "error" ? "text-danger" : "text-ink-soft"}`}>
                       {job.status === "error" ? job.error : (job.log.at(-1) ?? "Waiting to upload…")}
                     </p>
                   ) : prev ? (
-                    <p className="m-0 text-[12px] leading-snug text-ink-soft">
+                    <p className="m-0 text-sm leading-snug text-ink-soft">
                       {prev.draft ? "Sent to TikTok drafts" : "Uploaded"}
                       {p === "tiktok" && !prev.draft && prev.privacy && ` as ${TT_VISIBILITY.find((o) => o.value === prev.privacy)?.label ?? prev.privacy}`}
                       {p === "youtube" && channels.length > 1 && prev.channel_name ? ` to ${prev.channel_name}` : ""} {relativeTime(prev.at)}
@@ -546,7 +546,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                       )}
                     </p>
                   ) : accounts[p].auto ? (
-                    <p className="m-0 text-[12px] leading-snug text-ink-soft">
+                    <p className="m-0 text-sm leading-snug text-ink-soft">
                       {accounts[p].when === "slots"
                         ? `New renders upload at ${accounts[p].times.join(", ")}.`
                         : "New renders upload automatically."}
@@ -559,7 +559,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
           {queue.length > 0 && (
             <ul aria-label="Scheduled uploads" className="m-0 grid list-none gap-1 border-t border-line px-3.5 py-2.5">
               {queue.map((q) => (
-                <li key={q.id} className="flex items-center gap-2 text-[12.5px]">
+                <li key={q.id} className="flex items-center gap-2 text-sm">
                   <CalendarClock className="size-3.5 shrink-0 text-ink-soft" />
                   <span className="min-w-0 flex-1 truncate">
                     <b>{NAMES[q.platform]}</b>
@@ -600,11 +600,11 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
               >
                 <label className="grid gap-1">
                   <span className="field-label">Upload at</span>
-                  <input type="datetime-local" required className="field-input h-9 py-0 text-[13px]" value={at} onChange={(e) => setAt(e.target.value)} />
+                  <input type="datetime-local" required className="field-input h-9 py-0 text-base" value={at} onChange={(e) => setAt(e.target.value)} />
                 </label>
                 <div className="flex flex-wrap gap-3">
                   {connected.map((p) => (
-                    <label key={p} className="flex items-center gap-1.5 text-[12.5px] font-semibold">
+                    <label key={p} className="flex items-center gap-1.5 text-sm font-semibold">
                       <input
                         type="checkbox"
                         className="size-4 accent-cobalt"
@@ -623,7 +623,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                     Cancel
                   </Button>
                 </div>
-                <p className="m-0 text-[11.5px] leading-snug text-ink-soft">Uploads while the app is open. If it&apos;s closed then, the upload goes out when you open it.</p>
+                <p className="m-0 text-xs leading-snug text-ink-soft">Uploads while the app is open. If it&apos;s closed then, the upload goes out when you open it.</p>
               </form>
             ) : (
               <Button

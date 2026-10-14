@@ -176,7 +176,7 @@ export function Transcript({
 
   return (
     <div className="grid gap-3">
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel px-2 py-2 shadow-sm">
+      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 card px-2 py-2">
         <Button
           size="sm"
           variant="primary"
@@ -185,18 +185,18 @@ export function Transcript({
           disabled={!voiced}
           onClick={toggle}
         />
-        <span className="min-w-[96px] font-mono text-[12.5px] text-ink-soft tabular-nums">
+        <span className="min-w-[96px] font-mono text-sm text-ink-soft tabular-nums">
           {clock(now)} / {clock(total)}
         </span>
         {loading && (
-          <span role="status" className="flex items-center gap-1.5 text-[12.5px] text-ink-soft">
+          <span role="status" className="flex items-center gap-1.5 text-sm text-ink-soft">
             <Spinner className="size-3.5" /> Making voiceover…
           </span>
         )}
         <div className="ml-auto flex flex-wrap items-center gap-1">
           {selection ? (
             <>
-              <span className="px-1 text-[12.5px] text-ink-soft">
+              <span className="px-1 text-sm text-ink-soft">
                 {selectedCount} word{selectedCount === 1 ? "" : "s"}
               </span>
               <Button size="sm" variant="ghost" icon={<Highlighter className="size-3.5" />} title="Keyword colour in the captions (H)" onClick={toggleKeywords}>
@@ -222,7 +222,7 @@ export function Transcript({
       </div>
 
       {error && (
-        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-danger/30 bg-danger/[0.06] px-3 py-2 text-[13px] text-danger">
+        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-danger/30 bg-danger/[0.06] px-3 py-2 text-base text-danger">
           {error}
           <Button size="sm" variant="ghost" onClick={timeline.retry}>
             Try again
@@ -237,7 +237,7 @@ export function Transcript({
         aria-label="Transcript. Space plays, click a word to play from it, shift-click to select more, H highlights, Delete removes."
         onKeyDown={onKey}
         lang={draft.lang}
-        className="grid gap-5 rounded-xl border border-line bg-panel px-4 py-4 text-[16px] leading-[2.1] focus-visible:outline-2 focus-visible:outline-cobalt sm:px-6"
+        className="grid gap-5 card px-4 py-4 text-lg leading-[2.1] focus-visible:outline-2 focus-visible:outline-cobalt sm:px-6"
       >
         {segments.map((seg) => {
           const s = seg.scene;
@@ -246,14 +246,14 @@ export function Transcript({
           const atPlayhead = pos.i === seg.index && (playing || pos.t > 0);
           return (
             <section key={s.uid} aria-label={`Scene ${seg.index + 1}`}>
-              <h3 className="m-0 mb-0.5 flex items-center gap-2 text-[11.5px] leading-5 font-semibold tracking-wide text-ink-soft uppercase">
+              <h3 className="m-0 mb-0.5 flex items-center gap-2 text-xs leading-5 font-semibold tracking-wide text-ink-soft uppercase">
                 <button type="button" className="cursor-pointer bg-transparent p-0 uppercase hover:text-ink" onClick={() => onActive(s.uid)}>
                   Scene {seg.index + 1}
                 </button>
                 {seg.length > 0 && <span className="font-normal tabular-nums">{clock(seg.start)}</span>}
               </h3>
               {!s.narration.trim() ? (
-                <p className="m-0 text-[13.5px] text-ink-soft">{s.seconds ? `Silent beat, ${s.seconds.toFixed(1)}s` : "No voiceover (skipped when rendering)"}</p>
+                <p className="m-0 text-base text-ink-soft">{s.seconds ? `Silent beat, ${s.seconds.toFixed(1)}s` : "No voiceover (skipped when rendering)"}</p>
               ) : !v ? (
                 <p className="m-0 text-ink-soft/70">{s.narration}</p>
               ) : (
@@ -277,7 +277,7 @@ export function Transcript({
                             onActive(s.uid);
                           }}
                           className={`cursor-pointer rounded px-[3px] py-0.5 transition-colors ${
-                            spoken ? "bg-caption text-ink" : picked ? "bg-cobalt/15 ring-1 ring-cobalt/40" : "hover:bg-ink/[0.06]"
+                            spoken ? "bg-caption text-media" : picked ? "bg-cobalt/15 ring-1 ring-cobalt/40" : "hover:bg-ink/[0.06]"
                           } ${keys.has(keyword(w.text)) ? "font-semibold text-ok" : ""}`}
                         >
                           {written(s.narration, v, j)}
@@ -289,7 +289,7 @@ export function Transcript({
                               title={cut ? "Pause cut. Click to restore it." : "Click to cut this pause"}
                               aria-pressed={cut}
                               onClick={() => toggleCut(seg, j)}
-                              className={`mx-0.5 inline-flex h-5 cursor-pointer items-center rounded px-1.5 align-middle font-mono text-[11px] leading-none tabular-nums ${
+                              className={`mx-0.5 inline-flex h-5 cursor-pointer items-center rounded px-1.5 align-middle font-mono text-xs leading-none tabular-nums ${
                                 cut ? "bg-ink/[0.04] text-ink-soft/60 line-through" : "bg-ink/[0.08] text-ink-soft hover:bg-ink/[0.14]"
                               }`}
                             >
@@ -306,7 +306,7 @@ export function Transcript({
           );
         })}
       </div>
-      <p className="m-0 text-[12.5px] leading-snug text-ink-soft">
+      <p className="m-0 text-sm leading-snug text-ink-soft">
         Click a word to play from it; shift-click to select several. <b>H</b> marks them as keywords (green in the captions), <b>Delete</b> removes them
         from the voiceover. Click a pause to cut it. The render uses this exact voiceover.
       </p>

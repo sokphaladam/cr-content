@@ -1,7 +1,7 @@
 "use client";
 
 import { CircleAlert } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { api, type Aspect, type DraftSummary, type Job, type Lang, type MusicVideoSettings, type Options, type SongScript, type VideoDetail, type VideoSummary } from "@/lib/api";
 import { CreateForm } from "@/components/CreateForm";
 import { Library, type LibraryTab } from "@/components/Library";
@@ -13,7 +13,9 @@ import { Campaigns } from "@/components/Campaigns";
 import { SongEditor } from "@/components/SongEditor";
 import { Storyboard, draftVoice, toDraft, toDraftData, type Draft, type SaveState } from "@/components/Storyboard";
 import { TopBar } from "@/components/TopBar";
-import { Drawer, ToastProvider, useToast } from "@/components/ui";
+import { UpdateNotice } from "@/components/UpdateNotice";
+import { Drawer, ResizeHandle, ToastProvider, useToast } from "@/components/ui";
+import { usePaneWidth } from "@/lib/appearance";
 import { DraftHistory } from "@/lib/draftHistory";
 import { useDraftTimeline } from "@/lib/useDraftTimeline";
 
@@ -56,6 +58,9 @@ function Studio() {
   const [jobTitle, setJobTitle] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false); // slide-over below laptop width
   const [libraryHidden, setLibraryHidden] = useState(false); // collapsed from the rail at laptop width and up
+  // the library and preview panes can be dragged wider or narrower; the widths are remembered
+  const libraryPane = usePaneWidth("library", 288, 240, 440);
+  const previewPane = usePaneWidth("preview", 340, 300, 560);
   const [view, setView] = useState<AppView>("studio");
   const [previewOpen, setPreviewOpen] = useState(false);
   // Song being edited (not autosaved; composing writes song.json into its output folder)
@@ -523,7 +528,8 @@ function Studio() {
   );
 
   return (
-    <div className="flex h-dvh">
+    <div className="flex h-dvh overflow-hidden">
+      <UpdateNotice />
       <div className="hidden shrink-0 lg:block">
         <NavRail
           view={view}
@@ -552,7 +558,7 @@ function Studio() {
         />
 
         {engineError && (
-          <div role="alert" className="flex items-center gap-2 border-b border-danger/30 bg-danger/[0.07] px-4 py-2.5 text-[13.5px] text-danger">
+          <div role="alert" className="flex items-center gap-2 border-b border-danger/30 bg-danger/[0.07] px-4 py-2.5 text-base text-danger">
             <CircleAlert className="size-4 shrink-0" />
             {engineError}
           </div>
@@ -580,15 +586,25 @@ function Studio() {
         )}
         <div
           hidden={view !== "studio"}
+          style={{ "--lib-w": `${libraryPane.width}px`, "--prev-w": `${previewPane.width}px` } as CSSProperties}
           className={`grid min-h-0 flex-1 grid-cols-1 ${
             libraryHidden
-              ? hasPreview ? "wide:grid-cols-[minmax(0,1fr)_340px]" : ""
-              : `lg:grid-cols-[288px_minmax(0,1fr)] ${hasPreview ? "wide:grid-cols-[288px_minmax(0,1fr)_340px]" : ""}`
+              ? hasPreview ? "wide:grid-cols-[minmax(0,1fr)_var(--prev-w)]" : ""
+              : `lg:grid-cols-[var(--lib-w)_minmax(0,1fr)] ${hasPreview ? "wide:grid-cols-[var(--lib-w)_minmax(0,1fr)_var(--prev-w)]" : ""}`
           }`}
         >
           {!libraryHidden && (
-            <aside aria-label="Library" className="hidden min-h-0 border-r border-line bg-paper lg:block">
+            <aside aria-label="Library" className="relative hidden min-h-0 border-r border-line bg-paper lg:block">
               {library}
+              <ResizeHandle
+                edge="right"
+                label="Resize library"
+                width={libraryPane.width}
+                min={240}
+                max={440}
+                onResize={libraryPane.setWidth}
+                onReset={libraryPane.reset}
+              />
             </aside>
           )}
 
@@ -737,8 +753,17 @@ function Studio() {
           </main>
 
           {hasPreview && (
-            <aside aria-label="Preview" className="hidden min-h-0 overflow-y-auto border-l border-line bg-paper wide:block">
-              {preview}
+            <aside aria-label="Preview" className="relative hidden min-h-0 border-l border-line bg-paper wide:block">
+              <div className="relative h-full overflow-y-auto">{preview}</div>
+              <ResizeHandle
+                edge="left"
+                label="Resize preview"
+                width={previewPane.width}
+                min={300}
+                max={560}
+                onResize={previewPane.setWidth}
+                onReset={previewPane.reset}
+              />
             </aside>
           )}
         </div>

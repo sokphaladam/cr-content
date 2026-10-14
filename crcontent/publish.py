@@ -1,7 +1,9 @@
-"""Upload finished videos to your YouTube channels (one or several) and TikTok account.
+"""Upload finished videos to your YouTube channels (one or several), TikTok account, Facebook Page and Instagram account.
 
 Each platform uses your own developer app (its keys are entered in the app) and OAuth: "Connect" opens the browser on the platform's
 sign-in page, which redirects back to a small listener on http://127.0.0.1:<PUBLISH_CALLBACK_PORT>/callback.
+Facebook and Instagram share one Meta app and one sign-in (Facebook Login): it gives the Pages you manage and the
+Instagram professional accounts linked to them; both upload with the Page's token, which doesn't expire.
 App keys, tokens and auto-upload settings are kept in <ROOT>/accounts.json; what was uploaded where in each video's
 published.json.
 """
@@ -24,7 +26,8 @@ import requests
 
 from .config import ROOT
 
-PLATFORMS = ("youtube", "tiktok")
+PLATFORMS = ("youtube", "tiktok", "facebook", "instagram")
+META = ("facebook", "instagram")  # one Meta developer app and one sign-in for both
 ACCOUNTS_FILE = ROOT / "accounts.json"
 CALLBACK_PORT = int(os.getenv("PUBLISH_CALLBACK_PORT", "8765"))
 REDIRECT_URI = f"http://127.0.0.1:{CALLBACK_PORT}/callback"
@@ -47,6 +50,19 @@ YT_CATEGORIES = {
     "29": "Nonprofits & Activism",
 }
 
+# Meta (Facebook Login). Facebook allows http://localhost redirects while the app is in development mode, which is
+# all a personal app needs: its own admins can grant the permissions without App Review.
+META_REDIRECT_URI = f"http://localhost:{CALLBACK_PORT}/callback/"
+GRAPH_VERSION = os.getenv("META_GRAPH_VERSION", "v25.0")
+GRAPH = f"https://graph.facebook.com/{GRAPH_VERSION}"
+META_AUTH = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
+# Pages (list, post Reels and videos) and the Instagram accounts linked to them (publish Reels); business_management
+# lists Pages owned by a business portfolio too
+META_SCOPES = ("pages_show_list,pages_read_engagement,pages_manage_posts,business_management,"
+               "instagram_basic,instagram_content_publish")
+FB_REEL_MAX_SEC = 90  # longer (or landscape) videos go to the Page as regular videos
+IG_CAPTION_MAX, IG_HASHTAGS_MAX = 2200, 30
+
 TIKTOK_AUTH = "https://www.tiktok.com/v2/auth/authorize/"
 TIKTOK_API = "https://open.tiktokapis.com/v2"
 
@@ -60,6 +76,11 @@ DEFAULT_SETTINGS = {
     # direct: posts straight to the profile (an app TikTok hasn't audited may only post SELF_ONLY);
     # draft: lands in the TikTok app's inbox, where you add sounds and post it yourself
     "tiktok": {"auto": False, "privacy": "PUBLIC_TO_EVERYONE", "mode": "direct", "when": "now", "times": ["12:00", "19:00"]},
+    # Reels on Pages and Instagram are always public. page / account_id: the default Page or Instagram account id ("" =
+    # the first); share_to_feed: an Instagram Reel also shows in the profile's main grid
+    "facebook": {"auto": False, "privacy": "public", "when": "now", "times": ["11:00", "20:00"], "page": ""},
+    "instagram": {"auto": False, "privacy": "public", "when": "now", "times": ["11:00", "20:00"], "account_id": "",
+                  "share_to_feed": True},
 }
 
 _lock = threading.Lock()
@@ -102,10 +123,37 @@ def _channel(data: dict, channel: str | None = None) -> dict | None:
     return next((c for c in channels if c.get("channel_id") == default), None) or (channels[0] if channels else None)
 
 
+def _pages(data: dict) -> list[dict]:
+    """The Facebook Pages the Meta sign-in gave (each with its token and linked Instagram account, if any)."""
+    return [p for p in (data.get("meta") or {}).get("pages", []) if p.get("token")]
+
+
+def _meta_account(data: dict, platform: str, choice: str | None = None) -> dict | None:
+    """The Page (facebook) or Instagram account (instagram) to post as: the one with id `choice`, else the default
+    in Settings, else the first. As {id, name, token, page_id}; None when there's none (or `choice` is gone)."""
+    if platform == "facebook":
+        found = [{"id": p["id"], "name": p["name"], "token": p["token"], "page_id": p["id"]} for p in _pages(data)]
+    else:
+        found = [{"id": p["ig"]["id"], "name": f"@{p['ig'].get('username', '')}", "token": p["token"], "page_id": p["id"]}
+                 for p in _pages(data) if p.get("ig")]
+    if choice:
+        return next((a for a in found if a["id"] == choice), None)
+    default = data.get("settings", {}).get(platform, {}).get("page" if platform == "facebook" else "account_id", "")
+    return next((a for a in found if a["id"] == default), None) or (found[0] if found else None)
+
+
+def _app_key(platform: str) -> str:
+    """Where a platform's developer app keys are kept: Facebook and Instagram share the Meta app."""
+    return "meta" if platform in META else platform
+
+
 def _account(data: dict, platform: str, channel: str | None = None) -> dict | None:
-    """The signed-in account to use: a YouTube channel (see _channel), or the TikTok account."""
+    """The signed-in account to use: a YouTube channel (see _channel), a Page / Instagram account (_meta_account),
+    or the TikTok account."""
     if platform == "youtube":
         return _channel(data, channel)
+    if platform in META:
+        return _meta_account(data, platform, channel)
     acct = data.get(platform)
     return acct if acct and acct.get("refresh_token") else None
 
@@ -140,8 +188,8 @@ except OSError:
 
 
 def _creds(platform: str) -> tuple[str, str]:
-    """The developer app's client ID (TikTok: client key) and secret, as entered in the app."""
-    app = _load().get("apps", {}).get(platform) or {}
+    """The developer app's client ID (TikTok: client key; Meta: app ID) and secret, as entered in the app."""
+    app = _load().get("apps", {}).get(_app_key(platform)) or {}
     return app.get("client_id", ""), app.get("client_secret", "")
 
 
@@ -149,20 +197,21 @@ def set_app(platform: str, client_id: str, client_secret: str) -> None:
     """Save the developer app keys typed in the app ("" for both removes them). A different app can't use the
     old sign-in, so changing the client ID disconnects the account."""
     client_id, client_secret = client_id.strip(), client_secret.strip()
+    key = _app_key(platform)
     with _lock:
         data = _load()
         apps = data.setdefault("apps", {})
-        old = (apps.get(platform) or {}).get("client_id", "")
+        old = (apps.get(key) or {}).get("client_id", "")
         if client_id:
             if not client_secret:  # keep the saved secret when only the ID is edited
-                client_secret = (apps.get(platform) or {}).get("client_secret", "")
+                client_secret = (apps.get(key) or {}).get("client_secret", "")
             if not client_secret:
                 raise PublishError("Enter the client secret too.")
-            apps[platform] = {"client_id": client_id, "client_secret": client_secret}
+            apps[key] = {"client_id": client_id, "client_secret": client_secret}
         else:
-            apps.pop(platform, None)
+            apps.pop(key, None)
         if client_id != old:
-            data.pop("youtube_channels" if platform == "youtube" else platform, None)
+            data.pop("youtube_channels" if platform == "youtube" else key, None)
         _save(data)
 
 
@@ -175,7 +224,9 @@ def update_settings(platform: str, changes: dict) -> dict:
     allowed = {"youtube": {"auto": (True, False), "privacy": ("public", "unlisted", "private"), "comment": (True, False),
                            "category": ("auto", *YT_CATEGORIES)},
                "tiktok": {"auto": (True, False), "mode": ("direct", "draft"),
-                          "privacy": ("PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY")}}
+                          "privacy": ("PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY")},
+               "facebook": {"auto": (True, False)},
+               "instagram": {"auto": (True, False), "share_to_feed": (True, False)}}
     with _lock:
         data = _load()
         current = data.setdefault("settings", {}).setdefault(platform, {})
@@ -188,6 +239,10 @@ def update_settings(platform: str, changes: dict) -> dict:
                 current["when"] = value
             elif key == "channel" and platform == "youtube" and _channel(data, value):
                 current["channel"] = value
+            elif key == "page" and platform == "facebook" and _meta_account(data, "facebook", value):
+                current["page"] = value
+            elif key == "account_id" and platform == "instagram" and _meta_account(data, "instagram", value):
+                current["account_id"] = value
             elif key in allowed[platform] and value in allowed[platform][key]:
                 current[key] = value
         _save(data)
@@ -202,14 +257,24 @@ def status() -> dict:
         acct = _account(data, p) or {}  # YouTube: the default channel
         client_id, _ = _creds(p)
         out[p] = {"configured": all(_creds(p)), "client_id": client_id, "connected": bool(acct),
-                  "account": acct.get("name", ""), "connecting": any(v["platform"] == p for v in _pending.values()),
-                  **prefs[p]}
+                  "account": acct.get("name", ""),
+                  "connecting": any(v["platform"] in (p, _app_key(p)) for v in _pending.values()), **prefs[p]}
         if p == "youtube":  # connections made before comments were added need to be made again
             out[p]["can_comment"] = COMMENT_SCOPE in acct.get("scope", "")
             out[p]["channel"] = acct.get("channel_id", "")
             out[p]["channels"] = [{"id": c.get("channel_id", ""), "name": c.get("name", ""),
                                    "can_comment": COMMENT_SCOPE in c.get("scope", "")} for c in _channels(data)]
-    out["redirect_uri"] = {"youtube": REDIRECT_URI, "tiktok": TIKTOK_REDIRECT_URI}
+        if p == "facebook":
+            out[p]["page"] = acct.get("id", "")
+            out[p]["pages"] = [{"id": pg["id"], "name": pg["name"]} for pg in _pages(data)]
+        if p == "instagram":
+            out[p]["account_id"] = acct.get("id", "")
+            out[p]["accounts"] = [{"id": pg["ig"]["id"], "name": f"@{pg['ig'].get('username', '')}", "page": pg["name"]}
+                                  for pg in _pages(data) if pg.get("ig")]
+            # signed in, but none of the Pages has an Instagram professional account linked
+            out[p]["no_linked_account"] = bool(_pages(data)) and not acct
+    out["redirect_uri"] = {"youtube": REDIRECT_URI, "tiktok": TIKTOK_REDIRECT_URI, "facebook": META_REDIRECT_URI,
+                           "instagram": META_REDIRECT_URI}
     out["youtube_categories"] = YT_CATEGORIES
     return out
 
@@ -224,6 +289,10 @@ def disconnect(platform: str, channel: str = "") -> None:
             prefs = data.get("settings", {}).get("youtube", {})
             if not channel or prefs.get("channel") == channel:
                 prefs.pop("channel", None)  # the default goes back to the first channel left
+        elif platform in META:  # one sign-in for both
+            data.pop("meta", None)
+            for p in META:
+                data.get("settings", {}).get(p, {}).pop("page" if p == "facebook" else "account_id", None)
         else:
             data.pop(platform, None)
         _save(data)
@@ -249,11 +318,16 @@ def start_connect(platform: str) -> str:
     state = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(64)[:96]
     digest = hashlib.sha256(verifier.encode()).digest()
+    key = _app_key(platform)
     with _lock:
-        for s in [s for s, v in _pending.items() if v["platform"] == platform]:
+        for s in [s for s, v in _pending.items() if v["platform"] == key]:
             del _pending[s]  # a new attempt replaces an abandoned one
-        _pending[state] = {"platform": platform, "verifier": verifier}
-    if platform == "youtube":
+        _pending[state] = {"platform": key, "verifier": verifier}
+    if key == "meta":
+        url = META_AUTH + "?" + urlencode({
+            "client_id": client_id, "redirect_uri": META_REDIRECT_URI, "response_type": "code", "scope": META_SCOPES,
+            "state": state})
+    elif platform == "youtube":
         url = GOOGLE_AUTH + "?" + urlencode({
             "client_id": client_id, "redirect_uri": REDIRECT_URI, "response_type": "code", "scope": YOUTUBE_SCOPES,
             "access_type": "offline", "prompt": "consent", "state": state,
@@ -271,6 +345,8 @@ def start_connect(platform: str) -> str:
 
 
 def _finish_connect(platform: str, code: str, verifier: str) -> str:
+    if platform == "meta":
+        return _finish_meta(code)
     client_id, secret = _creds(platform)
     if platform == "youtube":
         r = requests.post(GOOGLE_TOKEN, data={
@@ -318,6 +394,42 @@ def _finish_connect(platform: str, code: str, verifier: str) -> str:
     return account["name"]
 
 
+def _finish_meta(code: str) -> str:
+    """Facebook Login: the code becomes a long-lived user token, which lists the Pages you manage with their tokens
+    (those don't expire) and the Instagram professional account linked to each."""
+    client_id, secret = _creds("facebook")
+    r = requests.get(f"{GRAPH}/oauth/access_token", timeout=30, params={
+        "client_id": client_id, "client_secret": secret, "redirect_uri": META_REDIRECT_URI, "code": code})
+    short = _meta_json(r, "Facebook sign-in").get("access_token", "")
+    r = requests.get(f"{GRAPH}/oauth/access_token", timeout=30, params={
+        "grant_type": "fb_exchange_token", "client_id": client_id, "client_secret": secret, "fb_exchange_token": short})
+    user_token = _meta_json(r, "Facebook sign-in").get("access_token", "")
+    if not user_token:
+        raise PublishError("Facebook didn't return a sign-in token. Try connecting again.")
+    pages, url = [], f"{GRAPH}/me/accounts"
+    params = {"fields": "id,name,access_token,instagram_business_account{id,username}", "limit": 100,
+              "access_token": user_token}
+    while url and len(pages) < 500:
+        data = _meta_json(requests.get(url, params=params, timeout=30), "Facebook Pages")
+        for p in data.get("data", []):
+            ig = p.get("instagram_business_account") or None
+            pages.append({"id": p["id"], "name": p.get("name", ""), "token": p.get("access_token", ""),
+                          "ig": {"id": ig["id"], "username": ig.get("username", "")} if ig else None})
+        url, params = (data.get("paging") or {}).get("next"), None  # the next link carries its own parameters
+    pages = [p for p in pages if p["token"]]
+    if not pages:
+        raise PublishError("No Facebook Pages came back. Facebook and Instagram uploads go through a Page: when signing "
+                           "in, pick the Pages (and Instagram accounts) to share, or create a Page and link your "
+                           "Instagram professional account to it, then connect again.")
+    with _lock:
+        data = _load()
+        data["meta"] = {"pages": pages, "connected": datetime.now().isoformat(timespec="seconds")}
+        _save(data)
+    names = ", ".join(p["name"] for p in pages[:3]) + ("…" if len(pages) > 3 else "")
+    ig = [f"@{p['ig']['username']}" for p in pages if p["ig"]]
+    return names + (f" (Instagram: {', '.join(ig[:3])})" if ig else " (no Instagram account linked to these Pages)")
+
+
 class _CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
@@ -325,7 +437,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             pending = _pending.pop(q.get("state", ""), None)
         if not urlparse(self.path).path.startswith("/callback") or not pending:
             return self._page(404, "This sign-in link has expired. Go back to Shorts Studio and press Connect again.")
-        name = {"youtube": "YouTube", "tiktok": "TikTok"}[pending["platform"]]
+        name = {"youtube": "YouTube", "tiktok": "TikTok", "meta": "Facebook and Instagram"}[pending["platform"]]
         if "code" not in q:
             return self._page(400, f"{name} wasn't connected: {q.get('error_description') or q.get('error') or 'cancelled'}.")
         try:
@@ -372,8 +484,37 @@ def _json(r: requests.Response, what: str) -> dict:
     return data
 
 
+def _meta_json(r: requests.Response, what: str) -> dict:
+    """A Graph API reply, or PublishError with Meta's message (and what to do for the usual problems)."""
+    try:
+        data = r.json()
+    except ValueError:
+        data = {}
+    err = data.get("error") if isinstance(data, dict) else None
+    if r.status_code < 400 and not err:
+        return data
+    err = err if isinstance(err, dict) else {}
+    code = err.get("code")
+    hints = {
+        190: "The Facebook sign-in has expired or was revoked. Disconnect and connect Facebook & Instagram again.",
+        10: "The Meta app wasn't granted this permission. Disconnect, connect again and allow every permission asked.",
+        200: "The Meta app wasn't granted this permission. Disconnect, connect again and allow every permission asked.",
+        4: "Meta's rate limit for this app was reached. Try again in an hour.",
+        9: "Meta's posting limit for this account was reached. Try again later.",
+    }
+    msg = hints.get(code) or err.get("error_user_msg") or err.get("message") or r.text[:300]
+    raise PublishError(f"{what}: {msg}")
+
+
 def _token(platform: str, channel: str | None = None) -> str:
-    """A valid access token (YouTube: for `channel`, else the default channel), refreshed when it has expired."""
+    """A valid access token (YouTube: for `channel`, else the default channel), refreshed when it has expired.
+    Facebook / Instagram: the Page's token (it doesn't expire; a revoked one fails with what to do)."""
+    if platform in META:
+        acct = _meta_account(_load(), platform, channel)
+        if not acct:
+            raise PublishError(f"{'Facebook' if platform == 'facebook' else 'Instagram'} isn't connected"
+                               f"{' (or that account is gone)' if channel else ''}. Connect it in Settings.")
+        return acct["token"]
     with _lock:
         data = _load()
         acct = _account(data, platform, channel)
@@ -442,7 +583,8 @@ def _record(job: Path, platform: str, info: dict) -> None:
 def upload(job: Path, platform: str, log=print, privacy: str | None = None, publish_at: datetime | None = None,
            category: str | None = None, channel: str | None = None) -> dict:
     """`privacy`: YouTube public | unlisted | private, or a TikTok TIKTOK_PRIVACY level / "DRAFT". `publish_at`
-    (local time), `category` and `channel` (a YouTube channel id; default: the default channel) are YouTube only."""
+    (local time) and `category` are YouTube only. `channel`: the YouTube channel, Facebook Page or Instagram account
+    id to post to (default: the one chosen in Settings)."""
     video = job / "video.mp4"
     if not video.exists():
         raise PublishError("This video hasn't been rendered.")
@@ -457,7 +599,12 @@ def upload(job: Path, platform: str, log=print, privacy: str | None = None, publ
         info["comment"] = _comment_after_upload(job, privacy or settings()["youtube"]["privacy"], publish_at, log,
                                                 acct["channel_id"])
         return info
-    info = _upload_tiktok(job, video, log, privacy)
+    if platform == "facebook":
+        info = _upload_facebook(job, video, log, channel)
+    elif platform == "instagram":
+        info = _upload_instagram(job, video, log, channel)
+    else:
+        info = _upload_tiktok(job, video, log, privacy)
     _record(job, platform, info)
     return info
 
@@ -748,9 +895,9 @@ def tiktok_creator() -> dict:
             "max_seconds": info.get("max_video_post_duration_sec") or 0}
 
 
-def _tiktok_cover_ms(job: Path, video: Path, log) -> int:
-    """TikTok's cover is a frame of the video (apps can't upload an image): the frame your thumbnail was made from.
-    Its headline text isn't part of the video, so TikTok shows the picture without it."""
+def _cover_ms(job: Path, video: Path, log, name: str = "TikTok") -> int:
+    """TikTok's and Instagram's cover is a frame of the video (apps can't upload an image): the frame your thumbnail
+    was made from. Its headline text isn't part of the video, so the cover shows the picture without it."""
     from .render import duration
 
     try:
@@ -758,14 +905,14 @@ def _tiktok_cover_ms(job: Path, video: Path, log) -> int:
     except (OSError, ValueError):
         meta = {}
     if meta.get("thumb_image"):  # the thumbnail uses a photo that isn't in the video
-        log("TikTok: your cover uses a photo that isn't in the video; TikTok's cover is the frame at 1 s.")
+        log(f"{name}: your cover uses a photo that isn't in the video; the cover is the frame at 1 s.")
         return 1000
     at = float(meta.get("thumb_at", 1.0) or 0.0)
     try:
         at = min(at, max(duration(video) - 0.2, 0.0))
     except Exception:
         pass
-    log(f"TikTok: cover = the frame at {at:.1f} s (your thumbnail's picture, without its text).")
+    log(f"{name}: cover = the frame at {at:.1f} s (your thumbnail's picture, without its text).")
     return int(at * 1000)
 
 
@@ -797,7 +944,7 @@ def _upload_tiktok(job: Path, video: Path, log, privacy: str | None = None) -> d
         init = _tiktok_call("/post/publish/video/init/", token, {
             "post_info": {"title": caption, "privacy_level": privacy, "disable_comment": False,
                           "disable_duet": False, "disable_stitch": False,
-                          "video_cover_timestamp_ms": _tiktok_cover_ms(job, video, log)},
+                          "video_cover_timestamp_ms": _cover_ms(job, video, log)},
             "source_info": source})
     publish_id, upload_url = init["publish_id"], init["upload_url"]
     log(f"TikTok: uploading {size / 1e6:.1f} MB…")
@@ -829,3 +976,136 @@ def _upload_tiktok(job: Path, video: Path, log, privacy: str | None = None) -> d
     url = f"https://www.tiktok.com/@{creator.get('creator_username', '')}/video/{ids[0]}" if ids else ""
     log(f"TikTok: posted{' → ' + url if url else ' (visible once TikTok finishes processing)'}")
     return {"id": str(ids[0]) if ids else publish_id, "url": url, "privacy": privacy}
+
+
+# ---------- Facebook and Instagram (Meta Graph API) ----------
+
+def _caption(job: Path, max_len: int, max_tags: int | None = None) -> str:
+    title, desc, tags = post_text(job)
+    tags = tags[:max_tags] if max_tags is not None else tags
+    return "\n\n".join(x for x in (title, desc, " ".join(f"#{t}" for t in tags)) if x)[:max_len]
+
+
+def _rupload(url: str, token: str, video: Path, what: str) -> None:
+    """Send the video to Meta's upload host in one request (the resumable upload, from byte 0)."""
+    size = video.stat().st_size
+    with open(video, "rb") as f:
+        r = requests.post(url, data=f, timeout=None, headers={
+            "Authorization": f"OAuth {token}", "offset": "0", "file_size": str(size), "Content-Type": "application/octet-stream"})
+    try:
+        data = r.json()
+    except ValueError:
+        data = {}
+    if r.status_code >= 400 or not data.get("success", r.status_code < 300):
+        info = data.get("debug_info") or data.get("error") or {}
+        raise PublishError(f"{what} upload failed: {info.get('message') or r.text[:200]}")
+
+
+def _audio_48k(job: Path, video: Path) -> Path:
+    """Facebook Reels ask for 48 kHz audio; renders use 44.1 kHz. A copy with only the audio converted (fast: the
+    picture isn't re-encoded), kept in work/."""
+    try:
+        rate = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate",
+                               "-of", "csv=p=0", str(video)], capture_output=True, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return video
+    if not rate or rate == "48000":
+        return video
+    out = job / "work" / "video_48k.mp4"
+    if out.exists() and out.stat().st_mtime >= video.stat().st_mtime:
+        return out
+    out.parent.mkdir(exist_ok=True)
+    done = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(video), "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                           "-ar", "48000", "-ac", "2", "-movflags", "+faststart", str(out)], stdin=subprocess.DEVNULL)
+    return out if done.returncode == 0 and out.exists() else video
+
+
+def _upload_facebook(job: Path, video: Path, log, page_id: str | None = None) -> dict:
+    """A vertical video up to 90 s becomes a Reel on the Page; anything else a regular Page video."""
+    from .render import duration
+
+    page = _meta_account(_load(), "facebook", page_id)
+    if not page:
+        raise PublishError("Facebook isn't connected (or that Page is gone). Connect it in Settings.")
+    token, text = page["token"], _caption(job, 5000)
+    try:
+        seconds = duration(video)
+    except Exception:
+        seconds = 0.0
+    if _is_short(job) and 3 <= seconds <= FB_REEL_MAX_SEC:
+        upload_file = _audio_48k(job, video)
+        log(f"Facebook: posting a Reel to {page['name']}…")
+        start = _meta_json(requests.post(f"{GRAPH}/{page['id']}/video_reels", timeout=60,
+                                         data={"upload_phase": "start", "access_token": token}), "Facebook")
+        video_id = start["video_id"]
+        log(f"Facebook: uploading {upload_file.stat().st_size / 1e6:.1f} MB…")
+        _rupload(start.get("upload_url") or f"https://rupload.facebook.com/video-upload/{GRAPH_VERSION}/{video_id}",
+                 token, upload_file, "Facebook")
+        _meta_json(requests.post(f"{GRAPH}/{page['id']}/video_reels", timeout=60, data={
+            "upload_phase": "finish", "video_id": video_id, "video_state": "PUBLISHED", "description": text,
+            "access_token": token}), "Facebook")
+        log("Facebook: processing…")
+        deadline = time.time() + 600
+        while time.time() < deadline:
+            st = _meta_json(requests.get(f"{GRAPH}/{video_id}", timeout=30,
+                                         params={"fields": "status", "access_token": token}), "Facebook").get("status", {})
+            if st.get("video_status") in ("error", "upload_failed", "expired"):
+                reason = ((st.get("processing_phase") or {}).get("errors") or [{}])[0].get("message", st["video_status"])
+                raise PublishError(f"Facebook couldn't post the Reel: {reason}")
+            if (st.get("publishing_phase") or {}).get("status") == "complete" or st.get("video_status") == "ready":
+                break
+            time.sleep(5)
+        else:
+            log("Facebook: still processing; the Reel appears on the Page when Facebook is done.")
+        url = f"https://www.facebook.com/reel/{video_id}"
+        log(f"Facebook: posted → {url}")
+        return {"id": video_id, "url": url, "page": page["id"], "page_name": page["name"], "reel": True}
+    title = post_text(job)[0]
+    log(f"Facebook: uploading {video.stat().st_size / 1e6:.1f} MB to {page['name']}…")
+    with open(video, "rb") as f:
+        r = requests.post(f"https://graph-video.facebook.com/{GRAPH_VERSION}/{page['id']}/videos", timeout=None,
+                          data={"title": title[:255], "description": text, "access_token": token},
+                          files={"source": (video.name, f, "video/mp4")})
+    video_id = _meta_json(r, "Facebook").get("id", "")
+    url = f"https://www.facebook.com/{page['id']}/videos/{video_id}"
+    log(f"Facebook: posted → {url}")
+    return {"id": video_id, "url": url, "page": page["id"], "page_name": page["name"]}
+
+
+def _upload_instagram(job: Path, video: Path, log, account_id: str | None = None) -> dict:
+    """A Reel on the Instagram professional account (resumable upload, then publish once Instagram has processed it)."""
+    acct = _meta_account(_load(), "instagram", account_id)
+    if not acct:
+        raise PublishError("Instagram isn't connected (or that account is gone). Connect it in Settings.")
+    token = acct["token"]
+    log(f"Instagram: posting a Reel to {acct['name']}…")
+    container = _meta_json(requests.post(f"{GRAPH}/{acct['id']}/media", timeout=60, data={
+        "media_type": "REELS", "upload_type": "resumable", "caption": _caption(job, IG_CAPTION_MAX, IG_HASHTAGS_MAX),
+        "share_to_feed": "true" if settings()["instagram"]["share_to_feed"] else "false",
+        "thumb_offset": str(_cover_ms(job, video, log, "Instagram")), "access_token": token}), "Instagram")
+    cid = container["id"]
+    log(f"Instagram: uploading {video.stat().st_size / 1e6:.1f} MB…")
+    _rupload(container.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{GRAPH_VERSION}/{cid}", token, video,
+             "Instagram")
+    log("Instagram: processing…")
+    deadline = time.time() + 900
+    while time.time() < deadline:
+        st = _meta_json(requests.get(f"{GRAPH}/{cid}", timeout=30,
+                                     params={"fields": "status_code,status", "access_token": token}), "Instagram")
+        code = st.get("status_code", "")
+        if code == "FINISHED":
+            break
+        if code in ("ERROR", "EXPIRED"):
+            raise PublishError(f"Instagram couldn't process the video: {st.get('status') or code}")
+        time.sleep(6)
+    else:
+        raise PublishError("Instagram is still processing the video after 15 minutes. Try the upload again later.")
+    media_id = _meta_json(requests.post(f"{GRAPH}/{acct['id']}/media_publish", timeout=60,
+                                        data={"creation_id": cid, "access_token": token}), "Instagram").get("id", "")
+    try:
+        url = _meta_json(requests.get(f"{GRAPH}/{media_id}", timeout=30,
+                                      params={"fields": "permalink", "access_token": token}), "Instagram").get("permalink", "")
+    except (PublishError, requests.RequestException):
+        url = ""
+    log(f"Instagram: posted{' → ' + url if url else ''}")
+    return {"id": media_id, "url": url, "account": acct["id"], "account_name": acct["name"]}

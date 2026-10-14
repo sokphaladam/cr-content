@@ -72,7 +72,7 @@ export function MusicFinder({
   }
 
   return (
-    <section aria-label="Find music" className="grid gap-2.5 rounded-xl border border-line bg-paper/70 p-3">
+    <section aria-label="Find music" className="grid gap-2.5 well p-3">
       <div className="flex items-center gap-2">
         <form
           className="flex min-w-0 flex-1 items-center gap-2"
@@ -85,7 +85,7 @@ export function MusicFinder({
             <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-soft" />
             <input
               aria-label="Search free music"
-              className="field-input h-8 py-0 pl-8 text-[13px]"
+              className="field-input h-8 py-0 pl-8 text-base"
               value={q}
               disabled={!ready}
               placeholder="Mood or style, e.g. playful pizzicato"
@@ -102,7 +102,7 @@ export function MusicFinder({
       </div>
 
       {!ready ? (
-        <p className="m-0 text-[12.5px] leading-snug text-ink-soft">
+        <p className="m-0 text-sm leading-snug text-ink-soft">
           Free music search uses Jamendo. Create a free app at <b>devportal.jamendo.com</b>, then paste its client ID in <b>Settings → Jamendo</b>.
         </p>
       ) : (
@@ -121,14 +121,14 @@ export function MusicFinder({
                   </IconButton>
                   <span className="grid min-w-0 flex-1 leading-tight">
                     <span className="flex min-w-0 items-center gap-1.5">
-                      <span className="truncate text-[13px] font-semibold">{t.name}</span>
+                      <span className="truncate text-base font-semibold">{t.name}</span>
                       {!t.commercial && (
-                        <span title="Non-commercial licence: not for monetized videos" className="shrink-0 rounded bg-warn/15 px-1 text-[10.5px] font-semibold text-warn">
+                        <span title="Non-commercial licence: not for monetized videos" className="shrink-0 rounded bg-warn/15 px-1 text-2xs font-semibold text-warn">
                           Non-commercial
                         </span>
                       )}
                     </span>
-                    <span className="truncate text-[11.5px] text-ink-soft">
+                    <span className="truncate text-xs text-ink-soft">
                       {t.artist} · {length(t.duration)}
                       {t.tags.length > 0 && ` · ${t.tags.join(", ")}`}
                     </span>
@@ -143,7 +143,7 @@ export function MusicFinder({
         </>
       )}
       {status.text && (
-        <p role="status" className={`m-0 text-[12.5px] ${status.error ? "text-danger" : "text-ink-soft"}`}>
+        <p role="status" className={`m-0 text-sm ${status.error ? "text-danger" : "text-ink-soft"}`}>
           {status.text}
         </p>
       )}

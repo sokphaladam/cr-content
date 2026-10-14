@@ -45,9 +45,10 @@ overrides the data folder (tests, a second library).
 npm run build                # → src-tauri\target\release\bundle\nsis\Shorts Studio_<version>_x64-setup.exe
 ```
 
-This freezes the engine with PyInstaller (`scripts/build_engine.py` → `src-tauri/engine-dist/`), exports the UI to
-static files (`frontend/out/`), and bundles both. The installed app writes `engine.log` (for troubleshooting) to
-`%APPDATA%\com.crcontent.shorts-studio\`; its library is in the folders above. FFmpeg must still be on PATH. The music-video extras (torch / stable-ts / librosa) aren't bundled,
+This freezes the engine with PyInstaller (`scripts/build_engine.py` → `src-tauri/engine-dist/`), downloads FFmpeg
+(`scripts/fetch_ffmpeg.py` → `src-tauri/ffmpeg-dist/`), exports the UI to static files (`frontend/out/`), and bundles
+all three. The installed app writes `engine.log` (for troubleshooting) to
+`%APPDATA%\com.crcontent.shorts-studio\`; its library is in the folders above. The music-video extras (torch / stable-ts / librosa) aren't bundled,
 so the installed app uses even lyric spacing and bpm-based cuts.
 
 | Part | Where |
@@ -55,6 +56,48 @@ so the installed app uses even lyric spacing and bpm-based cuts.
 | Window, engine start/stop | `src-tauri/src/main.rs` |
 | App name, window, bundle settings | `src-tauri/tauri.conf.json` (+ `tauri.bundle.json` for installer resources) |
 | Engine URL in the UI | `window.__ENGINE_URL__`, set by the Rust side, read in `frontend/lib/api.ts` |
+
+### macOS
+
+Same steps, with macOS paths:
+
+```bash
+brew install ffmpeg python
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-build.txt
+npm install && (cd frontend && npm install)
+npm run dev                  # desktop app with hot reload
+npm run build                # → src-tauri/target/release/bundle/macos/Shorts Studio.app and bundle/dmg/*.dmg
+```
+
+On a Mac the library defaults to `~/Documents/Shorts Studio`, the app's own folder (`locations.json`, `engine.log`)
+is `~/Library/Application Support/com.crcontent.shorts-studio/`, the tray icon is in the menu bar, **Open at Login**
+adds a LaunchAgent (`~/Library/LaunchAgents/com.crcontent.shorts-studio.plist`), and a click on the Dock icon
+reopens a closed window. The app adds Homebrew's folders to the engine's PATH so it finds FFmpeg. Caption fonts
+come from the macOS system fonts (Khmer uses Khmer Sangam MN unless you add Khmer OS fonts to `assets/fonts`).
+The build is unsigned: the first time, right-click the app → Open. **Settings → AI scene art → Install music extras**
+(~1 GB) adds Whisper lyric timing, beat detection and vocal separation: into `.venv` in dev runs, or into
+`<data folder>/addons/ai` (a portable Python) in the installed app; no restart needed. AI scene art needs an NVIDIA
+GPU, so it's Windows-only.
+
+### Releases on GitHub (Windows and macOS installers)
+
+`.github/workflows/release.yml` builds the installers on GitHub's machines and attaches them to a release:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0     # → Actions builds Windows, macOS Apple Silicon and macOS Intel (about 15–25 min)
+```
+
+The tag sets the app's version (`v0.2.0` → 0.2.0). The release is created as a **draft**: check it under
+**Releases**, then press **Publish**. **Actions → Release → Run workflow** builds the same installers as
+downloadable artifacts without making a release (to try a build first).
+
+Each installer bundles the frozen engine and FFmpeg (`scripts/fetch_ffmpeg.py`: gyan.dev on Windows,
+martin-riedl.de on macOS, both with libass), so people only install the app. `npm run build` bundles FFmpeg the same
+way locally. The builds aren't code-signed yet: Windows SmartScreen asks to confirm (**More info → Run anyway**), and
+macOS asks once (**System Settings → Privacy & Security → Open Anyway**); the release notes say so. Signing later
+needs an Apple Developer ID (notarization) and a Windows code-signing certificate, added as repository secrets.
 
 ## Web UI (Next.js)
 
@@ -298,7 +341,7 @@ vocals stem, so keep "split vocals and instrumental" on when composing (your own
 alignment model (default `medium` on GPU, `base` on CPU). Describe a sound, not a real singer: lyrics and styles
 never name real artists, and `post.txt` notes the music is AI-generated.
 
-## Upload to YouTube and TikTok
+## Upload to YouTube, TikTok, Facebook and Instagram
 
 Every rendered video has an **Upload to channels** card under its post text. It uploads `video.mp4` with
 `post.txt` (first line = title, the rest = description, `#tags` = hashtags/tags). Tick **Auto-upload** to post
@@ -320,6 +363,17 @@ your browser and comes back to the app. Keys from older `.env` setups are import
   *Content Posting API* (Direct Post), register the redirect URI `http://localhost:8765/callback/`, and enter
   its client key and secret. Until TikTok audits the app, direct posts can only be
   **Only me**; choose **Send to TikTok drafts** to finish and post publicly from the TikTok app instead.
+- **Facebook and Instagram** share one Meta app and one sign-in. At developers.facebook.com create an app with the
+  use cases for managing a Page and the *Instagram API with Facebook Login*, keep it in **Development mode** (as
+  its admin you can grant every permission without App Review; `http://localhost` redirects are allowed there), and
+  enter its App ID and secret on the Facebook row. **Connect** asks Facebook for your Pages and the Instagram
+  accounts linked to them: Instagram must be a professional (Business or Creator) account linked to a Page.
+  Facebook: vertical videos up to 90 s post as public **Reels** on the Page (their audio is converted to 48 kHz for
+  Facebook), anything longer or landscape as a regular Page video. Instagram: every video posts as a public
+  **Reel** (caption up to 2,200 characters and 30 hashtags; the cover is your thumbnail's frame; **Also show Reels
+  in the profile grid** is on by default). With several Pages or accounts, Settings picks the one to post to.
+  Both upload with the Page's token, which doesn't expire; Meta allows 30 Reels a day per Page and 100 posts a day
+  per Instagram account. `META_GRAPH_VERSION` overrides the Graph API version (default `v25.0`).
 
 Keys and tokens are kept in `accounts.json` (in the data folder, never committed); each video's uploads in its
 `published.json`. Port 8765 can be changed with `PUBLISH_CALLBACK_PORT`.

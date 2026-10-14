@@ -192,9 +192,9 @@ export function MusicVideoOptions({
           value={value.idea}
           onChange={(e) => onChange({ ...value, idea: e.target.value })}
           placeholder="Empty city streets at blue hour, rain on neon signs, a lone figure under an umbrella"
-          className="field-input min-h-[3.5rem] resize-y text-[13.5px]"
+          className="field-input min-h-[3.5rem] resize-y text-base"
         />
-        {ideasError && <p className="m-0 text-xs text-danger">{ideasError}</p>}
+        {ideasError && <p className="m-0 text-sm text-danger">{ideasError}</p>}
         {ideas && (
           <ul className="m-0 grid list-none gap-1.5 p-0">
             {ideas.map((idea, i) => {
@@ -207,13 +207,13 @@ export function MusicVideoOptions({
                     onClick={() =>
                       onChange({ ...value, idea: idea.idea, look: idea.look, lyric_style: catalog ? fromPreset(catalog, idea.lyric_style) : value.lyric_style })
                     }
-                    className={`grid w-full cursor-pointer gap-0.5 rounded-lg border p-2 text-left text-[12.5px] transition-colors hover:bg-ink/[0.04] ${
+                    className={`grid w-full cursor-pointer gap-0.5 rounded-lg border p-2 text-left text-sm transition-colors hover:bg-ink/[0.04] ${
                       chosen ? "border-cobalt bg-cobalt/[0.06]" : "border-line bg-transparent"
                     }`}
                   >
                     <span className="font-semibold text-ink">{idea.title}</span>
                     <span className="text-ink-soft">{idea.idea}</span>
-                    <span className="text-[11.5px] text-ink-soft">
+                    <span className="text-xs text-ink-soft">
                       {catalog?.looks[idea.look] ?? idea.look} look · {catalog?.presets[idea.lyric_style]?.label ?? idea.lyric_style} lyrics
                     </span>
                   </button>
@@ -222,7 +222,7 @@ export function MusicVideoOptions({
             })}
           </ul>
         )}
-        <p className="m-0 text-xs text-ink-soft">The footage follows your idea, matched to each part of the song. Leave empty to let the lyrics decide.</p>
+        <p className="m-0 text-sm text-ink-soft">The footage follows your idea, matched to each part of the song. Leave empty to let the lyrics decide.</p>
         {sections.length > 0 && (
           <ShotList
             name={name}
@@ -247,7 +247,7 @@ export function MusicVideoOptions({
         <ArtStylePicker value={value.art_style ?? ""} onChange={(art_style) => onChange({ ...value, art_style })} status={art.status} reload={art.reload} />
         {value.art_style && !artBlocker(art.status, value.art_style) && (
           <>
-            <p className="m-0 text-xs text-ink-soft">
+            <p className="m-0 text-sm text-ink-soft">
               Claude plans a picture story from the lyrics, then each one is drawn on your GPU (about 40 seconds each) and cut on the beat with 3D
               camera moves, zoom punches and flashes. A chorus sung again shows its pictures again, from new camera angles.
             </p>
@@ -260,7 +260,7 @@ export function MusicVideoOptions({
                 onChange={(pictures: PicturePace) => onChange({ ...value, pictures })}
                 options={(Object.keys(PACES) as PicturePace[]).map((k) => ({ value: k, label: PACES[k].label }))}
               />
-              <p className="m-0 text-xs text-ink-soft">{PACES[value.pictures ?? "normal"].hint}</p>
+              <p className="m-0 text-sm text-ink-soft">{PACES[value.pictures ?? "normal"].hint}</p>
             </div>
             <SongPictures
               name={name}
@@ -289,14 +289,14 @@ export function MusicVideoOptions({
                   role="radio"
                   aria-checked={look === k}
                   onClick={() => onChange({ ...value, look: k })}
-                  className={`grid cursor-pointer gap-1 rounded-lg border bg-transparent p-1 text-[11.5px] font-semibold ${look === k ? "border-cobalt text-ink" : "border-line text-ink-soft"}`}
+                  className={`grid cursor-pointer gap-1 rounded-lg border bg-transparent p-1 text-xs font-semibold ${look === k ? "border-cobalt text-ink" : "border-line text-ink-soft"}`}
                 >
                   <span className="block h-7 rounded" style={{ background: SCENE_BG, filter: LOOK_CSS[k] }} />
                   {catalog.looks[k]}
                 </button>
               ))}
             </div>
-            <p className="m-0 text-xs text-ink-soft">One colour grade over every clip, with a slow camera drift, so the footage looks like one film.</p>
+            <p className="m-0 text-sm text-ink-soft">One colour grade over every clip, with a slow camera drift, so the footage looks like one film.</p>
           </div>
 
           <div className="grid gap-1.5">
@@ -314,10 +314,10 @@ export function MusicVideoOptions({
                     onClick={() => onChange({ ...value, lyric_style: p })}
                     className={`grid cursor-pointer place-items-center gap-0.5 rounded-lg border bg-[#141a26] px-1 py-1.5 ${active ? "border-cobalt outline-2 outline-cobalt" : "border-line"}`}
                   >
-                    <span lang={lang} className="text-[15px] leading-none" style={textCss(p, fontFor(catalog, p, lang), true)}>
+                    <span lang={lang} className="text-lg leading-none" style={textCss(p, fontFor(catalog, p, lang), true)}>
                       {lang === "km" ? "ចម្រៀង" : p.case === "upper" ? "AA" : p.case === "lower" ? "aa" : "Aa"}
                     </span>
-                    <span className="text-[11px] font-semibold text-white/70">{catalog.presets[k].label}</span>
+                    <span className="text-xs font-semibold text-white/70">{catalog.presets[k].label}</span>
                   </button>
                 );
               })}
@@ -327,7 +327,7 @@ export function MusicVideoOptions({
               type="button"
               aria-expanded={custom}
               onClick={() => setCustom((c) => !c)}
-              className="flex cursor-pointer items-center gap-1 justify-self-start border-0 bg-transparent p-0 text-[12.5px] font-semibold text-cobalt"
+              className="flex cursor-pointer items-center gap-1 justify-self-start border-0 bg-transparent p-0 text-sm font-semibold text-cobalt"
             >
               <ChevronDown className={`size-3.5 transition-transform ${custom ? "rotate-180" : ""}`} /> Customize font, colours and effect
             </button>
@@ -341,7 +341,7 @@ export function MusicVideoOptions({
                     id={`${ideaId}-font`}
                     value={fontFor(catalog, style, lang)}
                     onChange={(e) => setStyle({ font: e.target.value })}
-                    className="field-input h-9 py-0 text-[13px]"
+                    className="field-input h-9 py-0 text-base"
                   >
                     {(catalog.fonts[lang] ?? []).map((f) => (
                       <option key={f} value={f} style={{ fontFamily: `"${f}"` }}>
@@ -351,11 +351,11 @@ export function MusicVideoOptions({
                   </select>
                 </div>
                 <div className="flex flex-wrap gap-3">
-                  <label className="grid gap-1 text-[12.5px]">
+                  <label className="grid gap-1 text-sm">
                     <span className="field-label">Text</span>
                     <input type="color" value={style.color} onChange={(e) => setStyle({ color: e.target.value.toUpperCase() })} className="h-8 w-12 cursor-pointer rounded border border-line bg-panel p-0.5" />
                   </label>
-                  <label className="grid gap-1 text-[12.5px]">
+                  <label className="grid gap-1 text-sm">
                     <span className="field-label">Sung words</span>
                     <input type="color" value={style.highlight} onChange={(e) => setStyle({ highlight: e.target.value.toUpperCase() })} className="h-8 w-12 cursor-pointer rounded border border-line bg-panel p-0.5" />
                   </label>

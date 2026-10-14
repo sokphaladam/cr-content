@@ -172,11 +172,11 @@ export function Timeline({
             <IconButton label={playing ? "Pause" : "Play"} onClick={timeline.toggle}>
               {playing ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
             </IconButton>
-            <span className="font-mono text-[12px] text-ink-soft tabular-nums">
+            <span className="font-mono text-sm text-ink-soft tabular-nums">
               {clock(now)} / {clock(total)}
             </span>
             {drag?.kind === "slip" && (
-              <span className="text-[12px] text-ink-soft">
+              <span className="text-sm text-ink-soft">
                 Footage starts {(draft.scenes.find((s) => s.uid === drag.uid)?.media_start ?? 0).toFixed(1)}s into the clip
               </span>
             )}
@@ -201,7 +201,7 @@ export function Timeline({
           }}
         >
           {!shown.length ? (
-            <p className="m-0 px-3 py-6 text-[13px] text-ink-soft">{timeline.loading ? "Making the voiceover…" : "Write a voiceover to see the timeline."}</p>
+            <p className="m-0 px-3 py-6 text-base text-ink-soft">{timeline.loading ? "Making the voiceover…" : "Write a voiceover to see the timeline."}</p>
           ) : (
             <div
               className="relative"
@@ -214,7 +214,7 @@ export function Timeline({
               <div className="relative h-5 cursor-pointer" onPointerDown={(e) => timeline.seekTime(timeAt(e.clientX))}>
                 {ticks.map((s) => (
                   <span key={s} className="absolute top-0 h-full border-l border-line" style={{ left: s * pps, height: s % labelEvery ? 6 : 12 }}>
-                    {s % labelEvery === 0 && <span className="absolute top-0 left-1 font-mono text-[10px] text-ink-soft">{s}</span>}
+                    {s % labelEvery === 0 && <span className="absolute top-0 left-1 font-mono text-2xs text-ink-soft">{s}</span>}
                   </span>
                 ))}
               </div>
@@ -247,7 +247,7 @@ export function Timeline({
                         backgroundPositionX: frameW ? -(s.media_start ?? 0) * pps : 0,
                       }}
                     >
-                      <span className="pointer-events-none absolute top-1 left-2 rounded bg-black/60 px-1 text-[10.5px] font-semibold text-white">
+                      <span className="pointer-events-none absolute top-1 left-2 rounded bg-black/60 px-1 text-2xs font-semibold text-white">
                         {seg.index + 1}
                         {s.layout && s.layout !== "fill" ? ` · ${s.layout === "fit" ? "Fit" : "Split"}` : ""}
                       </span>
@@ -283,8 +283,8 @@ export function Timeline({
                         onPointerDown={(e) =>
                           begin(e, { kind: "item", uid: seg.scene.uid, list, k, x: e.clientX, at: item.at, duration: item.duration, edge: false, max: seg.length })
                         }
-                        className={`absolute top-0 h-full cursor-grab overflow-hidden rounded px-1.5 text-[10.5px] leading-5 font-semibold whitespace-nowrap ${
-                          list === "broll" ? "bg-cobalt/80 text-white" : "bg-caption text-ink"
+                        className={`absolute top-0 h-full cursor-grab overflow-hidden rounded px-1.5 text-2xs leading-5 font-semibold whitespace-nowrap ${
+                          list === "broll" ? "bg-cobalt/80 text-white" : "bg-caption text-media"
                         }`}
                         style={{ left: (seg.start + item.at) * pps, width: Math.max(item.duration * pps, 6) }}
                       >

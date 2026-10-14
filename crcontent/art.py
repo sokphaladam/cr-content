@@ -14,14 +14,14 @@ from pathlib import Path
 
 import anthropic
 
-from .config import ASSETS_DIR, CACHE_DIR, CLAUDE_MODEL, LANGS, WINDOWS_FONTS
+from .config import CACHE_DIR, CLAUDE_MODEL, LANGS
 from .script import make_client
-from .styles import USER_FONTS, available_fonts
+from .styles import available_fonts, font_dirs
 
 ART_CACHE = CACHE_DIR / "art"
 PHOTO = "PHOTO"  # href Claude gives the cover's photo; swapped for the real picture at render time
 
-# families resvg can find (Windows / user / assets fonts), offered to Claude for headlines
+# families resvg can find (system / user / assets fonts), offered to Claude for headlines
 COVER_FONTS = {
     "en": ["Impact", "Arial Black", "Segoe UI Black", "Bahnschrift", "Georgia", "Trebuchet MS", "Verdana", "Arial"],
     "km": [],  # filled from styles.available_fonts("km") at call time
@@ -197,7 +197,7 @@ def clean_svg(reply: str) -> str:
 
 
 def _font_dirs() -> list[str]:
-    return [str(d) for d in (ASSETS_DIR / "fonts", WINDOWS_FONTS, USER_FONTS) if d.exists()]
+    return [str(d) for d in font_dirs()]
 
 
 def rasterize(svg: str, size: tuple[int, int], out: Path, photo: Path | None = None) -> Path:

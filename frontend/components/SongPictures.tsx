@@ -173,8 +173,8 @@ export function SongPictures({
     <div className="grid gap-2 rounded-lg border border-line p-2.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="grid">
-          <span className="text-[13px] font-semibold text-ink">Check the pictures first</span>
-          <span className="text-[12px] text-ink-soft tabular-nums">
+          <span className="text-base font-semibold text-ink">Check the pictures first</span>
+          <span className="text-sm text-ink-soft tabular-nums">
             {plan ? `${plan.slots.length} pictures · ${drawn} drawn` : "See every picture before you render"}
           </span>
         </div>
@@ -193,13 +193,13 @@ export function SongPictures({
       </div>
 
       {!plan && (
-        <p className="m-0 text-xs text-ink-soft">
+        <p className="m-0 text-sm text-ink-soft">
           Planning asks Claude once, for a few cents. Drawing, redrawing and motion previews then run on your GPU for free, and Make video uses exactly the pictures
           you approved, with no new Claude call.
         </p>
       )}
       {stale && (
-        <p className="m-0 rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-ink">
+        <p className="m-0 rounded-md bg-amber-500/10 px-2 py-1.5 text-sm text-ink">
           You changed the look, the number of pictures, the idea or its shot list since these were planned. Plan again to see the new pictures, otherwise Make video will plan
           them itself (one Claude call) without you checking them.
         </p>
@@ -238,7 +238,7 @@ export function SongPictures({
               type="button"
               aria-expanded={open}
               onClick={() => setOpen((o) => !o)}
-              className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[12.5px] font-semibold text-cobalt"
+              className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-sm font-semibold text-cobalt"
             >
               <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} /> {open ? "Hide pictures" : "Show pictures"}
             </button>
@@ -282,13 +282,13 @@ export function SongPictures({
                 setPlan(next);
                 save(next);
               }}
-              className="field-input field-sizing-content min-h-[52px] resize-none text-[12.5px] leading-snug"
+              className="field-input field-sizing-content min-h-[52px] resize-none text-sm leading-snug"
             />
-            <span className="text-[11.5px] text-ink-soft">The characters, world and colours every picture shares. Edit it, then Plan again to apply it to all prompts.</span>
+            <span className="text-xs text-ink-soft">The characters, world and colours every picture shares. Edit it, then Plan again to apply it to all prompts.</span>
           </label>
           <ol className={`m-0 grid list-none gap-2 p-0 ${aspect === "16:9" ? "grid-cols-1" : "grid-cols-2"}`}>
             {plan.slots.map((slot, k) => (
-              <li key={k} className="grid content-start gap-1.5 rounded-lg border border-line/70 bg-paper/60 p-1.5">
+              <li key={k} className="grid content-start gap-1.5 rounded-lg border border-line/70 bg-sunken p-1.5">
                 <div className={`relative grid place-items-center overflow-hidden rounded-md bg-ink/[0.06] ${aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"}`}>
                   {previews[k] ? (
                     <video src={fileUrl(previews[k])} autoPlay loop muted playsInline className="size-full object-cover" />
@@ -296,7 +296,7 @@ export function SongPictures({
                     // eslint-disable-next-line @next/next/no-img-element -- a local file from the engine
                     <img src={fileUrl(slot.picture.media)} alt={`Picture ${k + 1}: ${slot.prompt}`} className="size-full object-cover" />
                   ) : busy[k] === "draw" ? (
-                    <span className="grid justify-items-center gap-1 text-[11.5px] text-ink-soft">
+                    <span className="grid justify-items-center gap-1 text-xs text-ink-soft">
                       <Spinner /> Drawing…
                     </span>
                   ) : (
@@ -307,27 +307,27 @@ export function SongPictures({
                       <Spinner className="size-5" />
                     </span>
                   )}
-                  <span className="absolute top-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10.5px] font-semibold text-white tabular-nums">
+                  <span className="absolute top-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-2xs font-semibold text-white tabular-nums">
                     {k + 1} · {clock(slot.start)}
                   </span>
                 </div>
                 <div className="grid gap-0.5 px-0.5">
-                  <span className="text-[12px] font-semibold text-ink">
+                  <span className="text-sm font-semibold text-ink">
                     {slot.section} <span className="font-normal text-ink-soft">· {slot.seconds.toFixed(1)} s</span>
                   </span>
-                  {slot.also.length > 0 && <span className="text-[11px] text-cobalt">Shown again in {slot.also.join(", ")}</span>}
-                  {slot.lyrics && <span className="line-clamp-2 text-[11.5px] text-ink-soft italic">“{slot.lyrics}”</span>}
+                  {slot.also.length > 0 && <span className="text-xs text-cobalt">Shown again in {slot.also.join(", ")}</span>}
+                  {slot.lyrics && <span className="line-clamp-2 text-xs text-ink-soft italic">“{slot.lyrics}”</span>}
                 </div>
                 <textarea
                   aria-label={`Picture ${k + 1} prompt`}
                   rows={3}
                   value={slot.prompt}
                   onChange={(e) => update(k, { prompt: e.target.value })}
-                  className="field-input min-h-[64px] resize-y text-[11.5px] leading-snug"
+                  className="field-input min-h-[64px] resize-y text-xs leading-snug"
                 />
                 <select
                   aria-label={`Picture ${k + 1} camera move`}
-                  className="field-input h-7 py-0 text-[11.5px]"
+                  className="field-input h-7 py-0 text-xs"
                   value={slot.motion}
                   onChange={(e) => update(k, { motion: e.target.value as Motion })}
                 >
@@ -341,7 +341,7 @@ export function SongPictures({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-7 px-1.5 text-[12px]"
+                    className="h-7 px-1.5 text-sm"
                     icon={slot.picture ? <Dices className="size-3.5" /> : <Paintbrush className="size-3.5" />}
                     loading={busy[k] === "draw"}
                     disabled={!!blocker || !!busy[k]}
@@ -351,7 +351,7 @@ export function SongPictures({
                     {slot.picture ? "Retake" : "Draw"}
                   </Button>
                   {slot.picture && (
-                    <Button size="sm" variant="ghost" className="h-7 px-1.5 text-[12px]" icon={<Clapperboard className="size-3.5" />} disabled={!!busy[k]} onClick={() => (previews[k] ? setPreviews((p) => without(p, k)) : preview(k))}>
+                    <Button size="sm" variant="ghost" className="h-7 px-1.5 text-sm" icon={<Clapperboard className="size-3.5" />} disabled={!!busy[k]} onClick={() => (previews[k] ? setPreviews((p) => without(p, k)) : preview(k))}>
                       {previews[k] ? "Still" : "Preview"}
                     </Button>
                   )}

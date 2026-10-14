@@ -1,20 +1,56 @@
 @import "tailwindcss";
 
+/* Dark mode follows the theme picked in Settings → Appearance (data-theme on <html>, set before first paint in
+   layout.tsx), or the system's when that's "System". */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ---------- Design tokens ----------
+   Colours are named by role, not by value, and switch with the theme below. Use these (and opacity modifiers like
+   bg-ink/[0.06]) rather than raw colours, so every screen stays consistent in both themes. */
 @theme {
-  --color-paper: #edeff3;
-  --color-panel: #ffffff;
-  --color-ink: #151a24;
-  --color-ink-soft: #5b6474;
-  --color-line: #dde1e8;
-  --color-cobalt: #2f4ad0;
-  --color-cobalt-deep: #2238ad;
-  /* the navigation rail: the dark frame around the workspace, like an edit bay */
-  --color-rail: #1c2231;
+  --color-paper: var(--paper); /* app background, behind panels */
+  --color-panel: var(--panel); /* cards, inputs, raised surfaces */
+  --color-sunken: var(--sunken); /* inset areas inside a card: code boxes, help blocks, wells */
+  --color-ink: var(--ink); /* main text; also inverted chips and toasts (with text-on-ink) */
+  --color-ink-soft: var(--ink-soft); /* secondary text, icons */
+  --color-on-ink: var(--on-ink); /* text on a bg-ink surface */
+  --color-line: var(--line); /* borders and dividers */
+  --color-line-strong: var(--line-strong); /* hovered borders */
+  --color-cobalt: var(--cobalt); /* the accent: primary actions, selection, focus */
+  --color-cobalt-deep: var(--cobalt-deep);
+  --color-cobalt-soft: var(--cobalt-soft); /* selected rows, accent backgrounds */
+  /* the navigation rail: the dark frame around the workspace, like an edit bay (dark in both themes) */
+  --color-rail: var(--rail);
   --color-rail-ink: #a7afc0;
+  --color-media: #10141c; /* behind video frames and thumbnails: dark in both themes */
   --color-caption: #ffd60a; /* same yellow the videos use for the spoken word */
-  --color-danger: #c0352b;
-  --color-ok: #1f8a4c;
-  --color-warn: #c79a00;
+  --color-danger: var(--danger);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+
+  /* One type scale for the whole app (rem, so Settings → Appearance → Interface size scales it with the spacing). */
+  --text-2xs: 0.65625rem; /* 10.5px: rail labels, tiny badges */
+  --text-2xs--line-height: 1.3;
+  --text-xs: 0.71875rem; /* 11.5px: chips, timestamps, meta */
+  --text-xs--line-height: 1.35;
+  --text-sm: 0.78125rem; /* 12.5px: hints, secondary text, labels */
+  --text-sm--line-height: 1.45;
+  --text-base: 0.8125rem; /* 13px: body text in panels and forms */
+  --text-base--line-height: 1.5;
+  --text-md: 0.875rem; /* 14px: emphasized body, inputs, buttons */
+  --text-md--line-height: 1.45;
+  --text-lg: 0.9375rem; /* 15px: card titles */
+  --text-lg--line-height: 1.35;
+  --text-xl: 1.0625rem; /* 17px: pane titles */
+  --text-xl--line-height: 1.3;
+  --text-2xl: 1.375rem; /* 22px: section titles */
+  --text-2xl--line-height: 1.2;
+  --text-3xl: 1.75rem; /* 28px: page titles */
+  --text-3xl--line-height: 1.15;
+
+  --radius-card: 0.75rem;
+  --shadow-card: 0 1px 2px rgb(16 22 34 / 0.05);
+  --shadow-pop: 0 12px 32px -12px rgb(16 22 34 / 0.35), 0 2px 6px rgb(16 22 34 / 0.08);
 
   /* three-pane layout (library, editor, preview) from typical laptop width */
   --breakpoint-wide: 73.75rem; /* 1180px */
@@ -26,76 +62,149 @@
   --font-khmer: var(--font-noto-khmer), var(--font-noto), sans-serif;
 }
 
+/* ---------- Themes ---------- */
+:root {
+  color-scheme: light;
+  --paper: #eef0f4;
+  --panel: #ffffff;
+  --sunken: #f5f6f9;
+  --ink: #151a24;
+  --ink-soft: #5b6474;
+  --on-ink: #ffffff;
+  --line: #dde1e8;
+  --line-strong: #b9c0cc;
+  --cobalt: #2f4ad0;
+  --cobalt-deep: #2238ad;
+  --cobalt-soft: #e8ecfc;
+  --rail: #1c2231;
+  --danger: #c0352b;
+  --ok: #1f8a4c;
+  --warn: #a87f00;
+}
+
+/* "System" resolves to light or dark in the script in layout.tsx, so one selector covers both ways of getting here */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #0e121a;
+  --panel: #171c26;
+  --sunken: #11151d;
+  --ink: #e6e9ef;
+  --ink-soft: #98a1b1;
+  --on-ink: #10141c;
+  --line: #2a3140;
+  --line-strong: #455066;
+  --cobalt: #6079ff;
+  --cobalt-deep: #4c66f2;
+  --cobalt-soft: #1e2645;
+  --rail: #090c12;
+  --danger: #f0675c;
+  --ok: #43c27a;
+  --warn: #e3b62e;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 16px 40px -12px rgb(0 0 0 / 0.7), 0 2px 6px rgb(0 0 0 / 0.4);
+}
+
+/* Interface size (Settings → Appearance): everything is in rem, so the root size scales the whole app. */
+:root[data-size="compact"] {
+  font-size: 15px;
+}
+:root[data-size="large"] {
+  font-size: 17.5px;
+}
+
 @layer base {
   body {
-    @apply bg-paper text-ink font-sans;
-    font-size: 15px;
-    line-height: 1.5;
+    @apply bg-paper font-sans text-md text-ink;
   }
   :lang(km) {
     font-family: var(--font-khmer);
     line-height: 1.75;
   }
   :focus-visible {
-    outline: 3px solid var(--color-cobalt);
+    outline: 2px solid var(--color-cobalt);
     outline-offset: 2px;
   }
+  ::selection {
+    background: color-mix(in srgb, var(--color-cobalt) 28%, transparent);
+  }
   mark {
-    @apply bg-caption text-ink;
+    @apply bg-caption text-media;
     padding: 0 0.15em;
+  }
+  /* native controls (selects, sliders, checkboxes) in the accent colour and the theme */
+  input[type="range"],
+  input[type="checkbox"],
+  input[type="radio"],
+  progress {
+    accent-color: var(--color-cobalt);
+  }
+  /* quiet scrollbars that suit both themes */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--color-ink) 22%, transparent) transparent;
   }
 }
 
 @layer components {
+  /* ---------- Surfaces ---------- */
+  /* the standard container for a group of fields or rows */
+  .card {
+    @apply rounded-(--radius-card) border border-line bg-panel shadow-(--shadow-card);
+  }
+  /* a box inside a card: help text, code, a nested group */
+  .well {
+    @apply rounded-lg border border-line bg-sunken;
+  }
+  /* menus, popovers, toasts */
+  .popover {
+    @apply rounded-xl border border-line bg-panel shadow-(--shadow-pop);
+  }
+
+  /* the bar across the top of every pane (library, editor, preview, campaigns): one height, so they line up */
+  .pane-header {
+    @apply flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line bg-panel px-4;
+  }
+
+  /* ---------- Headings ---------- */
+  .page-title {
+    @apply font-display text-3xl font-extrabold tracking-tight;
+  }
+  .section-title {
+    @apply font-display text-2xl font-bold tracking-tight;
+  }
+  .pane-title {
+    @apply font-display text-xl font-bold tracking-tight;
+  }
+  .card-title {
+    @apply font-display text-lg font-bold;
+  }
+  /* quiet sentence-case group headings in lists */
+  .group-label {
+    @apply text-sm font-semibold text-ink-soft;
+  }
+  .field-label {
+    @apply text-sm font-semibold text-ink-soft;
+  }
+  .page-intro {
+    @apply max-w-[62ch] text-base text-ink-soft;
+  }
+
+  /* ---------- Inputs ---------- */
   .field-input {
-    @apply w-full rounded-md border border-line bg-panel px-3 py-2 text-ink;
+    @apply w-full rounded-lg border border-line bg-panel px-3 py-2 text-md text-ink transition-colors placeholder:text-ink-soft/70;
+  }
+  .field-input:hover:not(:disabled):not(:focus) {
+    @apply border-line-strong;
   }
   .field-input:focus {
     @apply border-cobalt outline-none;
-    box-shadow: 0 0 0 3px rgb(47 79 216 / 0.18);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-cobalt) 20%, transparent);
   }
-  /* date group headings in lists: quiet, sentence case */
-  .group-label {
-    @apply text-[12px] font-semibold text-ink-soft;
+  .field-input:disabled {
+    @apply cursor-not-allowed opacity-60;
   }
-  .field-label {
-    @apply text-[13px] font-semibold text-ink-soft;
-  }
-  .btn {
-    @apply inline-flex cursor-pointer items-center gap-2 rounded-md border border-line bg-panel px-4 py-3 text-[14.5px] leading-none font-semibold text-ink no-underline;
-  }
-  .btn:hover {
-    @apply border-ink-soft;
-  }
-  .btn:disabled {
-    @apply cursor-progress opacity-55;
-  }
-  .btn-primary {
-    @apply border-cobalt bg-cobalt text-white;
-  }
-  .btn-primary:hover {
-    @apply border-cobalt-deep bg-cobalt-deep;
-  }
-  .btn-ghost {
-    @apply bg-transparent;
-  }
-  .btn-small {
-    @apply px-3 py-[7px] text-[13px];
-  }
-  .btn-link {
-    @apply border-transparent bg-transparent text-cobalt;
-  }
-  .btn-link:hover {
-    @apply border-line;
-  }
-  .btn-danger {
-    @apply bg-transparent text-danger;
-  }
-  .btn-danger:hover {
-    @apply border-danger;
-  }
-  .spinner {
-    @apply inline-block size-[13px] animate-spin rounded-full border-2 border-current border-r-transparent;
+  select.field-input {
+    @apply cursor-pointer pr-8;
   }
 }
 
@@ -104,6 +213,7 @@
   *::before,
   *::after {
     animation: none !important;
+    transition: none !important;
   }
 }
 

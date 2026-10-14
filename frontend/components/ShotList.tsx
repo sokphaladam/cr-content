@@ -86,14 +86,14 @@ export function ShotList({
             type="button"
             aria-expanded={open}
             onClick={() => setOpen((o) => !o)}
-            className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[12.5px] font-semibold text-cobalt"
+            className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-sm font-semibold text-cobalt"
           >
             <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} /> Shot list · {sections.length} parts
           </button>
         )}
       </div>
       {!current && (
-        <p className="m-0 text-xs text-ink-soft">
+        <p className="m-0 text-sm text-ink-soft">
           {direction && direction.idea !== idea.trim()
             ? "You changed the idea since the shot list was made, so it isn't used. Direct again to update it."
             : "Write what each part of the song shows (Intro, Verses, Chorus…), then Direct my idea: every part gets its scene and cutting speed, and the pictures follow it."}
@@ -104,7 +104,7 @@ export function ShotList({
       {current && open && direction && (
         <div className="grid gap-2 rounded-lg border border-line p-2.5">
           {direction.notes.length > 0 && (
-            <ul className="m-0 grid list-none gap-1 rounded-md bg-cobalt/[0.06] p-2 text-[12px] leading-snug text-ink">
+            <ul className="m-0 grid list-none gap-1 rounded-md bg-cobalt/[0.06] p-2 text-sm leading-snug text-ink">
               {direction.notes.map((n, i) => (
                 <li key={i} className="flex gap-1.5">
                   <Info className="mt-0.5 size-3.5 shrink-0 text-cobalt" aria-hidden />
@@ -117,7 +117,7 @@ export function ShotList({
             {direction.sections.map((row, i) => (
               <li key={i} className="grid gap-1">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-[12.5px] font-semibold">{sections[i]}</span>
+                  <span className="text-sm font-semibold">{sections[i]}</span>
                   <Segmented name={`${name}-pace-${i}`} size="sm" value={row.pace} options={PACE_OPTIONS} onChange={(pace) => setRow(i, { pace })} />
                 </div>
                 <textarea
@@ -125,7 +125,7 @@ export function ShotList({
                   rows={2}
                   value={row.scene}
                   onChange={(e) => setRow(i, { scene: e.target.value })}
-                  className="field-input field-sizing-content min-h-[44px] resize-none text-[12.5px] leading-snug"
+                  className="field-input field-sizing-content min-h-[44px] resize-none text-sm leading-snug"
                 />
               </li>
             ))}
@@ -136,9 +136,9 @@ export function ShotList({
               rows={2}
               value={direction.bible}
               onChange={(e) => edit({ ...direction, bible: e.target.value })}
-              className="field-input field-sizing-content min-h-[52px] resize-none text-[12.5px] leading-snug"
+              className="field-input field-sizing-content min-h-[52px] resize-none text-sm leading-snug"
             />
-            <span className="text-[11.5px] text-ink-soft">Every picture shows these same people, car and places. Pace: how fast that part cuts on the beat.</span>
+            <span className="text-xs text-ink-soft">Every picture shows these same people, car and places. Pace: how fast that part cuts on the beat.</span>
           </label>
         </div>
       )}

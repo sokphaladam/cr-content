@@ -380,7 +380,7 @@ def prepare_references(campaign_id: str, log: Callable[[str], None] = print) -> 
         try:
             _transcribe(c, ref, log)
         except ImportError:
-            raise RuntimeError("Transcribing needs Whisper: pip install -r requirements-music.txt")
+            raise RuntimeError("Transcribing needs Whisper: install the AI add-on in Settings → AI features.")
         except Exception as e:
             ref.note = f"Couldn't transcribe: {str(e).strip().splitlines()[-1][:160]}"
         save(c)

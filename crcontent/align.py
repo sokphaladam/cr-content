@@ -653,7 +653,7 @@ def align_lyrics(audio: Path, song: SongScript, lang: str, total: float, log=pri
             log("      separating the vocals from the music first (Demucs)")
         return whisper_timing(audio, song, lang, isolate_vocals, total), "whisper"
     except ImportError:
-        log("      stable-ts isn't installed, so lyrics are spaced evenly (pip install -r requirements-music.txt)")
+        log("      stable-ts isn't installed, so lyrics are spaced evenly (Settings → AI features → Install AI add-on)")
     except Exception as e:  # a bad alignment shouldn't block the video
         log(f"      ! lyric alignment failed ({e.__class__.__name__}: {e}); spacing lyrics evenly")
     return even_timing(song, total), "even"

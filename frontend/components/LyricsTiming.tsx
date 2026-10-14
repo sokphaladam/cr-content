@@ -140,7 +140,7 @@ function TimeInput({ value, onCommit, label, className = "" }: { value: number; 
           e.currentTarget.blur();
         }
       }}
-      className={`h-7 w-[4.6rem] rounded-md border bg-panel px-1.5 text-center font-mono text-[12.5px] tabular-nums text-ink focus:border-cobalt focus:outline-none ${
+      className={`h-7 w-[4.6rem] rounded-md border bg-panel px-1.5 text-center font-mono text-sm tabular-nums text-ink focus:border-cobalt focus:outline-none ${
         bad ? "border-danger" : "border-line"
       } ${className}`}
     />
@@ -334,10 +334,10 @@ export function LyricsTiming({
         <IconButton label="Back to start" onClick={onBack}>
           <ChevronLeft className="size-5" />
         </IconButton>
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold" lang={lang}>
+        <span className="min-w-0 flex-1 truncate text-md font-semibold" lang={lang}>
           {title}
         </span>
-        <span className="hidden text-[13px] text-ink-soft sm:inline" aria-live="polite">
+        <span className="hidden text-base text-ink-soft sm:inline" aria-live="polite">
           {save === "saving" ? "Saving…" : save === "saved" ? "Timing saved" : save === "error" ? "Couldn't save" : ""}
         </span>
         <Button
@@ -442,7 +442,7 @@ export function LyricsTiming({
               onSeeked={(e) => setNow(e.currentTarget.currentTime)}
               onTimeUpdate={(e) => !playing && setNow(e.currentTarget.currentTime)}
             />
-            <span className="w-14 text-right font-mono text-sm tabular-nums text-white/70">{fmt(now)}</span>
+            <span className="w-14 text-right font-mono text-md tabular-nums text-white/70">{fmt(now)}</span>
           </div>
         </div>
       </div>
@@ -451,13 +451,13 @@ export function LyricsTiming({
         <div className="mx-auto grid max-w-[760px] gap-4 px-4 py-5 sm:px-8">
           {loadError && <Message text={loadError} error />}
           {!lines && !loadError && (
-            <p className="m-0 flex items-center gap-2 text-sm text-ink-soft">
+            <p className="m-0 flex items-center gap-2 text-md text-ink-soft">
               <Spinner /> Loading the lyrics…
             </p>
           )}
 
           {lines && (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13px] text-ink-soft">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-base text-ink-soft">
               <span>
                 {lines.length} lines ·{" "}
                 {method === "edited"
@@ -514,7 +514,7 @@ export function LyricsTiming({
           )}
           <Message text={error} error />
           {toCheck.length > 0 && (
-            <p className="m-0 flex flex-wrap items-center gap-2 rounded-lg border border-warn/40 bg-warn/[0.08] px-3 py-2 text-[13px] text-ink" role="status">
+            <p className="m-0 flex flex-wrap items-center gap-2 rounded-lg border border-warn/40 bg-warn/[0.08] px-3 py-2 text-base text-ink" role="status">
               <CircleAlert className="size-4 shrink-0 text-warn" />
               <span className="min-w-0 flex-1">
                 The sync isn&apos;t sure about <strong>{toCheck.length}</strong> line{toCheck.length === 1 ? "" : "s"}. Listen to {toCheck.length === 1 ? "it" : "them"}; fix
@@ -526,7 +526,7 @@ export function LyricsTiming({
             </p>
           )}
           {deleted && (
-            <p className="m-0 flex items-center gap-2 rounded-lg bg-ink/[0.05] px-3 py-1.5 text-[13px] text-ink-soft" role="status">
+            <p className="m-0 flex items-center gap-2 rounded-lg bg-ink/[0.05] px-3 py-1.5 text-base text-ink-soft" role="status">
               <span className="min-w-0 flex-1 truncate">
                 Deleted “<span lang={lang}>{deleted.row.text}</span>”
               </span>
@@ -555,14 +555,14 @@ export function LyricsTiming({
                 const expanded = open.has(line.uid);
                 return (
                   <li key={line.uid} data-line={i} className="grid gap-1.5">
-                    {newSection && <p className="m-0 mt-3 text-xs font-semibold tracking-wide text-ink-soft uppercase">{sections[line.section] ?? ""}</p>}
+                    {newSection && <p className="m-0 mt-3 text-sm font-semibold tracking-wide text-ink-soft uppercase">{sections[line.section] ?? ""}</p>}
                     <div
                       className={`grid gap-1.5 rounded-lg border px-2 py-1.5 ${
                         isActive ? "border-cobalt bg-cobalt/[0.06]" : line.check ? "border-warn/60 bg-warn/[0.06]" : "border-line bg-panel"
                       }`}
                     >
                       {line.check && (
-                        <div className="flex items-center gap-2 text-xs text-ink-soft">
+                        <div className="flex items-center gap-2 text-sm text-ink-soft">
                           <CircleAlert className="size-3.5 shrink-0 text-warn" />
                           <span className="flex-1">Not sure about this line&apos;s timing. Play it to check.</span>
                           <Button size="sm" variant="ghost" icon={<Check className="size-3.5" />} onClick={() => editLine(line.uid, (l) => ({ ...l, check: false }))}>
@@ -638,7 +638,7 @@ export function LyricsTiming({
                                   lang={lang}
                                   title="Play from this word"
                                   onClick={() => seek(w.start - 0.3)}
-                                  className="cursor-pointer rounded border-0 bg-transparent px-1 text-[13.5px] font-semibold text-ink hover:bg-ink/[0.06]"
+                                  className="cursor-pointer rounded border-0 bg-transparent px-1 text-base font-semibold text-ink hover:bg-ink/[0.06]"
                                 >
                                   {w.text}
                                 </button>
@@ -651,7 +651,7 @@ export function LyricsTiming({
                               </li>
                             ))}
                             <li className="grid content-end justify-items-center gap-1 px-1 py-1">
-                              <span className="text-xs text-ink-soft">line ends</span>
+                              <span className="text-sm text-ink-soft">line ends</span>
                               <span className="flex items-center gap-0.5">
                                 <TimeInput label="Last word ends" value={end} onCommit={(t) => retime(line.uid, (l) => setLastWordEnd(l, t), "end")} />
                                 <IconButton label="Line ends at the playhead" className="size-6" onClick={() => retime(line.uid, (l) => setLastWordEnd(l, now), "end")}>
@@ -660,7 +660,7 @@ export function LyricsTiming({
                               </span>
                             </li>
                           </ul>
-                          <p className="m-0 text-xs text-ink-soft">
+                          <p className="m-0 text-sm text-ink-soft">
                             Each word lights up at its start time. Play the song and click <Crosshair className="inline size-3" /> the moment a word is sung, or type a time.
                           </p>
                         </div>
@@ -672,7 +672,7 @@ export function LyricsTiming({
             </ol>
           )}
           {lines && (
-            <p className="m-0 text-[13px] text-ink-soft">
+            <p className="m-0 text-base text-ink-soft">
               Play the song and watch the line above the player. If a line is early or late, nudge it with − / +, type its start and end, or pause where it
               really starts and press <strong>Start here</strong>. With <strong>Move later lines too</strong> on, every line after it moves by the same
               amount, so fixing the first line that&apos;s off usually fixes the rest. Open a line&apos;s word timing to time each word. Missing a line? Pause where it&apos;s sung and

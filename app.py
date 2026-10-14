@@ -35,7 +35,14 @@ def _exit_with_parent(pid: int) -> None:
         if handle:
             kernel32.WaitForSingleObject(handle, INFINITE)
     else:
-        while os.getppid() == pid:
+        # by pid, not getppid(): an engine restarted after the folders change is the old engine's child, not the app's
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                pass  # alive, owned by someone else
             time.sleep(1)
     os._exit(0)
 
@@ -80,6 +87,12 @@ if __name__ == "__main__":
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--parent-pid", type=int)
     args = p.parse_args()
+
+    if sys.platform == "darwin" and not os.getenv("SSL_CERT_FILE"):
+        # python.org's Python on a Mac has no certificates of its own (and the frozen engine never will), so downloads
+        # through urllib (Whisper's models) fail; requests brings certifi, and everything else can use it too
+        import certifi
+        os.environ["SSL_CERT_FILE"] = certifi.where()
 
     from crcontent.config import CODE_DIR, ROOT
     ROOT.mkdir(parents=True, exist_ok=True)  # a chosen data folder can be gone (renamed, an unplugged drive)

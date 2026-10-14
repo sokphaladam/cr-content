@@ -22,7 +22,7 @@ export function TopBar({
       <IconButton label="Open library" onClick={onOpenLibrary} tone="rail">
         <PanelLeft className="size-5" />
       </IconButton>
-      <span className="inline-flex items-center gap-2 font-display text-[17px] font-extrabold tracking-tight">
+      <span className="inline-flex items-center gap-2 font-display text-xl font-extrabold tracking-tight">
         <span aria-hidden className="h-5 w-2.5 rounded-[3px] bg-white shadow-[inset_0_-6px_0_var(--color-caption)]" />
         Shorts Studio
       </span>

@@ -39,4 +39,5 @@ desktop.ini
 src-tauri/target/
 src-tauri/gen/
 src-tauri/engine-dist/
+src-tauri/ffmpeg-dist/
 build/

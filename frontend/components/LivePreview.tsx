@@ -352,23 +352,23 @@ export function LiveControls({ timeline, music }: { timeline: DraftTimeline; mus
           onChange={(e) => timeline.seekTime(Number(e.target.value))}
           className="h-1.5 min-w-0 flex-1 cursor-pointer accent-cobalt"
         />
-        <span className="shrink-0 font-mono text-[11.5px] text-ink-soft tabular-nums">
+        <span className="shrink-0 font-mono text-xs text-ink-soft tabular-nums">
           {clock(now)} / {clock(total)}
         </span>
       </div>
       {error ? (
-        <p role="alert" className="m-0 flex items-center gap-2 text-xs text-danger">
+        <p role="alert" className="m-0 flex items-center gap-2 text-sm text-danger">
           {error}
           <button type="button" className="cursor-pointer bg-transparent p-0 font-semibold text-danger underline" onClick={timeline.retry}>
             Try again
           </button>
         </p>
       ) : loading ? (
-        <p role="status" className="m-0 flex items-center gap-1.5 text-xs text-ink-soft">
+        <p role="status" className="m-0 flex items-center gap-1.5 text-sm text-ink-soft">
           <Spinner className="size-3" /> Making the voiceover…
         </p>
       ) : (
-        <p className="m-0 text-center text-xs text-ink-soft">
+        <p className="m-0 text-center text-sm text-ink-soft">
           {timeline.active ? "Drag the captions, headline or text on the preview to move them." : "Press play to preview the whole video with its voiceover."}
           {music === "" && timeline.active && " Music is picked at random when rendering, so it isn't previewed."}
         </p>
@@ -385,9 +385,9 @@ export function CaptionPanel({ style, onChange, options, lang }: { style: Captio
   const fonts = options.styles?.fonts[lang] ?? [];
   const words = style.words || LANG_CAPTION[lang].words;
   return (
-    <section aria-labelledby="caption-style" className="grid gap-3 rounded-xl border border-line bg-panel p-3.5">
+    <section aria-labelledby="caption-style" className="grid gap-3 card p-3.5">
       <div className="flex items-center justify-between">
-        <h3 id="caption-style" className="m-0 font-display text-[14.5px] font-bold">
+        <h3 id="caption-style" className="m-0 font-display text-md font-bold">
           Captions
         </h3>
         <IconButton label="Put captions and headlines back in place" onClick={() => onChange({ y: DEFAULT_CAPTIONS.y, headline_y: DEFAULT_CAPTIONS.headline_y })}>
@@ -403,8 +403,8 @@ export function CaptionPanel({ style, onChange, options, lang }: { style: Captio
               type="button"
               aria-pressed={style.preset === name}
               onClick={() => onChange({ ...look, font: look.font && fonts.includes(look.font) ? look.font : "", preset: name })}
-              className={`h-7 cursor-pointer rounded-full border px-3 text-[12.5px] font-semibold ${
-                style.preset === name ? "border-ink bg-ink text-white" : "border-line bg-panel text-ink hover:border-cobalt hover:text-cobalt"
+              className={`h-7 cursor-pointer rounded-full border px-3 text-sm font-semibold ${
+                style.preset === name ? "border-ink bg-ink text-on-ink" : "border-line bg-panel text-ink hover:border-cobalt hover:text-cobalt"
               }`}
             >
               {label}
@@ -415,7 +415,7 @@ export function CaptionPanel({ style, onChange, options, lang }: { style: Captio
       <div className="grid grid-cols-2 gap-2">
         <label className="grid gap-1">
           <span className="field-label">Font</span>
-          <select className="field-input h-8 py-0 text-[12.5px]" value={style.font} onChange={(e) => onChange({ font: e.target.value })}>
+          <select className="field-input h-8 py-0 text-sm" value={style.font} onChange={(e) => onChange({ font: e.target.value })}>
             <option value="">Default</option>
             {fonts.map((f) => (
               <option key={f} value={f}>
@@ -426,7 +426,7 @@ export function CaptionPanel({ style, onChange, options, lang }: { style: Captio
         </label>
         <label className="grid gap-1">
           <span className="field-label">Outline</span>
-          <select className="field-input h-8 py-0 text-[12.5px]" value={style.outline} onChange={(e) => onChange({ outline: e.target.value as CaptionStyle["outline"] })}>
+          <select className="field-input h-8 py-0 text-sm" value={style.outline} onChange={(e) => onChange({ outline: e.target.value as CaptionStyle["outline"] })}>
             {Object.entries(OUTLINE_LABELS).map(([v, l]) => (
               <option key={v} value={v}>
                 {l}
@@ -436,7 +436,7 @@ export function CaptionPanel({ style, onChange, options, lang }: { style: Captio
         </label>
         <label className="grid gap-1">
           <span className="field-label">Words at a time</span>
-          <select className="field-input h-8 py-0 text-[12.5px]" value={words} onChange={(e) => onChange({ words: Number(e.target.value) })}>
+          <select className="field-input h-8 py-0 text-sm" value={words} onChange={(e) => onChange({ words: Number(e.target.value) })}>
             {[1, 2, 3, 4, 5].map((n) => (
               <option key={n} value={n}>
                 {n}
@@ -480,7 +480,7 @@ export function CaptionPanel({ style, onChange, options, lang }: { style: Captio
             ["keyword", "Keywords"],
           ] as const
         ).map(([key, label]) => (
-          <label key={key} className="flex items-center gap-1.5 text-[12.5px] font-semibold">
+          <label key={key} className="flex items-center gap-1.5 text-sm font-semibold">
             <input type="color" className="size-7 cursor-pointer rounded border border-line bg-panel p-0.5" value={style[key]} onChange={(e) => onChange({ [key]: e.target.value.toUpperCase() })} />
             {label}
           </label>

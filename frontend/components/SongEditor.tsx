@@ -40,7 +40,7 @@ function SectionCard({
 }) {
   const id = `section-${index}`;
   return (
-    <li className="grid gap-4 rounded-xl border border-line bg-panel p-4 sm:p-5">
+    <li className="grid gap-4 card p-4 sm:p-5">
       <div className="grid items-end gap-4 sm:grid-cols-[minmax(0,1fr)_110px_auto]">
         <Field label="Section" htmlFor={`${id}-name`}>
           <input id={`${id}-name`} className="field-input font-semibold" value={section.name} onChange={(e) => onChange({ ...section, name: e.target.value })} />
@@ -118,10 +118,10 @@ export function SongEditor({
         <IconButton label="Back to start" onClick={onBack}>
           <ChevronLeft className="size-5" />
         </IconButton>
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold" lang={lang}>
+        <span className="min-w-0 flex-1 truncate text-md font-semibold" lang={lang}>
           {song.title || "Untitled song"}
         </span>
-        <span className="text-[13px] text-ink-soft">
+        <span className="text-base text-ink-soft">
           {song.sections.length} sections, {total} s
         </span>
         {onDelete && (
@@ -148,9 +148,9 @@ export function SongEditor({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto grid max-w-[760px] gap-5 px-4 py-6 sm:px-8">
-          <section className="grid gap-4 rounded-xl border border-line bg-panel p-4 sm:p-5">
+          <section className="grid gap-4 card p-4 sm:p-5">
             <Field label="Title" htmlFor="song-title">
-              <input id="song-title" lang={lang} className="field-input text-lg font-semibold" value={song.title} onChange={(e) => set({ title: e.target.value })} />
+              <input id="song-title" lang={lang} className="field-input text-xl font-semibold" value={song.title} onChange={(e) => set({ title: e.target.value })} />
             </Field>
             <div className="grid gap-4 sm:grid-cols-[1fr_1fr_100px]">
               <Field label="Genre" htmlFor="song-genre">
@@ -199,8 +199,8 @@ export function SongEditor({
             Add section
           </Button>
 
-          <section className="grid gap-3 rounded-xl border border-line bg-panel p-4 sm:p-5">
-            <label className="flex items-center gap-2 text-sm">
+          <section className="grid gap-3 card p-4 sm:p-5">
+            <label className="flex items-center gap-2 text-md">
               <input type="checkbox" checked={stems} onChange={(e) => setStems(e.target.checked)} className="size-4 accent-cobalt" />
               Also split vocals and instrumental (uses extra ElevenLabs credits)
             </label>
@@ -218,7 +218,7 @@ export function SongEditor({
               >
                 {composing ? "Composing…" : "Compose song"}
               </Button>
-              <span className="text-[13px] text-ink-soft">Takes about 30 seconds to 2 minutes.</span>
+              <span className="text-base text-ink-soft">Takes about 30 seconds to 2 minutes.</span>
             </div>
             <Message
               text={error || (keyMissing ? "ElevenLabs isn't connected. Add ELEVENLABS_API_KEY to .env and restart the engine." : "")}
