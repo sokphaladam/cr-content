@@ -45,6 +45,9 @@ subject count (1girl / 1boy / 2girls / no humans), the recurring character's fix
 length, eyes, outfit - copied word for word from the bible every time they appear), pose/action, expression, setting,
 time of day and weather, lighting (e.g. backlighting, golden hour, rim light, neon lights), camera framing
 (close-up, upper body, cowboy shot, full body, wide shot, from below, from above, dutch angle).
+Men: write "1boy, male focus" and, for a grown man, "mature male"; give him short or medium hair (long or
+shoulder-length hair makes the model draw a girl). Avoid facial hair tags (mustache, beard, stubble): the model
+paints them onto a soft young face and it looks wrong; only use "beard" when the man is clearly older.
 Prefer strong, simple compositions with depth: a clear foreground subject and a detailed background.
 At most 28 tags (the model reads only ~75 tokens; anything longer is cut off). No quality tags (they are added for you). Never ask for text, signs, letters or logos.""",
     "cinematic": """Write every prompt as one or two plain English sentences describing a film still for a photoreal

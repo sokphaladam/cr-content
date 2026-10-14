@@ -347,16 +347,44 @@ def base_size(size: tuple[int, int]) -> tuple[int, int]:
     return 1024, 1024
 
 
+_MALE = {"1boy", "2boys", "3boys", "multiple boys", "male focus", "mature male", "old man"}
+_FEMALE = {"1girl", "2girls", "3girls", "multiple girls", "female focus", "mature female", "old woman"}
+
+
+def _sexes(prompt: str) -> tuple[bool, bool]:
+    tags = {t.strip().lower() for t in prompt.split(",")}
+    return bool(tags & _MALE), bool(tags & _FEMALE)
+
+
 def full_prompt(prompt: str, style: str) -> str:
     spec = STYLES[style]
-    return f"{spec['prefix']}{prompt.strip().rstrip(',')}{spec['suffix']}"
+    prompt = prompt.strip().rstrip(",")
+    male, female = _sexes(prompt)
+    if style == "anime" and male and not female and "male focus" not in prompt.lower():
+        # without it Animagine draws "1boy" with long or messy hair as a girl (and pastes any beard onto her)
+        head, _, rest = prompt.partition(",")
+        prompt = f"{head}, male focus,{rest}" if rest else f"{head}, male focus"
+    return f"{spec['prefix']}{prompt}{spec['suffix']}"
+
+
+def _sex_negative(prompt: str, style: str) -> str:
+    """Keep an anime man from turning into a girl, and keep beards off women."""
+    if style != "anime":
+        return ""
+    male, female = _sexes(prompt)
+    if male and not female:
+        return "1girl, female, breasts, feminine, makeup, lipstick"
+    if female and not male:
+        return "facial hair, mustache, beard, stubble"
+    return ""
 
 
 def cache_file(prompt: str, style: str, size: tuple[int, int], seed: int, hires: bool = True, negative: str = "") -> Path:
     """Where generate() keeps this picture (it may not be drawn yet)."""
     w, h = base_size(size)
     # the full prompt and hi-res scale are part of the key, so changing a look's wording draws new pictures
-    key = hashlib.sha1(f"{style}\n{w}x{h}\n{seed}\n{hires}{HIRES_SCALE}\n{negative}\n{full_prompt(prompt.strip(), style)}"
+    key = hashlib.sha1(f"{style}\n{w}x{h}\n{seed}\n{hires}{HIRES_SCALE}\n{negative}{_sex_negative(prompt, style)}\n"
+                       f"{full_prompt(prompt.strip(), style)}"
                        .encode()).hexdigest()[:16]
     return GEN_CACHE / f"{style}-{key}.png"
 
@@ -393,7 +421,7 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
 
         spec = STYLES[style]
         pipe = _load(style, log)
-        neg = ", ".join(x for x in (spec["negative"], negative) if x)
+        neg = ", ".join(x for x in (spec["negative"], _sex_negative(prompt, style), negative) if x)
         generator = torch.Generator("cuda").manual_seed(seed)
         image = pipe(prompt=full_prompt(prompt, style), negative_prompt=neg, width=w, height=h,
                      num_inference_steps=spec["steps"], guidance_scale=spec["cfg"], generator=generator).images[0]
