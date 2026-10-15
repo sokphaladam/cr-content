@@ -158,11 +158,12 @@ function SongCard({
 
 /** 9:16 phone frame (or a 16:9 screen for landscape music videos); children are positioned inside the screen.
  * Uses container units so overlays scale with it. */
-function Phone({ children, landscape = false }: { children: React.ReactNode; landscape?: boolean }) {
+function Phone({ children, landscape = false, fit = false }: { children: React.ReactNode; landscape?: boolean; fit?: boolean }) {
+  // fit: as wide as its parent allows (the editor's stage sizes the parent to the space it has)
   return (
     <div
       className={`mx-auto w-full shrink-0 bg-media shadow-[0_24px_48px_-24px_rgb(24_32_46/0.55)] ${
-        landscape ? "aspect-video rounded-xl p-1.5" : "aspect-[9/16] max-w-[300px] rounded-[32px] p-2"
+        landscape ? "aspect-video rounded-xl p-1.5" : `aspect-[9/16] rounded-[32px] p-2 ${fit ? "" : "max-w-[300px]"}`
       }`}
     >
       <div className={`@container relative h-full w-full overflow-hidden bg-[#222b3b] text-white ${landscape ? "rounded-lg" : "rounded-[25px]"}`}>{children}</div>
@@ -339,11 +340,23 @@ function PostCard({ detail, onDelete }: { detail: VideoDetail; onDelete: (name: 
 ${o.description}
 `);
 
+  // post.txt is the title line, then the description: kept apart here, so the description you paste into YouTube or
+  // TikTok doesn't open by repeating the title (uploads from the app already send them separately)
+  const [postTitle, ...rest] = post.split("\n");
+  const description = rest.join("\n").trim();
+
   return (
     <section aria-label="Post text" className="mx-auto w-full max-w-[300px] card">
-      <pre lang={detail.lang} className="m-0 max-h-[160px] overflow-auto p-3.5 font-sans text-base leading-relaxed whitespace-pre-wrap">
-        {post || "No caption saved for this video."}
-      </pre>
+      {post ? (
+        <div className="grid max-h-[200px] gap-1.5 overflow-auto p-3.5">
+          <span className="text-2xs font-semibold tracking-wide text-ink-soft uppercase">Title</span>
+          <p lang={detail.lang} className="m-0 font-display text-md leading-snug font-bold">{postTitle}</p>
+          <span className="mt-1 text-2xs font-semibold tracking-wide text-ink-soft uppercase">Description</span>
+          <p lang={detail.lang} className="m-0 text-base leading-relaxed whitespace-pre-wrap">{description}</p>
+        </div>
+      ) : (
+        <p className="m-0 p-3.5 text-base text-ink-soft">No caption saved for this video.</p>
+      )}
       <div className="grid gap-2 border-t border-line p-3.5">
         <label className="field-label" htmlFor={`post-idea-${detail.name}`}>
           Title direction <span className="font-normal">optional</span>
@@ -408,12 +421,25 @@ ${o.description}
           size="sm"
           variant="ghost"
           icon={<Copy className="size-3.5" />}
+          disabled={!post}
           onClick={async () => {
-            await navigator.clipboard.writeText(post);
-            toast("Caption and hashtags copied", "success");
+            await navigator.clipboard.writeText(postTitle);
+            toast("Title copied", "success");
           }}
         >
-          Copy
+          Title
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<Copy className="size-3.5" />}
+          disabled={!post}
+          onClick={async () => {
+            await navigator.clipboard.writeText(description);
+            toast("Description and hashtags copied", "success");
+          }}
+        >
+          Description
         </Button>
         {detail.video && (
           <a className={buttonClass("ghost", "sm")} href={`${API_BASE}/api/videos/${encodeURIComponent(detail.name)}/download`}>
@@ -699,6 +725,23 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
 
 export type PreviewView = "scene" | "video";
 
+/** The finished video's covers, post text, fact check and publishing (the editor's Export panel). */
+export function ExportCards({ detail, onThumbnail, onDeleteVideo, onOpenSettings }: {
+  detail: VideoDetail;
+  onThumbnail: (summary: VideoSummary) => void;
+  onDeleteVideo: (name: string) => void;
+  onOpenSettings: () => void;
+}) {
+  return (
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-4">
+      <ThumbnailCard key={`thumb-${detail.name}`} detail={detail} onChange={onThumbnail} />
+      <PostCard key={`post-${detail.name}`} detail={detail} onDelete={onDeleteVideo} />
+      <FactsCard key={`facts-${detail.name}`} detail={detail} />
+      <PublishCard key={`publish-${detail.name}`} detail={detail} onOpenSettings={onOpenSettings} />
+    </div>
+  );
+}
+
 export function PreviewPane({
   live,
   scene,
@@ -717,7 +760,9 @@ export function PreviewPane({
   onOpenTiming,
   onSelectVideo,
   onOpenSettings,
+  variant = "full",
 }: {
+  variant?: "full" | "stage"; // stage: only the player, filling the space it gets (the editor's centre)
   live: { timeline: DraftTimeline; music: string; edit: FrameEdits; options: Options | null } | null; // the open draft
   scene: Scene | null;
   sceneIndex: number;
@@ -741,53 +786,83 @@ export function PreviewPane({
   const showVideo = !showProgress && !!detail?.video && (view === "video" || !scene);
   const isSong = !showProgress && !scene && detail?.kind === "song" && detail.audio;
   const showSong = isSong && !showVideo;
+  const landscape = !showProgress && !scene && detail?.aspect === "16:9";
+  const title = showProgress
+    ? job?.kind === "song" ? "Composing" : job?.kind === "lyrics_sync" ? "Syncing lyrics" : "Rendering"
+    : showVideo ? (detail?.kind === "music_video" ? "Music video" : "Video") : showSong ? "Song" : "Preview";
+  const toggle = canToggle && (
+    <Segmented
+      size="sm"
+      name="preview-view"
+      value={view}
+      onChange={onView}
+      options={[
+        { value: "scene", label: "Edit" },
+        { value: "video", label: "Rendered" },
+      ]}
+    />
+  );
+  const screen = showProgress ? (
+    <Progress job={job} title={job?.kind === "excel" ? job.title : jobTitle} />
+  ) : showVideo && detail ? (
+    <video
+      key={detail.name}
+      src={`${outputUrl(detail.name, "video.mp4")}?v=${encodeURIComponent(detail.created)}`}
+      controls
+      playsInline
+      className="block h-full w-full bg-black object-cover"
+    />
+  ) : showSong && detail ? (
+    <SongPlayer detail={detail} />
+  ) : scene && live?.timeline.active ? (
+    <LiveFrame timeline={live.timeline} lang={lang} edit={live.edit} />
+  ) : scene ? (
+    <ScenePreview scene={scene} index={sceneIndex} total={sceneCount} lang={lang} />
+  ) : (
+    <div className="grid h-full place-items-center p-7 text-center">
+      <p className="m-0 font-display text-2xl leading-tight font-extrabold">
+        <mark>Your video</mark> shows up here
+      </p>
+    </div>
+  );
+
+  if (variant === "stage") {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex h-11 shrink-0 items-center justify-between gap-2 px-4">
+          <span className="text-sm font-semibold tracking-wide text-ink-soft uppercase">{title}</span>
+          {toggle}
+        </div>
+        {/* a size container: the frame takes the most room its shape fits in */}
+        <div className="min-h-0 flex-1 px-4 [container-type:size]">
+          <div className="grid h-full place-items-center">
+            <div style={{ width: landscape ? "min(100cqw, calc(100cqh * 16 / 9))" : "min(100cqw, calc(100cqh * 9 / 16))" }}>
+              <Phone landscape={landscape} fit>
+                {screen}
+              </Phone>
+            </div>
+          </div>
+        </div>
+        <div className="mx-auto w-full max-w-[560px] shrink-0 px-4 pt-3 pb-3">
+          {!showProgress && !showVideo && scene && live ? (
+            <LiveControls timeline={live.timeline} music={live.music} />
+          ) : (
+            showVideo && <p className="m-0 text-center text-sm text-ink-soft">The rendered video. Switch to Edit to keep changing the draft, then render again.</p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="grid content-start">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start">
       <div className="pane-header sticky top-0 z-10 px-5">
-        <h2 className="pane-title m-0">
-          {showProgress ? (job?.kind === "song" ? "Composing" : job?.kind === "lyrics_sync" ? "Syncing lyrics" : "Rendering") : showVideo ? (detail?.kind === "music_video" ? "Music video" : "Video") : showSong ? "Song" : "Preview"}
-        </h2>
-        {canToggle && (
-          <Segmented
-            size="sm"
-            name="preview-view"
-            value={view}
-            onChange={onView}
-            options={[
-              { value: "scene", label: "Scene" },
-              { value: "video", label: "Video" },
-            ]}
-          />
-        )}
+        <h2 className="pane-title m-0">{title}</h2>
+        {toggle}
       </div>
 
-      <div className="grid content-start gap-4 p-5">
-        <Phone landscape={!showProgress && !scene && detail?.aspect === "16:9"}>
-          {showProgress ? (
-            <Progress job={job} title={job?.kind === "excel" ? job.title : jobTitle} />
-          ) : showVideo && detail ? (
-            <video
-              key={detail.name}
-              src={`${outputUrl(detail.name, "video.mp4")}?v=${encodeURIComponent(detail.created)}`}
-              controls
-              playsInline
-              className="block h-full w-full bg-black object-cover"
-            />
-          ) : showSong && detail ? (
-            <SongPlayer detail={detail} />
-          ) : scene && live?.timeline.active ? (
-            <LiveFrame timeline={live.timeline} lang={lang} edit={live.edit} />
-          ) : scene ? (
-            <ScenePreview scene={scene} index={sceneIndex} total={sceneCount} lang={lang} />
-          ) : (
-            <div className="grid h-full place-items-center p-7 text-center">
-              <p className="m-0 font-display text-2xl leading-tight font-extrabold">
-                <mark>Your video</mark> shows up here
-              </p>
-            </div>
-          )}
-        </Phone>
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-4 p-5">
+        <Phone landscape={landscape}>{screen}</Phone>
 
         {!showProgress && !showVideo && scene && live && <LiveControls timeline={live.timeline} music={live.music} />}
         {!showProgress && !showVideo && scene && live?.options && (

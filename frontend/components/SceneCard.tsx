@@ -2,7 +2,7 @@
 
 import { ArrowDown, ArrowUp, Clapperboard, Film, ImageIcon, Palette, Pause, Play, Search, Sparkles, Trash2, Type, Upload, X } from "lucide-react";
 import { useId, useRef, useState } from "react";
-import { api, fileUrl, type ArtStatus, type ArtStyle, type BRoll, type Lang, type Scene, type StockResult, type TextOverlay } from "@/lib/api";
+import { api, fileUrl, type ArtStatus, type ArtStyle, type ArtSubject, type BRoll, type Lang, type Scene, type StockResult, type TextOverlay } from "@/lib/api";
 import { isImagePath } from "@/lib/format";
 import { ScenePicture } from "./ArtControls";
 import { Button, Chip, IconButton, Segmented, Spinner } from "./ui";
@@ -293,6 +293,8 @@ export function SceneCard({
   onListen,
   artStyle = "",
   artStatus = null,
+  artSubject,
+  usedMedia,
 }: {
   scene: DraftScene;
   index: number;
@@ -306,6 +308,8 @@ export function SceneCard({
   onRemove: () => void;
   onListen: () => void;
   artStyle?: ArtStyle | ""; // the draft draws its scenes in this look ("" = stock footage)
+  artSubject?: ArtSubject; // the video's real subject, checked in every picture that shows it
+  usedMedia?: string[]; // what the other scenes show
   artStatus?: ArtStatus | null;
 }) {
   const [pickFor, setPickFor] = useState<PickTarget | null>(null);
@@ -374,7 +378,7 @@ export function SceneCard({
     <li
       onFocusCapture={onActivate}
       onPointerDown={onActivate}
-      className={`group grid grid-cols-[64px_minmax(0,1fr)] gap-x-4 gap-y-3 rounded-xl border bg-panel p-4 transition-shadow sm:grid-cols-[76px_minmax(0,1fr)] ${
+      className={`@container group grid grid-cols-[64px_minmax(0,1fr)] gap-x-3 gap-y-3 rounded-xl border bg-panel p-3 transition-shadow ${
         active ? "border-cobalt/60 ring-3 ring-cobalt/15" : "border-line hover:border-line-strong"
       }`}
     >
@@ -388,7 +392,7 @@ export function SceneCard({
         )}
       </div>
 
-      <div className="grid min-w-0 content-start gap-3">
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="font-display text-lg font-extrabold text-ink">Scene {index + 1}</span>
@@ -422,7 +426,7 @@ export function SceneCard({
           />
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 @sm:grid-cols-2">
           <div className="grid gap-1.5">
             <label className="field-label" htmlFor={`headline-${scene.uid}`}>
               Headline <span className="font-normal text-ink-soft/80">optional</span>
@@ -438,7 +442,7 @@ export function SceneCard({
         </div>
 
         {artStyle && (!scene.media || scene.media.startsWith("cache/gen/")) && (
-          <ScenePicture scene={scene} style={artStyle} status={artStatus} onChange={onChange} />
+          <ScenePicture scene={scene} style={artStyle} status={artStatus} subject={artSubject} used={usedMedia} onChange={onChange} />
         )}
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">

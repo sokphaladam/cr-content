@@ -1,6 +1,7 @@
 """Background media: stock videos/photos (Pexels or Pixabay), user uploads, local footage, or gradient fallback."""
 import os
 import random
+import subprocess
 from pathlib import Path
 
 import requests
@@ -151,6 +152,9 @@ def download_stock(source: str, kind: str, item_id: int, orientation: str = "por
     raise ValueError(f"No API key configured for {source or 'stock footage'}.")
 
 
+HOOK_TRIES = 4  # stock results compared for a video's opening shot
+
+
 class FootagePicker:
     """Finds one clip per scene automatically and avoids repeating a clip within a video."""
 
@@ -160,11 +164,13 @@ class FootagePicker:
         self.used: set[str] = set()
         self.local = sorted(LOCAL_FOOTAGE.glob("*.mp4")) if LOCAL_FOOTAGE.exists() else []
 
-    def pick(self, query: str) -> Path | None:
-        """Return a local media path, or None to signal the gradient fallback."""
+    def pick(self, query: str, hook: bool = False) -> Path | None:
+        """Return a local media path, or None to signal the gradient fallback. `hook`: this is the video's first
+        scene, the frame people see in the feed: of the top few results, take the one with the brightest, most
+        moving opening instead of simply the first."""
         if self.source:
             try:
-                clip = self._stock(query) or self._stock(query.split()[0])
+                clip = self._stock(query, hook) or self._stock(query.split()[0], hook)
                 if clip:
                     return clip
             except (requests.RequestException, ValueError, KeyError) as e:
@@ -176,14 +182,30 @@ class FootagePicker:
             return clip
         return None
 
-    def _stock(self, query: str) -> Path | None:
-        for item in search(query, "video", per_page=10, orientation=self.orientation):
-            key = f"{item['source']}-{item['id']}"
-            if key in self.used:
+    def _stock(self, query: str, hook: bool = False) -> Path | None:
+        fresh = [(f"{item['source']}-{item['id']}", item)
+                 for item in search(query, "video", per_page=10, orientation=self.orientation)]
+        fresh = [(key, item) for key, item in fresh if key not in self.used]
+        if not hook:
+            for key, item in fresh[:1]:
+                self.used.add(key)
+                return download_stock(item["source"], "video", item["id"], self.orientation)
+            return None
+        from .thumbs import opening_score
+
+        best: tuple[float, str, Path] | None = None
+        for key, item in fresh[:HOOK_TRIES]:
+            try:
+                path = download_stock(item["source"], "video", item["id"], self.orientation)
+                score = opening_score(path)
+            except (requests.RequestException, ValueError, OSError, subprocess.CalledProcessError):
                 continue
-            self.used.add(key)
-            return download_stock(item["source"], "video", item["id"], self.orientation)
-        return None
+            if best is None or score > best[0]:
+                best = (score, key, path)
+        if best is None:
+            return None
+        self.used.add(best[1])
+        return best[2]
 
 
 def project_path(path: Path) -> str:

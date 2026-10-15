@@ -132,7 +132,10 @@ export function useDraftTimeline(scenes: DraftScene[] | null, voice: string, rat
     const timer = window.setTimeout(async () => {
       setFindingFootage(true);
       try {
-        const { media } = await api.autoFootage(todo.map((s) => s.query));
+        const { media } = await api.autoFootage(
+          todo.map((s) => s.query),
+          !!kept[0] && todo[0]?.key === kept[0].uid, // the opening scene's own clip, picked like the render does
+        );
         setAuto({ key: autoKey, media: Object.fromEntries(todo.map((s, k) => [s.key, media[k] ?? null])) });
       } catch {
         setAuto({ key: autoKey, media: {} }); // the preview falls back to the gradient; the render still picks

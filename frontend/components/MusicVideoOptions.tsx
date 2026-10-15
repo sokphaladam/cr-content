@@ -21,7 +21,7 @@ import { Button, Segmented } from "./ui";
 
 // The catalog (presets, looks, installed fonts) is the same for every song: fetch it once per page load.
 let catalogPromise: Promise<StyleCatalog | null> | null = null;
-function useStyleCatalog() {
+export function useStyleCatalog() {
   const [catalog, setCatalog] = useState<StyleCatalog | null>(null);
   useEffect(() => {
     catalogPromise ??= api
@@ -41,19 +41,19 @@ function useStyleCatalog() {
 }
 
 /** A preset as a full style: the font is left to the engine, which picks the preset's font for the language. */
-function fromPreset(catalog: StyleCatalog, key: LyricPreset): LyricStyle {
+export function fromPreset(catalog: StyleCatalog, key: LyricPreset): LyricStyle {
   const { preset, size, position, color, highlight, effect, outline, case: textCase } = catalog.presets[key];
   return { preset: preset ?? key, font: "", size, position, color, highlight, effect, outline, case: textCase };
 }
 
 /** The font the engine will use for this style and language. */
-function fontFor(catalog: StyleCatalog, style: LyricStyle, lang: Lang) {
+export function fontFor(catalog: StyleCatalog, style: LyricStyle, lang: Lang) {
   const p = catalog.presets[style.preset] ?? catalog.presets.classic;
   return style.font || (lang === "km" ? p.font_km : p.font);
 }
 
 // CSS stand-ins for the colour grades in crcontent/styles.py LOOKS, applied to the swatches and the preview
-const LOOK_CSS: Record<Look, string> = {
+export const LOOK_CSS: Record<Look, string> = {
   natural: "brightness(0.96) saturate(1.08)",
   cinematic: "contrast(1.1) saturate(1.05) brightness(0.92) hue-rotate(-8deg)",
   film: "sepia(0.25) contrast(1.05) saturate(0.9)",
@@ -62,9 +62,9 @@ const LOOK_CSS: Record<Look, string> = {
   dusk: "sepia(0.2) hue-rotate(-18deg) saturate(1.45) contrast(1.06)",
   mono: "grayscale(1) contrast(1.15)",
 };
-const SCENE_BG = "linear-gradient(180deg,#f2a65a 0%,#c9576b 38%,#3b4a8c 70%,#0f1a33 100%)";
+export const SCENE_BG = "linear-gradient(180deg,#f2a65a 0%,#c9576b 38%,#3b4a8c 70%,#0f1a33 100%)";
 
-const SIZE_PX = { s: 0.8, m: 1, l: 1.25 };
+export const SIZE_PX = { s: 0.8, m: 1, l: 1.25 };
 
 // crcontent/pipeline.py PICTURE_PACES; minutes are for a 3-minute song at ~40 s a picture
 const PACES: Record<PicturePace, { label: string; hint: string }> = {
@@ -73,7 +73,7 @@ const PACES: Record<PicturePace, { label: string; hint: string }> = {
   more: { label: "More", hint: "A new picture every ~3 s: about 50 pictures for a 3-minute song (~35 min to draw). For fast, high-energy songs." },
 };
 
-function textCss(style: LyricStyle, font: string, sung: boolean): React.CSSProperties {
+export function textCss(style: LyricStyle, font: string, sung: boolean): React.CSSProperties {
   const color = sung ? style.highlight : style.color;
   const css: React.CSSProperties = { fontFamily: `"${font}", Arial, sans-serif`, color, fontWeight: 700 };
   if (style.outline === "outline") css.textShadow = "0 0 2px #000, 0 0 2px #000, 0 0 3px #000, 1px 2px 2px rgb(0 0 0 / 0.6)";

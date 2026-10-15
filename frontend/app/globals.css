@@ -226,3 +226,13 @@
     scale: 1;
   }
 }
+
+/* the lyric editor's monitor: a slow push-in on each picture, like the render's camera drift */
+@keyframes monitor-drift {
+  from {
+    scale: 1;
+  }
+  to {
+    scale: 1.1;
+  }
+}

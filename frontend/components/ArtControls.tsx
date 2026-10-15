@@ -1,8 +1,8 @@
 "use client";
 
-import { Download, Dices, Paintbrush, Sparkles } from "lucide-react";
+import { Camera, Download, Dices, Paintbrush, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
-import { api, ART_STYLES, MOOD_EFFECTS, type ArtStatus, type ArtStyle, type Aspect, type Effect, type Motion, type Scene } from "@/lib/api";
+import { api, ART_STYLES, MOOD_EFFECTS, type ArtStatus, type ArtStyle, type ArtSubject, type Aspect, type Effect, type Motion, type Scene } from "@/lib/api";
 import { Button, Segmented } from "./ui";
 
 /** Local AI art status (GPU, downloaded looks); live from the engine's event stream while a model downloads. */
@@ -164,19 +164,47 @@ export function ScenePicture({
   style,
   status,
   aspect = "9:16",
+  subject,
+  used = [],
   onChange,
 }: {
   scene: Scene & { uid: string };
   style: ArtStyle;
+  subject?: ArtSubject; // the video's real subject: a picture showing it is checked, and drawn again when wrong
+  used?: string[]; // media the video's other scenes use (so a real photo isn't repeated)
   status: ArtStatus | null;
   aspect?: Aspect;
   onChange: (patch: Partial<Scene>) => void;
 }) {
   const [drawing, setDrawing] = useState(false);
+  const [wrong, setWrong] = useState(false); // the last take still didn't show the real subject
+  const [finding, setFinding] = useState(false);
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: "" });
   const blocker = artBlocker(status, style);
   const effects = scene.effects ?? [];
   const drawn = scene.media.startsWith("cache/gen/");
+
+  // a picture drawn earlier: check it shows the real subject (once per picture; the engine keeps the verdict), so a
+  // wrong animal is flagged here instead of only in the finished video
+  const media = scene.media;
+  const prompt = (scene.art_prompt || scene.visual_query).trim();
+  const subjectText = subject?.subject.trim() ?? "";
+  useEffect(() => {
+    if (!drawn || !subjectText || !prompt) return;
+    let alive = true;
+    api
+      .artCheck(media, subjectText, prompt)
+      .then((r) => {
+        if (!alive || r.score === null) return;
+        const bad = r.score < 8;
+        setWrong(bad);
+        if (bad) setMessage({ text: `This picture doesn't look like a ${subjectText.split(":")[0].trim()} (${r.score}/10): ${r.problem}`, error: true });
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [drawn, media, subjectText, prompt]);
 
   async function draw(newTake: boolean) {
     const prompt = (scene.art_prompt || scene.visual_query).trim();
@@ -185,9 +213,14 @@ export function ScenePicture({
     setMessage({ text: "Drawing… about 30 seconds (longer the first time, while the model loads)." });
     try {
       const seed = newTake ? Math.floor(Math.random() * 2 ** 31) : scene.art_seed || undefined;
-      const m = await api.artDraw({ prompt, style, seed, aspect });
+      const m = await api.artDraw({ prompt, style, seed, aspect, ...subject });
       onChange({ media: m.media, media_start: 0, art_seed: m.seed, art_prompt: prompt });
-      setMessage({ text: "" });
+      setWrong(m.score !== null && m.score < 8);
+      setMessage(
+        m.score !== null && m.score < 8
+          ? { text: `Still not quite right after 3 takes (${m.score}/10): ${m.problem} Use a real photo instead, or edit the prompt.`, error: true }
+          : { text: "" },
+      );
     } catch (e) {
       setMessage({ text: (e as Error).message, error: true });
     } finally {
@@ -196,7 +229,7 @@ export function ScenePicture({
   }
 
   return (
-    <div className="grid gap-2 rounded-lg border border-line/70 bg-sunken p-2.5">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 rounded-lg border border-line/70 bg-sunken p-2.5">
       <div className="flex items-center justify-between gap-2">
         <label className="field-label" htmlFor={`art-${scene.uid}`}>
           Picture
@@ -254,6 +287,33 @@ export function ScenePicture({
         <p role={message.error ? "alert" : "status"} className={`m-0 text-sm ${message.error ? "text-danger" : "text-ink-soft"}`}>
           {message.text || blocker}
         </p>
+      )}
+      {wrong && subject?.subject && (
+        <Button
+          size="sm"
+          variant="secondary"
+          className="justify-self-start"
+          icon={<Camera className="size-3.5" />}
+          loading={finding}
+          title="A real clip or photo of the subject (stock, else Wikimedia Commons), checked to really show it; its credit goes into the description"
+          onClick={async () => {
+            setFinding(true);
+            try {
+              const m = await api.artReal(subject.subject, used);
+              onChange({ media: m.media, media_start: 0 });
+              setWrong(false);
+              setMessage({ text: m.credit ? `Real photo in. ${m.credit} (added to the description).` : "Real footage in." });
+            } catch (e) {
+              setMessage({ text: (e as Error).message, error: true });
+            } finally {
+              setFinding(false);
+            }
+          }}
+        >
+          <span className="truncate" title={`Use a real photo of the ${subject.subject.split(":")[0].trim()}`}>
+            Use a real photo
+          </span>
+        </Button>
       )}
     </div>
   );

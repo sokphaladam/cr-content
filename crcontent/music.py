@@ -28,6 +28,32 @@ def tracks() -> list[str]:
     return sorted(p.name for p in MUSIC_DIR.glob("*.mp3")) if MUSIC_DIR.exists() else []
 
 
+def licence_use(url: str) -> str:
+    """What a Creative Commons licence (its URL) lets you do with music in a video you may earn from:
+    "ok" (CC0, CC BY, CC BY-SA; public domain), "nc" (non-commercial: not for monetized videos), "nd" (no
+    derivatives: Creative Commons counts putting music to video as an adaptation, so it can't be used in one at all),
+    or "unknown"."""
+    u = (url or "").lower()
+    if not u:
+        return "unknown"
+    if "-nc" in u or "/nc" in u:
+        return "nc"
+    if "-nd" in u or "/nd" in u:
+        return "nd"
+    if "creativecommons.org" in u or "publicdomain" in u:
+        return "ok"
+    return "unknown"
+
+
+def track_use(track: Path | str) -> str:
+    """licence_use() of a library track, from the licence saved next to it ("unknown" without one)."""
+    meta = MUSIC_DIR / f"{Path(track).stem}.json"
+    try:
+        return licence_use(json.loads(meta.read_text(encoding="utf-8")).get("license", ""))
+    except (OSError, ValueError):
+        return "unknown"
+
+
 def credit(track: Path | str | None) -> str:
     """The credit line a track needs in the video's description ("" when it needs none or isn't known)."""
     if not track:
@@ -89,6 +115,7 @@ def search(query: str, limit: int = 20) -> list[dict]:
         "license": t.get("license_ccurl", ""),
         # NC licences don't allow commercial use (a monetized channel may count)
         "commercial": "-nc" not in t.get("license_ccurl", "").lower(),
+        "use": licence_use(t.get("license_ccurl", "")),  # "ok" = fine in a monetized video (see licence_use)
         "tags": ((t.get("musicinfo") or {}).get("tags") or {}).get("vartags", [])[:4],
     } for t in results]
 
@@ -143,7 +170,7 @@ def for_mood(mood: str) -> str:
     if not jamendo_key() or not mood.strip():
         return ""
     try:
-        found = search(mood, limit=5)
+        found = [t for t in search(mood, limit=10) if t["use"] == "ok"]  # only what a monetized video may use
         return download(found[0]["id"]) if found else ""
     except MusicError:
         return ""

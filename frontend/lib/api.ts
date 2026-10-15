@@ -1,5 +1,7 @@
 // Typed client for the Python engine (crcontent/web.py). The browser calls it directly.
 
+import type { MusicUse } from "./musicLicence";
+
 declare global {
   interface Window {
     /** Set by the desktop app (src-tauri), which starts the engine on a free port. */
@@ -10,6 +12,7 @@ declare global {
 }
 
 const desktopEngine = typeof window !== "undefined" ? window.__ENGINE_URL__ : undefined;
+
 export const API_BASE = (desktopEngine ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
 
 export type Lang = "en" | "km";
@@ -141,6 +144,7 @@ export interface VoiceWord {
   start: number;
   end: number;
   at: [number, number] | null;
+  caption?: string; // the word as captions show it: with the narration's emoji that follow it
 }
 
 export interface SceneVoice {
@@ -167,6 +171,14 @@ export interface VideoScript {
   pinned_comment?: string; // to paste under the video and pin
   art_style?: ArtStyle | ""; // "" = stock footage; else every scene without chosen media is drawn in this look
   art_bible?: string; // the director's notes (characters, world, palette) that keep the pictures consistent
+  art_subject?: string; // the real subject every picture must get right ("name: visible features"), checked by Claude
+  art_avoid?: string; // what the image model must not draw instead (look-alikes)
+}
+
+/** A video's real subject, for drawing its pictures (each one showing it is checked and redrawn when wrong). */
+export interface ArtSubject {
+  subject: string;
+  avoid: string;
 }
 
 /** A comment to pin under the video from fact-check notes (same as crcontent/facts.py pinned_comment()). */
@@ -294,6 +306,7 @@ export interface VideoIdeaSuggestion {
 export interface Options {
   langs: Record<Lang, { name: string; voices: string[] }>;
   music: string[];
+  music_use?: Record<string, MusicUse>; // each track's licence for monetized videos (missing on an older engine)
   keys: { anthropic: boolean; stock: "" | "pexels" | "pixabay"; elevenlabs: boolean; jamendo?: boolean };
   styles?: StyleCatalog; // missing on an older engine
   captions?: { presets: Record<string, Partial<CaptionStyle> & { label: string }> };
@@ -403,6 +416,7 @@ export interface MusicResult {
   image: string;
   license: string;
   commercial: boolean; // false: the licence is non-commercial only
+  use?: MusicUse; // what the licence allows in a monetized video (missing on an older engine)
   tags: string[];
 }
 /** Whether each service key is set; `hint` shows only its last 4 characters. */
@@ -740,6 +754,12 @@ async function request<T>(path: string, init: RequestInit & { json?: unknown; ti
 /** URL for a project-relative file (uploads/..., cache/...) or an output folder file. */
 export const fileUrl = (projectPath: string) =>
   `${API_BASE}/${projectPath.split("/").map(encodeURIComponent).join("/")}`;
+export interface TopicIdea {
+  format: string; // the hook style: "rank these", "myth vs fact", ...
+  topic: string; // the angle, for the script writer
+  hook: string; // the opening line, payoff first
+}
+
 export const outputUrl = (folder: string, file: string) =>
   `${API_BASE}/media/${encodeURIComponent(folder)}/${file}`;
 
@@ -747,6 +767,9 @@ export const api = {
   options: () => request<Options>("/api/options"),
   writeScript: (body: { topic: string; lang: Lang; scenes: number; seconds: number; style: string }) =>
     request<VideoScript>("/api/script", { method: "POST", json: body, timeout: 0 }),
+  /** Ideas for the next Shorts in a mix of hook formats, none a near-repeat of the library's recent titles. */
+  topicIdeas: (niche: string, lang: Lang) =>
+    request<{ topics: TopicIdea[] }>("/api/topic-ideas", { method: "POST", json: { niche, lang }, timeout: 0 }),
   importScript: (text: string) =>
     request<{ script: VideoScript; lang: Lang; method: "claude" | "basic" }>("/api/import", { method: "POST", json: { text, lang: "auto" }, timeout: 0 }),
   translate: (script: VideoScript, target: Lang) =>
@@ -891,8 +914,23 @@ export const api = {
   artProgressUrl: `${API_BASE}/api/art/progress`, // server-sent events: the status while a model downloads
   installAddon: () => request<AddonStatus>("/api/addon/install", { method: "POST" }),
   artDownload: (style: ArtStyle) => request<{ downloading: boolean }>(`/api/art/download/${style}`, { method: "POST" }),
-  artDraw: (body: { prompt: string; style: ArtStyle; seed?: number; aspect?: Aspect }) =>
-    request<{ media: string; url: string; kind: "photo"; seed: number }>("/api/art/draw", { method: "POST", json: body, timeout: 300_000 }),
+  /** `score`: how well the picture shows the subject (0-10; null when it wasn't checked), `problem`: what's wrong. */
+  artDraw: (body: { prompt: string; style: ArtStyle; seed?: number; aspect?: Aspect } & Partial<ArtSubject>) =>
+    request<{ media: string; url: string; kind: "photo"; seed: number; score: number | null; problem: string }>("/api/art/draw", {
+      method: "POST",
+      json: body,
+      timeout: 900_000, // up to 3 takes when the subject comes out wrong
+    }),
+  /** How well a drawn picture shows the video's real subject (null: it isn't meant to show it). */
+  artCheck: (media: string, subject: string, prompt: string) =>
+    request<{ score: number | null; problem: string }>("/api/art/check", { method: "POST", json: { media, subject, prompt }, timeout: 120_000 }),
+  /** Real footage or a real photo of the subject (stock, else Wikimedia Commons), checked to really show it. */
+  artReal: (subject: string, exclude: string[] = []) =>
+    request<{ media: string; url: string; kind: "photo" | "video"; credit: string }>("/api/art/real", {
+      method: "POST",
+      json: { subject, exclude },
+      timeout: 300_000,
+    }),
   songArtPlan: (name: string) => request<{ plan: SongArtPlan | null }>(`/api/videos/${encodeURIComponent(name)}/art-plan`),
   directIdea: (name: string, idea: string) =>
     request<SongDirection>(`/api/videos/${encodeURIComponent(name)}/direct`, { method: "POST", json: { idea }, timeout: 180_000 }),
@@ -917,8 +955,9 @@ export const api = {
   /** A strip of `frames` frames across a clip (project path of one image) and the clip's length (0 for a photo). */
   filmstrip: (path: string) => request<{ duration: number; frames: number; sprite: string }>(`/api/filmstrip?path=${encodeURIComponent(path)}`, { timeout: 60_000 }),
   /** The clips the render will pick for scenes with automatic footage (project paths; null = none found). */
-  autoFootage: (queries: string[]) =>
-    request<{ media: (string | null)[] }>("/api/footage/auto", { method: "POST", json: { queries }, timeout: 180_000 }),
+  /** `hook`: the first query is the video's opening scene (the engine picks the brightest, liveliest clip for it). */
+  autoFootage: (queries: string[], hook = false) =>
+    request<{ media: (string | null)[] }>("/api/footage/auto", { method: "POST", json: { queries, hook }, timeout: 180_000 }),
   musicSearch: (q: string) => request<{ results: MusicResult[] }>(`/api/music/search?q=${encodeURIComponent(q)}`),
   /** Download a Jamendo track into the music library; returns its file name (as listed in options.music). */
   musicPick: (id: string) => request<{ file: string; credit: string }>("/api/music/pick", { method: "POST", json: { id }, timeout: 120_000 }),

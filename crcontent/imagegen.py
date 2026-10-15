@@ -9,6 +9,7 @@ Only one model sits on the GPU at a time; call unload() when a job is done so ly
 """
 import hashlib
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -17,6 +18,12 @@ from .config import CACHE_DIR, ROOT
 MODELS_DIR = ROOT / "models"
 GEN_CACHE = CACHE_DIR / "gen"
 VAE_REPO = "madebyollin/sdxl-vae-fp16-fix"  # the stock SDXL VAE overflows (black images) in half precision
+# IP-Adapter: a real photo of the video's subject steers every drawing of it, so the model draws a wombat that looks
+# like the photo instead of guessing from a name it barely knows (~3.4 GB, downloaded the first time it's needed)
+IP_REPO = "h94/IP-Adapter"
+IP_WEIGHTS = "sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors"
+IP_ENCODER = "models/image_encoder"
+IP_SCALE = 0.5  # how much the photo counts against the prompt: higher copies the photo (and its realism) more
 _DIFFUSERS_FILES = ["model_index.json", "scheduler/*", "tokenizer/*", "tokenizer_2/*", "text_encoder/*",
                     "text_encoder_2/*", "unet/*", "vae/*"]
 
@@ -239,6 +246,29 @@ def download(style: str, log=print) -> Path:
     return target
 
 
+def _ip_adapter(pipe, log=print) -> None:
+    """Add IP-Adapter to a loaded pipeline (once; it stays with the model until it's dropped)."""
+    if getattr(pipe, "image_encoder", None) is not None:
+        return
+    from huggingface_hub import snapshot_download
+
+    root = MODELS_DIR / "IP-Adapter"
+    if not (root / IP_WEIGHTS).exists() or not (root / IP_ENCODER / "model.safetensors").exists():
+        log("      downloading IP-Adapter, which draws from a real photo (about 3.4 GB, first time only)...")
+        snapshot_download(IP_REPO, local_dir=root, allow_patterns=[IP_WEIGHTS, f"{IP_ENCODER}/config.json",
+                                                                   f"{IP_ENCODER}/model.safetensors"])
+    log("      loading IP-Adapter")
+    pipe.load_ip_adapter(str(root), subfolder=IP_WEIGHTS.split("/")[0], weight_name=IP_WEIGHTS.split("/")[-1],
+                         image_encoder_folder=IP_ENCODER)
+
+
+def _reference_image(path: Path):
+    from PIL import Image
+
+    with Image.open(path) as im:
+        return im.convert("RGB")
+
+
 def _scheduler(pipe, name: str):
     from diffusers import DPMSolverMultistepScheduler, EulerAncestralDiscreteScheduler
 
@@ -360,9 +390,21 @@ def _sexes(prompt: str) -> tuple[bool, bool]:
     return bool(tags & _MALE), bool(tags & _FEMALE)
 
 
+_PEOPLE = re.compile(r"\b(\d+(girl|boy|other)s?|no humans|multiple (girls|boys|others)|solo|girls?|boys?|m[ae]n|wom[ae]n|"
+                     r"person|people|human|child(ren)?|kids?|crowd|character|couple|family)\b", re.I)
+
+
+def _no_people(prompt: str, style: str) -> bool:
+    """An anime prompt that names no character: Animagine (trained on character art) puts a girl in it anyway, so
+    it's drawn as "no humans" (an animal, a thing or a place: footage search words like "mantis shrimp strike")."""
+    return style == "anime" and ("no humans" in prompt.lower() or not _PEOPLE.search(prompt))
+
+
 def full_prompt(prompt: str, style: str) -> str:
     spec = STYLES[style]
     prompt = prompt.strip().rstrip(",")
+    if _no_people(prompt, style) and "no humans" not in prompt.lower():
+        prompt = f"no humans, {prompt}"
     male, female = _sexes(prompt)
     if style == "anime" and male and not female and "male focus" not in prompt.lower():
         # without it Animagine draws "1boy" with long or messy hair as a girl (and pastes any beard onto her)
@@ -375,6 +417,8 @@ def _sex_negative(prompt: str, style: str) -> str:
     """Keep an anime man from turning into a girl, and keep beards off women."""
     if style != "anime":
         return ""
+    if _no_people(prompt, style):
+        return "1girl, 1boy, human, humanoid, person, face, kemonomimi, anthropomorphic"
     male, female = _sexes(prompt)
     if male and not female:
         return "1girl, female, breasts, feminine, makeup, lipstick"
@@ -383,12 +427,14 @@ def _sex_negative(prompt: str, style: str) -> str:
     return ""
 
 
-def cache_file(prompt: str, style: str, size: tuple[int, int], seed: int, hires: bool = True, negative: str = "") -> Path:
+def cache_file(prompt: str, style: str, size: tuple[int, int], seed: int, hires: bool = True, negative: str = "",
+               reference: Path | None = None) -> Path:
     """Where generate() keeps this picture (it may not be drawn yet)."""
     w, h = base_size(size)
     # the full prompt and hi-res scale are part of the key, so changing a look's wording draws new pictures
+    ref = f"\nref {hashlib.sha1(reference.read_bytes()).hexdigest()[:12]} {IP_SCALE}" if reference else ""
     key = hashlib.sha1(f"{style}\n{w}x{h}\n{seed}\n{hires}{HIRES_SCALE}\n{negative}{_sex_negative(prompt, style)}\n"
-                       f"{full_prompt(prompt.strip(), style)}"
+                       f"{full_prompt(prompt.strip(), style)}{ref}"
                        .encode()).hexdigest()[:16]
     return GEN_CACHE / f"{style}-{key}.png"
 
@@ -404,25 +450,42 @@ def drawn(prompt: str, style: str, size: tuple[int, int], seed: int) -> Path | N
 _CFG_INPUTS = ["prompt_embeds", "add_text_embeds", "add_time_ids"]
 
 
-def _guidance_until(fraction: float):
+def _guidance_until(fraction: float, image_embeds: list):
     """A step callback that stops classifier-free guidance after `fraction` of the steps: from then on the UNet sees
-    only the prompt half of the batch (diffusers' documented way to change guidance mid-run)."""
+    only the prompt half of the batch (diffusers' documented way to change guidance mid-run). `image_embeds`: the
+    IP-Adapter inputs the pipeline uses (see _run), halved too since they aren't among the callback's tensors."""
     def callback(pipe, i, t, kw):
         if i == int(pipe.num_timesteps * fraction):
             pipe._guidance_scale = 0.0
             for k in _CFG_INPUTS:
                 kw[k] = kw[k].chunk(2)[-1]
+            for embeds in image_embeds:
+                embeds[:] = [e.chunk(2)[-1] for e in embeds]
         return kw
 
     return callback
 
 
+def _run(pipe, guided: float, **kwargs):
+    """pipe(**kwargs) with guidance switched off after `guided` of the steps; returns the picture."""
+    image_embeds: list = []
+    if kwargs.get("ip_adapter_image") is not None:  # keep hold of the list the pipeline loops over
+        prepare = pipe.prepare_ip_adapter_image_embeds
+        pipe.prepare_ip_adapter_image_embeds = lambda *a, **k: image_embeds.append(prepare(*a, **k)) or image_embeds[-1]
+    try:
+        return pipe(**kwargs, callback_on_step_end=_guidance_until(guided, image_embeds),
+                    callback_on_step_end_tensor_inputs=_CFG_INPUTS).images[0]
+    finally:
+        pipe.__dict__.pop("prepare_ip_adapter_image_embeds", None)
+
+
 def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = None, hires: bool = True,
-             negative: str = "", log=print) -> Path:
+             negative: str = "", reference: Path | None = None, log=print) -> Path:
     """One picture of `prompt` in a look from STYLES, shaped for a frame of `size` (it's cropped to fit later).
 
     `seed` fixes the result (the same seed and prompt give the same picture); None derives one from the prompt.
     `hires`: redraw HIRES_SCALE x bigger for detail (about twice as slow). Cached: the same request comes straight back.
+    `reference`: a real photo of the subject for IP-Adapter to copy its look from.
     """
     if style not in STYLES:
         raise ValueError(f"Unknown art style {style!r}")
@@ -432,30 +495,35 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
     w, h = base_size(size)
     if seed is None:
         seed = default_seed(prompt)
-    out = cache_file(prompt, style, size, seed, hires, negative)
+    out = cache_file(prompt, style, size, seed, hires, negative, reference)
     if out.exists() and out.stat().st_size:
         return out
     with _lock:
         import torch
         from diffusers import StableDiffusionXLImg2ImgPipeline
+        from PIL import Image
 
         spec = STYLES[style]
         pipe = _load(style, log)
+        if reference:
+            _ip_adapter(pipe, log)
+        ip = {}
+        if getattr(pipe, "image_encoder", None) is not None:
+            # once loaded, the model needs a photo every time: a blank one at no weight draws as without IP-Adapter
+            pipe.set_ip_adapter_scale(IP_SCALE if reference else 0.0)
+            ip = {"ip_adapter_image": _reference_image(reference) if reference else Image.new("RGB", (224, 224))}
         neg = ", ".join(x for x in (spec["negative"], _sex_negative(prompt, style), negative) if x)
         generator = torch.Generator("cuda").manual_seed(seed)
-        image = pipe(prompt=full_prompt(prompt, style), negative_prompt=neg, width=w, height=h,
-                     num_inference_steps=spec["steps"], guidance_scale=spec["cfg"], generator=generator,
-                     callback_on_step_end=_guidance_until(CFG_UNTIL[0]),
-                     callback_on_step_end_tensor_inputs=_CFG_INPUTS).images[0]
+        image = _run(pipe, CFG_UNTIL[0], prompt=full_prompt(prompt, style), negative_prompt=neg, width=w, height=h,
+                     num_inference_steps=spec["steps"], guidance_scale=spec["cfg"], generator=generator, **ip)
         if hires:
             # the same modules, not from_pipe(): that made a second copy of the model (14 GB on a 12 GB card)
             refine = StableDiffusionXLImg2ImgPipeline(**pipe.components)
             refine.set_progress_bar_config(disable=True)
             image = image.resize((round(w * HIRES_SCALE / 8) * 8, round(h * HIRES_SCALE / 8) * 8), resample=3)  # bicubic
-            image = refine(prompt=full_prompt(prompt, style), negative_prompt=neg, image=image, strength=0.38,
-                           num_inference_steps=HIRES_STEPS, guidance_scale=spec["cfg"], generator=generator,
-                           callback_on_step_end=_guidance_until(CFG_UNTIL[1]),
-                           callback_on_step_end_tensor_inputs=_CFG_INPUTS).images[0]
+            image = _run(refine, CFG_UNTIL[1], prompt=full_prompt(prompt, style), negative_prompt=neg, image=image,
+                         strength=0.38, num_inference_steps=HIRES_STEPS, guidance_scale=spec["cfg"],
+                         generator=generator, **ip)
         GEN_CACHE.mkdir(parents=True, exist_ok=True)
         tmp = out.with_suffix(".part.png")
         image.save(tmp)

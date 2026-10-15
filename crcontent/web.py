@@ -30,7 +30,7 @@ from .pipeline import (AUDIO_EXTS, COVER_STYLES, import_song, make_music_video, 
 from .post import suggest_posts, write_post
 from .render import duration, run as run_ffmpeg
 from .importer import import_script
-from .script import VideoScript, generate_script, suggest_queries, translate_script
+from .script import VideoScript, generate_script, suggest_queries, suggest_topics, translate_script
 from .song import elevenlabs_key
 from .styles import caption_catalog, catalog as style_catalog
 from .tts import list_voices, synthesize
@@ -77,8 +77,8 @@ jobs_lock = threading.Lock()
 class ScriptRequest(BaseModel):
     topic: str
     lang: str = "en"
-    scenes: int = 6
-    seconds: int = 45
+    scenes: int = 4
+    seconds: int = 20  # 15-25 s Shorts get watched to the end (and again) far more often than 45-60 s ones
     style: str = ""
 
 
@@ -109,6 +109,8 @@ def options():
     return {
         "langs": {code: {"name": p.name, "voices": _voices(code)} for code, p in LANGS.items()},
         "music": sorted(p.name for p in music_dir.glob("*.mp3")) if music_dir.exists() else [],
+        # each track's licence for monetized videos: ok / nc (non-commercial) / nd (no derivatives) / unknown
+        "music_use": {p.name: music.track_use(p) for p in music_dir.glob("*.mp3")} if music_dir.exists() else {},
         "keys": {
             "anthropic": bool(os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-ant-")),
             "stock": stock_source(),
@@ -177,6 +179,23 @@ def ideas(req: IdeasRequest):
         raise HTTPException(400, "Write the scene's narration first, so Claude knows what to look for.")
     try:
         return {"queries": suggest_queries(req.narration, req.current)}
+    except (anthropic.APIError, RuntimeError) as e:
+        raise _claude_error(e)
+
+
+class TopicIdeasRequest(BaseModel):
+    niche: str = ""  # what the channel is about ("" = whatever its recent videos are about)
+    lang: str = "en"
+
+
+@app.post("/api/topic-ideas")
+def topic_ideas(req: TopicIdeasRequest):
+    """Ideas for the next Shorts, in a mix of hook formats and never a near-repeat of the channel's recent titles."""
+    recent = [d["title"] for d in sorted(drafts.list_drafts(), key=lambda d: d.get("updated", ""), reverse=True)]
+    recent += [v["title"] for v in videos() if v["kind"] == "video"]
+    lang = req.lang if req.lang in LANGS else "en"
+    try:
+        return {"topics": suggest_topics(req.niche.strip()[:300], lang, list(dict.fromkeys(recent))[:60])}
     except (anthropic.APIError, RuntimeError) as e:
         raise _claude_error(e)
 
@@ -324,23 +343,77 @@ class ArtDrawRequest(BaseModel):
     style: str
     seed: int = 0  # 0 = the prompt's own seed; another number = another take of the same prompt
     aspect: str = "9:16"
+    subject: str = ""  # the video's real subject (script.art_subject): checked, and drawn again when it's wrong
+    avoid: str = ""  # what the model must not draw instead (script.art_avoid)
 
 
 @app.post("/api/art/draw")
 def art_draw(req: ArtDrawRequest):
-    """Draw one scene picture (about 30 s the first time, while the model loads). Returns it like a picked photo."""
+    """Draw one scene picture (about 30 s the first time, while the model loads; a picture of the video's real
+    subject that comes out wrong is drawn again, up to 3 takes). Returns it like a picked photo, with its check."""
     from . import imagegen
+    from .pipeline import draw_checked
 
     _art_check(req.style)
     if not req.prompt.strip():
         raise HTTPException(400, "Describe the picture first.")
     seed = req.seed or imagegen.default_seed(req.prompt)
     try:
-        path = imagegen.generate(req.prompt, req.style, frame_size(req.aspect), seed=seed)
+        path, seed, score, problem = draw_checked(req.prompt, req.style, frame_size(req.aspect), seed=seed,
+                                                  subject=req.subject.strip(), avoid=req.avoid.strip(), log=print)
     except RuntimeError as e:
         raise HTTPException(422, str(e))
     imagegen.unload_later()  # keep the model warm while you're drawing, free the GPU when you stop
-    return {**_media_info(path), "seed": seed}
+    return {**_media_info(path), "seed": seed, "score": score, "problem": problem}
+
+
+class ArtCheckRequest(BaseModel):
+    media: str  # a drawn picture (project-relative, cache/gen/...)
+    subject: str  # "name: visible features" (script.art_subject)
+    prompt: str = ""
+
+
+@app.post("/api/art/check")
+def art_check(req: ArtCheckRequest):
+    """How well a picture you drew shows the video's real subject (Claude's check, kept with the picture, so each
+    one is only ever checked once). score is null when the picture isn't meant to show the subject."""
+    from .pipeline import _verdict
+
+    path = ROOT / req.media
+    name = req.subject.split(":")[0].strip().lower()
+    if not path.is_file() or not name or name.split()[-1] not in req.prompt.lower():
+        return {"score": None, "problem": ""}
+    try:
+        score, problem = _verdict(path, req.subject.strip(), req.prompt)
+    except anthropic.APIError as e:
+        raise _claude_error(e)
+    return {"score": score, "problem": problem}
+
+
+class RealSubjectRequest(BaseModel):
+    subject: str  # "name: visible features" (script.art_subject)
+    exclude: list[str] = []  # media already used in the video (project-relative), to get a different one
+
+
+@app.post("/api/art/real")
+def art_real(req: RealSubjectRequest):
+    """Real footage or a real photo of the subject (a stock clip, else Wikimedia Commons), checked by Claude, for a
+    scene whose AI picture can't get the subject right."""
+    from .pipeline import real_subject_media
+
+    if not req.subject.strip():
+        raise HTTPException(400, "Name the real subject first (under the look of the video).")
+    used = {str(ROOT / m) for m in req.exclude}
+    try:
+        path = real_subject_media(req.subject.strip(), used, log=print)
+    except anthropic.APIError as e:
+        raise _claude_error(e)
+    if not path:
+        raise HTTPException(404, f"No stock clip or Wikimedia Commons photo clearly shows a {req.subject.split(':')[0].strip()}. "
+                                 "Upload your own clip or photo for this scene.")
+    from .commons import credit
+
+    return {**_media_info(path), "credit": credit(path)}
 
 
 class ArtPlanRequest(BaseModel):
@@ -360,7 +433,7 @@ def art_plan(req: ArtPlanRequest):
     if req.replace:
         for scene in script.scenes:
             scene.art_prompt, scene.motion, scene.effects = "", "", []
-        script.art_bible = ""
+        script.art_bible = script.art_subject = script.art_avoid = ""
     try:
         plan_scene_art(script, log=lambda _: None)
     except (anthropic.APIError, RuntimeError) as e:
@@ -523,6 +596,7 @@ def music_pick(req: MusicPick):
 
 class AutoFootageRequest(BaseModel):
     queries: list[str]  # search words of the scenes with automatic footage, in the order the render picks them
+    hook: bool = False  # the first query is the video's opening scene (picked for its bright, lively opening)
 
 
 @app.post("/api/footage/auto")
@@ -531,9 +605,9 @@ def auto_footage(req: AutoFootageRequest):
     live preview shows them), downloaded into the cache. null where nothing is found (the render then draws one)."""
     picker = FootagePicker()
     media = []
-    for query in req.queries[:60]:
+    for k, query in enumerate(req.queries[:60]):
         try:
-            clip = picker.pick(query.strip() or "abstract background")
+            clip = picker.pick(query.strip() or "abstract background", hook=req.hook and k == 0)
         except Exception:
             traceback.print_exc()
             clip = None
@@ -905,12 +979,12 @@ def _plan_view(folder: Path, plan: dict | None) -> dict:
 
     if not plan:
         return {"plan": None}
-    from .pipeline import _direction_key, song_direction
+    from .pipeline import plan_follows, song_direction
 
     # does it follow the song's current shot list (or no shot list, if there is none for its idea)?
     song = SongScript.load(folder / "song.json")
     current = song_direction(song, _read_meta(folder).get("direction"), plan.get("idea", ""))
-    plan["direction_current"] = plan.get("direction", "") == _direction_key(current)
+    plan["direction_current"] = plan_follows(plan, current)
     from .pipeline import HOME_VIDEO
 
     size = frame_size(plan.get("aspect") or "9:16")
@@ -948,10 +1022,21 @@ def new_art_plan(name: str, req: ArtPlanSongRequest):
         raise HTTPException(400, "Compose the song first.")
     if req.style not in ("anime", "cinematic", "flat"):
         raise HTTPException(400, "Pick an art style first.")
+    direction = _read_meta(folder).get("direction")
+    song = SongScript.load(folder / "song.json")
+    if req.direction is not None and len(req.direction.get("sections") or []) == len(song.sections):
+        # the shot list on screen may not be saved yet (it saves a moment after each edit): save it now, so the plan
+        # and the song's shot list are the same one and the plan doesn't look out of date when the song is reopened
+        from .director import clean_section
+
+        d = req.direction
+        direction = {"idea": str(d.get("idea") or "").strip()[:IDEA_MAX], "bible": str(d.get("bible") or "").strip()[:2000],
+                     "notes": list(d.get("notes") or [])[:6], "sections": [clean_section(r) for r in d["sections"]],
+                     **{k: d[k] for k in ("look", "lyric_preset", "lyric_font") if k in d}}
+        _save_direction(folder, direction)
     try:
         plan = plan_song_pictures(folder, req.style, req.pictures if req.pictures in PICTURE_PACES else "normal",
-                                  req.idea[:IDEA_MAX], req.bible[:2000], log=lambda _: None,
-                                  direction=req.direction if req.direction is not None else _read_meta(folder).get("direction"))
+                                  req.idea[:IDEA_MAX], req.bible[:2000], log=lambda _: None, direction=direction)
     except anthropic.APIError as e:
         raise _claude_error(e)
     except RuntimeError as e:
@@ -1302,11 +1387,19 @@ def video_detail(name: str):
     data["song"] = SongScript.load(folder / "song.json").model_dump() if (folder / "song.json").exists() else None
     data["stems"] = {k: meta[k] for k in ("vocals", "instrumental") if meta.get(k)}
     data["versions"] = [_summary(f) for f in song_versions(folder)] if meta.get("kind") == "song" else []
-    data["idea"] = meta.get("idea", "")  # song: last idea used for a music video; music video: the one it was made with
-    data["look"] = meta.get("look", "")  # same, for the footage colour grade and the lyric style
+    # Song: the settings its last music video used. Before the first video there are none, so fall back to what was
+    # already chosen for it: the shot list (idea, look) and the planned pictures (art style, pace, idea). Otherwise the
+    # picture plan looks out of date the moment the song is opened again, and its pictures can't be drawn.
+    from .pipeline import load_art_plan
+
+    made = "idea" in meta  # a music video was made from it (and saved these settings)
+    direction = meta.get("direction") or {}
+    plan = (load_art_plan(folder) if meta.get("kind") == "song" and not made else None) or {}
+    data["idea"] = meta["idea"] if made else (direction.get("idea") or plan.get("idea", ""))
+    data["look"] = meta.get("look", "" if made else direction.get("look", ""))  # same, for the colour grade
     data["lyric_style"] = meta.get("lyric_style")
-    data["art_style"] = meta.get("art_style", "")
-    data["pictures"] = meta.get("pictures", "normal")
+    data["art_style"] = meta.get("art_style", plan.get("style", ""))
+    data["pictures"] = meta.get("pictures", plan.get("pictures", "normal"))
     data["direction"] = meta.get("direction")  # the shot list made from the idea (songs)
     data["duration"] = (round(duration(folder / "video.mp4"), 2) if data["video"]
                         else meta.get("duration", 0))

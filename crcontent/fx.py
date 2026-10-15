@@ -129,6 +129,29 @@ def release_depth() -> None:
 
 # ---------- camera ----------
 
+# the framings a held picture cuts between (render_shot's `cuts`): (extra zoom, how far the frame moves toward the
+# subject: 1 = centred on it); always on the subject, at different sizes. The first is the shot as planned
+FRAMINGS = [(1.0, 0.0), (1.3, 1.0), (1.14, 0.6), (1.45, 1.0), (1.2, 0.8)]
+
+
+def _subject(depth) -> tuple[float, float]:
+    """Centre of the nearest part of the picture (what's in front: usually the subject), in -1..1 grid units, from
+    its depth map; a little above the middle without one."""
+    if depth is None:
+        return 0.0, -0.1
+    import torch
+
+    d = depth[0, 0].float()
+    near = (d >= torch.quantile(d.flatten()[:: max(d.numel() // 20000, 1)], 0.85)).float()
+    total = float(near.sum())
+    if total < 1:
+        return 0.0, -0.1
+    h, w = d.shape
+    ys = torch.linspace(-1, 1, h, device=d.device)[:, None]
+    xs = torch.linspace(-1, 1, w, device=d.device)[None, :]
+    return float((near * xs).sum() / total), float((near * ys).sum() / total)
+
+
 def _camera(motion: str, p: float, room_x: float, room_y: float) -> tuple[float, float, float, float]:
     """(zoom, centre x, centre y, parallax amount) at progress p (eased), in grid units of the source picture.
 
@@ -453,11 +476,16 @@ def _rounded_mask(w: int, h: int, radius: float, dev, half):
 def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] = (WIDTH, HEIGHT),
                 motion: str = "push_in", effects: tuple[str, ...] | list[str] = (), beats: list[float] = (),
                 voice: Path | None = None, look: str = "", seed: int = 0, parallax: float = 1.0,
-                tape: str = "", wear: float = 0.0, frame: str = "full", stamp: str = "", fade: bool = False) -> None:
+                tape: str = "", wear: float = 0.0, frame: str = "full", stamp: str = "", fade: bool = False,
+                impacts: list[float] = (), cuts: list[float] = (), focus: tuple[float, float] | None = None) -> None:
     """`image` filling a `size` frame for `length` seconds with a camera move and effects, as an mp4.
 
     beats: seconds (from the shot's start) to accent: a quick zoom punch, a flash with the "flash" effect, a
-    colour split with "chromatic". voice: the shot's audio (silent without). look: a colour grade (styles.LOOKS).
+    colour split with "chromatic". impacts: seconds to HIT (pacing.impacts): a hard zoom punch, a shake, a white
+    flash, a colour split and a shockwave ring from the subject. cuts: seconds to cut to a new framing of the
+    picture (punch-ins on the subject at different sizes), so a held picture still changes every 1-2 s. focus: where
+    the subject is (-1..1 grid units; from Claude's check of the picture), else it's found from the depth map.
+    voice: the shot's audio (silent without). look: a colour grade (styles.LOOKS).
     parallax: strength of the 3D moves (0 = flat).
     tape: an old-tape treatment (TAPES); wear: 0..1, how worn that tape is; frame: "4:3" shows the shot as a home
     video on a dark screen inside the frame (FRAMES); stamp: the camcorder's date ("MAY 31 1998"; with tape play or
@@ -507,6 +535,14 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
     # distance from the centre in pixels, 1 at the corners: the lines only cover the edges of the frame
     radius = (torch.sqrt((xs.float() * W) ** 2 + (ys.float() * H) ** 2) / math.hypot(W, H)) if angle is not None else None
     beats = [b for b in beats if 0 <= b < length]
+    impacts = sorted(b for b in impacts if 0 <= b < length)
+    cuts = sorted(c for c in cuts if 0 < c < length)
+    if (impacts or cuts) and depth is None and parallax > 0 and focus is None:
+        try:  # only to find the subject, so punch-ins and shockwaves centre on it
+            depth = depth_map(image).to(half)
+        except Exception:
+            pass
+    focus = focus or _subject(depth)  # the subject's centre, in the picture's -1..1 grid units
     deck = _Tape(tape, wear, stamp, W, H, seed, dev, half) if tape else None
     screen = None
     if (OW, OH) != (W, H):  # the home-video picture on a dark screen, lit by its own glow
@@ -544,6 +580,21 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                         p = 1 - (t * 1.6 / max(length, 0.5) + hit * 0.04) % 1.0
                     zoom, cx, cy, par = _camera(motion, p, room_x, room_y)
                     zoom *= 1 + 0.035 * hit
+                    # cut to the next framing of the picture (each holds until the next cut)
+                    if cuts:
+                        fz, pull = FRAMINGS[sum(1 for c in cuts if t >= c) % len(FRAMINGS)]
+                        zoom *= fz
+                        cx += (focus[0] - cx) * pull
+                        cy += (focus[1] - cy) * pull
+                    since_hit = [t - b for b in impacts if t >= b]
+                    strike = math.exp(-min(since_hit) * 7) if since_hit else 0.0  # 1 on the hit, gone in ~0.4 s
+                    if strike > 0.01:
+                        zoom *= 1 + 0.11 * strike
+                        cx += 0.035 * strike * math.sin(t * 91 + 1.3) / zoom  # shake
+                        cy += 0.03 * strike * math.sin(t * 73) / zoom
+                    # keep the frame inside the picture (punch-ins and shakes can push it past an edge)
+                    cx = min(max(cx, -1 + fx / zoom), 1 - fx / zoom)
+                    cy = min(max(cy, -1 + fy / zoom), 1 - fy / zoom)
                     gx = xs * (fx / zoom) + cx
                     gy = ys * (fy / zoom) + cy
                     d = None
@@ -564,8 +615,8 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                         gx = gx + (deck.offsets(n, t, hit) * (2 * fx / (W * zoom))).to(half)[:, None]
                     grid = torch.stack([gx, gy], -1)[None]
                     frame = F.grid_sample(src, grid, mode="bicubic", padding_mode="reflection", align_corners=False)
-                    if "chromatic" in effects:
-                        shift = (1.5 + 9 * hit) / W
+                    if "chromatic" in effects or strike > 0.02:
+                        shift = ((1.5 if "chromatic" in effects else 0) + 9 * hit + 14 * strike) / W
                         r_ch = F.grid_sample(src[:, :1], grid + torch.tensor([shift, 0], device=dev, dtype=half),
                                              mode="bilinear", padding_mode="reflection", align_corners=False)
                         b_ch = F.grid_sample(src[:, 2:], grid - torch.tensor([shift, 0], device=dev, dtype=half),
@@ -608,6 +659,15 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                         frame = frame * vignette
                     if "flash" in effects and hit > 0:
                         frame = frame + (1 - frame) * (0.55 * hit ** 2)
+                    if strike > 0.01:
+                        age = min(since_hit)
+                        if age < 0.4:  # a shockwave ring racing out from the subject
+                            sx_f = (focus[0] - cx) / (fx / zoom)  # the subject on screen, -1..1
+                            sy_f = (focus[1] - cy) / (fy / zoom)
+                            dist = torch.sqrt(((xs - sx_f) * (W / H)) ** 2 + (ys - sy_f) ** 2)
+                            ring = torch.exp(-((dist - (0.12 + age * 3.2)) / 0.07) ** 2) * (0.7 * strike)
+                            frame = _screen(frame, ring[None, None].expand(1, 3, H, W))
+                        frame = frame + (1 - frame) * (0.92 * strike ** 4)  # white flash: 2-3 frames
                     if "grain" in effects:
                         frame = frame + torch.randn(1, 1, H // 2, W // 2, device=dev, dtype=half).repeat_interleave(
                             2, -1).repeat_interleave(2, -2) * 0.028

@@ -1,4 +1,5 @@
 """Topic (or script file) in -> finished vertical video + post metadata out."""
+import hashlib
 import json
 import random
 import re
@@ -8,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from . import art, fx, thumbs, voiceover
+from . import art, fx, pacing, sfx, thumbs, voiceover
 from .captions import THUMB_STYLES, build_ass, build_thumbnail_ass, overlay_lines
 from .config import ASSETS_DIR, LANGS, OUTPUT_DIR, ROOT, SCENE_PAD_SEC, frame_size, orientation
 from .render import concat, duration, finalize, render_scene, run, thumbnail
@@ -21,13 +22,15 @@ def slugify(text: str, limit: int = 40) -> str:
     return (slug or "video")[:limit]
 
 
-def post_body(title: str, caption: str, tags: str, track: Path | str | None = None, sources: str = "") -> str:
-    """post.txt: title line, the caption (plus the works it cites and the music's credit when its licence asks for
-    one), then the #tags."""
+def post_body(title: str, caption: str, tags: str, track: Path | str | None = None, sources: str = "",
+              photos: list[str] = ()) -> str:
+    """post.txt: title line, the caption (plus the works it cites, the credits of real photos used and the music's
+    credit when its licence asks for one), then the #tags."""
     from .music import credit
 
     cited = f"Sources: {sources.strip()}" if sources.strip() else ""
-    body = "\n\n".join(x for x in (caption.strip(), cited, credit(track)) if x)
+    shown = "\n".join(dict.fromkeys(p for p in photos if p))
+    body = "\n\n".join(x for x in (caption.strip(), cited, shown, credit(track)) if x)
     return f"{title}\n\n{body}\n\n{tags}\n"
 
 
@@ -46,7 +49,12 @@ def pick_music(music: str | None, mood: str = "") -> Path | None:
         return None
     if music:
         return Path(music)
+    from .music import track_use
+
     tracks = list((ASSETS_DIR / "music").glob("*.mp3")) if (ASSETS_DIR / "music").exists() else []
+    # a random or mood pick only takes tracks a monetized video may use (unknown licences only when nothing else)
+    safe = [t for t in tracks if track_use(t) == "ok"] or [t for t in tracks if track_use(t) == "unknown"]
+    tracks = safe or tracks
     matching = best_matches(mood, [t.name for t in tracks])
     return random.choice([t for t in tracks if t.name in matching] or tracks) if tracks else None
 
@@ -262,19 +270,164 @@ def plan_scene_art(script: VideoScript, log: Callable[[str], None] = print) -> b
     keeping prompts you edited. All scenes are planned together so the pictures share one look. True if changed."""
     from . import director
 
-    todo = [i for i, sc in enumerate(script.scenes) if not sc.media and not sc.art_prompt.strip()]
+    # an AI picture drawn without a plan (from the footage search words) is planned too, so it can be redrawn
+    if not script.art_bible:
+        for sc in script.scenes:
+            if sc.art_prompt.strip() == sc.visual_query.strip():
+                sc.art_prompt = ""
+    todo = [i for i, sc in enumerate(script.scenes)
+            if (not sc.media or sc.media.startswith("cache/gen/")) and not sc.art_prompt.strip()]
     if not todo:
         return False
     log("      planning the pictures (Claude)")
-    bible, shots = director.plan_scenes(script.title, [{"narration": sc.narration, "visual_query": sc.visual_query}
-                                                       for sc in script.scenes], script.art_style, bible=script.art_bible)
+    bible, shots, subject = director.plan_scenes(script.title, [{"narration": sc.narration, "visual_query": sc.visual_query}
+                                                                for sc in script.scenes], script.art_style, bible=script.art_bible)
     script.art_bible = script.art_bible or bible
+    script.art_subject = script.art_subject or subject["subject"]
+    script.art_avoid = script.art_avoid or subject["avoid"]
     for i in todo:
         sc = script.scenes[i]
         sc.art_prompt = shots[i].prompt
         sc.motion = sc.motion or shots[i].motion
         sc.effects = sc.effects or shots[i].effects
     return True
+
+
+CHECK_PASS = 8  # a picture of a real subject scoring this (out of 10) is right; below, another take is drawn
+MAX_TAKES = 3  # takes drawn at most per picture, keeping the best (each ~25 s on an RTX 3060)
+REAL_PASS = 7  # a stock clip or photo must score this to stand in for a drawing that came out wrong
+WRONG = 6  # a drawing scoring under this is the wrong animal/thing: real footage or a real photo is used instead
+
+
+def _verdict(path: Path, subject: str, prompt: str = "") -> tuple[int, str]:
+    """Claude's check of how well `path` (a picture, or a video: a frame from its middle) shows `subject`, kept in a
+    file next to it, so the same picture is never paid for twice."""
+    from . import director
+
+    note = path.with_suffix(".check.json")
+    saved = json.loads(note.read_text(encoding="utf-8")) if note.exists() else {}
+    if saved.get("subject") == subject and "centre" in saved:
+        return saved["score"], saved["problem"]
+    image = path
+    if path.suffix.lower() not in IMAGE_EXTS:
+        image = path.with_suffix(".check.jpg")
+        run(["ffmpeg", "-y", "-v", "error", "-ss", f"{duration(path) * 0.4:.2f}", "-i", str(path), "-frames:v", "1",
+             "-vf", "scale=-2:720", str(image)])
+    score, problem, centre = director.check_picture(image, subject, prompt)
+    note.write_text(json.dumps({"subject": subject, "score": score, "problem": problem, "centre": centre}),
+                    encoding="utf-8")
+    return score, problem
+
+
+def subject_focus(path: Path | None) -> tuple[float, float] | None:
+    """Where the checked subject is in a picture (-1..1 grid units, for fx.render_shot's punch-ins), if known."""
+    note = path.with_suffix(".check.json") if path else None
+    if not note or not note.exists():
+        return None
+    centre = json.loads(note.read_text(encoding="utf-8")).get("centre")
+    return (centre[0] * 2 - 1, centre[1] * 2 - 1) if centre else None
+
+
+def real_subject_media(subject: str, used: set[str], log: Callable[[str], None] = print) -> Path | None:
+    """Real footage of `subject` ("name: visible features") when the image model can't draw it: a stock clip, else
+    a Wikimedia Commons photo, each checked by Claude to really show it (stock sites' searches are loose: "mantis
+    shrimp" also finds a praying mantis and sushi). Skips files in `used` and adds the one it returns."""
+    from . import commons
+    from .visuals import download_stock, search
+
+    name = subject.split(":")[0].strip()
+    candidates = []
+    try:
+        candidates += [lambda it=it: download_stock(it["source"], "video", it["id"]) for it in search(name, "video", 6)[:4]]
+    except Exception as e:
+        log(f"      ! stock search for {name!r} failed ({type(e).__name__})")
+    try:
+        candidates += [lambda it=it: commons.download(it) for it in commons.search(name, 6)]
+    except Exception as e:
+        log(f"      ! Wikimedia Commons search for {name!r} failed ({type(e).__name__})")
+    for fetch in candidates:
+        try:
+            path = fetch()
+            if str(path) in used:
+                continue
+            score, problem = _verdict(path, subject)
+        except Exception as e:
+            log(f"      ! couldn't check a candidate ({type(e).__name__}: {str(e)[:120]})")
+            continue
+        if score >= REAL_PASS:
+            used.add(str(path))
+            log(f"      real {'photo' if path.suffix.lower() in IMAGE_EXTS else 'footage'} of {name}: {path.name} ({score}/10)")
+            return path
+    return None
+
+
+_no_reference: set[str] = set()  # subjects with no real photo found (this run), so they aren't searched per picture
+
+
+def subject_reference(subject: str, log: Callable[[str], None] = print) -> Path | None:
+    """A real photo of `subject` that drawings of it copy the look of (IP-Adapter): what real_subject_media finds
+    (checked by Claude), as a square around the subject. Found once per subject and kept in cache/ref."""
+    from PIL import Image
+
+    from .config import CACHE_DIR
+
+    out = CACHE_DIR / "ref" / f"{hashlib.sha1(subject.encode()).hexdigest()[:16]}.jpg"
+    if out.exists():
+        return out
+    if subject in _no_reference:
+        return None
+    media = real_subject_media(subject, set(), log)
+    if not media:
+        _no_reference.add(subject)
+        return None
+    still = media if media.suffix.lower() in IMAGE_EXTS else media.with_suffix(".check.jpg")  # _verdict's frame
+    cx, cy = subject_focus(media) or (0.0, 0.0)
+    with Image.open(still) as im:
+        im = im.convert("RGB")
+        side = min(im.size)
+        left = min(max(round((cx + 1) / 2 * im.width - side / 2), 0), im.width - side)
+        top = min(max(round((cy + 1) / 2 * im.height - side / 2), 0), im.height - side)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        im.crop((left, top, left + side, top + side)).resize((512, 512), Image.LANCZOS).save(out, quality=92)
+    log(f"      drawing {subject.split(':')[0].strip()} from a real photo: {media.name}")
+    return out
+
+
+def draw_checked(prompt: str, style: str, size: tuple[int, int], seed: int | None = None, subject: str = "",
+                 avoid: str = "", log: Callable[[str], None] = print) -> tuple[Path, int, int | None, str]:
+    """Draw a scene picture; when it shows the video's real `subject` ("name: visible features"), it is drawn from a
+    real photo of it (subject_reference) and Claude checks it looks right; a wrong one is drawn again with another seed
+    (MAX_TAKES at most, the best kept). `avoid`: what the image model must not draw instead (its negative prompt).
+    Returns (picture, seed, score or None, problem)."""
+    from . import director, imagegen
+
+    seed = seed or imagegen.default_seed(prompt)
+    name = subject.split(":")[0].strip().lower()
+    checking = bool(name) and name.split()[-1] in prompt.lower()  # this picture shows the subject
+    reference = None
+    if checking:
+        try:
+            reference = subject_reference(subject, log)
+        except Exception as e:  # no photo to go by: draw from the prompt alone
+            log(f"      ! couldn't get a real photo of {name} to draw from ({type(e).__name__})")
+    best: tuple[Path, int, int | None, str] | None = None
+    for take in range(MAX_TAKES if checking else 1):
+        s = seed if take == 0 else imagegen.default_seed(f"{prompt}\n{seed}\n{take}")
+        path = imagegen.generate(prompt, style, size, seed=s, negative=avoid, reference=reference, log=log)
+        if not checking:
+            return path, s, None, ""
+        try:
+            score, problem = _verdict(path, subject, prompt)
+        except Exception as e:  # no Claude: keep the picture unchecked rather than fail the video
+            log(f"      ! couldn't check the picture ({type(e).__name__}); keeping it")
+            return path, s, None, ""
+        if best is None or score > (best[2] or 0):
+            best = (path, s, score, problem)
+        if score >= CHECK_PASS:
+            break
+        log(f"      take {take + 1}: {score}/10, {problem or 'not right'}"
+            + ("; drawing another" if take + 1 < MAX_TAKES else "; keeping the best"))
+    return best
 
 
 # how many AI pictures a music video gets: seconds each picture stays on screen, and a cap for long songs.
@@ -384,14 +537,25 @@ def song_direction(song, direction: dict | None, idea: str) -> dict | None:
     return direction if (direction.get("idea") or "").strip() == idea.strip() else None
 
 
-def _direction_key(direction: dict | None) -> str:
+def _direction_key(direction: dict | None, legacy: bool = False) -> str:
     """Changes whenever the shot list does, so a picture plan made from another one isn't reused."""
     if not direction:
         return ""
     import hashlib
 
-    return hashlib.sha1(json.dumps([direction.get("bible", ""), direction["sections"]], sort_keys=True,
-                                   ensure_ascii=False).encode()).hexdigest()[:12]
+    from .director import clean_section
+
+    if legacy:  # how plans made before 2026-10-15 were keyed: the shot list as sent, so formatting counted too
+        parts = [direction.get("bible", ""), direction["sections"]]
+    else:  # cleaned first: the app's copy and the saved one differ in whitespace and default fields, not content
+        parts = [str(direction.get("bible") or "").strip(), [clean_section(r) for r in direction["sections"]]]
+    return hashlib.sha1(json.dumps(parts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
+
+
+def plan_follows(plan: dict, direction: dict | None) -> bool:
+    """Was the picture plan made from this shot list (or from none, when there is none)?"""
+    key = plan.get("direction", "")
+    return key == _direction_key(direction) or (bool(direction) and key == _direction_key(direction, legacy=True))
 
 
 def load_art_plan(song_dir: Path) -> dict | None:
@@ -410,7 +574,7 @@ def plan_fits(plan: dict | None, style: str, pace: str, idea: str, slots: list[d
     """Can a render use this saved plan as it is (same look, pace, idea and shot list, the same pictures needed)?"""
     if not plan or plan.get("style") != style or plan.get("pictures") != pace or plan.get("idea", "") != idea.strip():
         return False
-    if plan.get("direction", "") != _direction_key(direction):
+    if not plan_follows(plan, direction):
         return False
     return slots is None or [s["section"] for s in plan.get("slots", [])] == [s["section"] for s in slots]
 
@@ -865,7 +1029,7 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
         shutil.copy(cached, mp3)
         if scene.cuts and scene.cuts_key == voiceover.voice_key(scene.narration, voice, rate):
             mp3, words = voiceover.apply_cuts(mp3, words, scene.cuts, work / f"voice_{i:02d}_cut.wav")
-        timed.append((mp3, words, duration(mp3) + SCENE_PAD_SEC))
+        timed.append((mp3, voiceover.with_emoji(scene.narration, words), duration(mp3) + SCENE_PAD_SEC))
 
     # 3. Footage (or AI pictures) + scene clips
     art_style = script.art_style if script.art_style and art_ready(script.art_style, log) else ""
@@ -879,48 +1043,98 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
             log(f"      ! couldn't plan the pictures ({type(e).__name__}: {str(e)[:120]}); drawing from the search words")
     # every scene's own clip first, then the second clips of split scenes: the live preview picks in this order too
     picked: list[Path | None] = []
+    if art_style and not script.art_subject.strip():  # planned before subjects were: name it now (once, saved)
+        try:
+            from . import director
+
+            found = director.find_subject(script.title, script.narration)
+            script.art_subject, script.art_avoid = found["subject"], script.art_avoid or found["avoid"]
+            if script.art_subject:
+                log(f"      real subject: {script.art_subject.split(':')[0]}")
+        except Exception as e:
+            log(f"      ! couldn't name the video's subject ({type(e).__name__}); pictures aren't checked")
+    subject = script.art_subject.strip() if art_style else ""
+    name = subject.split(":")[0].strip()
+    real_used: set[str] = set()
+
+    def wrong(picture: Path, prompt: str) -> bool:
+        """An AI picture meant to show the real subject that doesn't (Claude's check, cached with the picture)."""
+        if not name or name.split()[-1].lower() not in prompt.lower():
+            return False
+        try:
+            return _verdict(picture, subject, prompt)[0] < WRONG
+        except Exception:
+            return False
+
     for i, scene in enumerate(script.scenes):
         chosen = (ROOT / scene.media) if scene.media else None
+        prompt = scene.art_prompt or scene.visual_query
         if chosen and chosen.exists():
             footage = chosen
             log(f"      scene {i + 1}: your pick -> {footage.name}")
+            # your pick is what you saw in the preview, so it's never swapped; a drawing that shows the wrong animal
+            # is flagged in the editor (with "Use a real photo"), and noted here
+            if chosen.parent.name == "gen" and wrong(chosen, prompt):
+                log(f"      ! scene {i + 1}: the picture doesn't look like a {name}; kept as you chose it "
+                    "(use 'Use a real photo' in the editor to change it)")
         else:
             if chosen:
                 log(f"      scene {i + 1}: chosen file {scene.media} is missing, picking automatically")
             footage = None
             if art_style:
-                from . import imagegen
-
                 try:
                     log(f"      scene {i + 1}/{len(script.scenes)}: drawing")
-                    footage = imagegen.generate(scene.art_prompt or scene.visual_query, art_style, frame_size(None),
-                                                seed=scene.art_seed or None, log=log)
+                    footage, scene.art_seed, score, _ = draw_checked(
+                        prompt, art_style, frame_size(None), seed=scene.art_seed or None,
+                        subject=subject, avoid=script.art_avoid, log=log)
+                    if score is not None:
+                        log(f"      scene {i + 1}: {name} check {score}/10")
+                    if score is not None and score < WRONG:  # the image model can't draw it: the real thing
+                        footage = real_subject_media(subject, real_used, log) or footage
                 except Exception as e:
                     log(f"      ! scene {i + 1}: couldn't draw it ({type(e).__name__}: {str(e)[:120]}); using stock")
-            if not footage:
-                footage = picker.pick(scene.visual_query)
+            if not footage:  # the opening scene is the frame people see in the feed: the brightest, liveliest clip
+                footage = picker.pick(scene.visual_query, hook=i == 0)
             if not footage:  # no stock clip: Claude draws the scene instead of a plain gradient
                 footage = art.try_background(f"{scene.visual_query}\n{scene.narration}", frame_size(None), log)
             log(f"      scene {i + 1}: {scene.visual_query!r} -> {footage.name if footage else 'gradient'}")
         picked.append(footage)
+    if art_style:
+        script.save(job / "script.json")  # the takes kept (their seeds), so a re-render draws the same pictures
     second = {i: _existing(scene.media2) or picker.pick(scene.visual_query)
               for i, scene in enumerate(script.scenes) if scene.layout == "split"}
     base_fx = fx.default_effects(art_style, music=False) if art_style else ["vignette"]
-    clips = []
-    for i, (scene, (mp3, _, length)) in enumerate(zip(script.scenes, timed)):
+    clips, hits, scene_at = [], [], 0.0
+    for i, (scene, (mp3, words, length)) in enumerate(zip(script.scenes, timed)):
         broll = [(path, b.at, b.duration) for b in scene.broll
                  if (path := _existing(b.media)) and b.duration > 0 and b.at < length]
         clip = work / f"scene_{i:02d}.mp4"
         still = picked[i] is not None and picked[i].suffix.lower() in IMAGE_EXTS
+        # pacing: a hit on the punchy words (and always one in the hook, within its first 2 s), and cuts to new
+        # framings so a picture never sits unchanged for more than ~2 s (moving footage needs fewer)
+        impacts = pacing.impacts(words, scene.impacts, length, hook=i == 0)
+        cuts = pacing.cuts(length, impacts, pacing.CUT_EVERY if still else 2.6) if not broll else []
+        hits += [scene_at + t for t in impacts]
+        scene_at += length
         if still and scene.layout == "fill" and not broll and fx.available():
             # pictures get a real camera move (3D parallax where planned) and effects instead of a flat zoom
+            # no vignette on the opening shot: it should look bright in the feed
+            effects = [*(e for e in base_fx if not (i == 0 and e == "vignette")), *scene.effects]
+            if art_style and picked[i].parent.name != "gen":
+                # a real photo (in place of a drawing that got the subject wrong): the drawing's anime effects
+                # (sparkles, speed lines, glow) look fake on it; keep only film grain and the flash
+                effects = ["grain", *(e for e in scene.effects if e == "flash")]
             fx.render_shot(picked[i], length, clip, motion=scene.motion or MOTION_CYCLE[i % len(MOTION_CYCLE)],
-                           effects=[*base_fx, *scene.effects], voice=mp3, seed=i,
-                           beats=[0.0] if "flash" in scene.effects else [])  # flash = a hard cut into the scene
+                           effects=effects,
+                           voice=mp3, seed=i, impacts=impacts, cuts=cuts, focus=subject_focus(picked[i]),
+                           # flash = a hard cut into the scene; never on the opening frame (it's what the feed shows)
+                           beats=[0.0] if "flash" in scene.effects and i > 0 else [])
         else:
             render_scene(picked[i], mp3, length, clip, start=max(scene.media_start, 0.0), layout=scene.layout,
-                         footage2=second.get(i), broll=broll)
+                         footage2=second.get(i), broll=broll, bright=i == 0, impacts=impacts, cuts=cuts)
         clips.append(clip)
+    if hits:
+        log(f"      {len(hits)} hits, {len(pacing.sound_times(hits))} with a sound")
     release_gpu()
     concat(clips, work, "joined.mp4")
 
@@ -941,7 +1155,7 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
     log("[5/5] Final render")
     final = job / "video.mp4"
     track = pick_music(music, script.mood)
-    finalize(work, "joined.mp4", "captions.ass", final, track)
+    finalize(work, "joined.mp4", "captions.ass", final, track, effects=sfx.impact_track(pacing.sound_times(hits)))
     try:
         if 1 <= script.key_scene <= len(clips):  # the cover shows the key visual
             k = script.key_scene - 1
@@ -956,6 +1170,10 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
     meta["music"] = track.name if track else ""  # its credit goes into the description (music.credit)
     _save_meta(job, meta)
     tags = " ".join(f"#{h}" for h in script.hashtags)
-    (job / "post.txt").write_text(post_body(script.title, script.caption, tags, track, script.sources), encoding="utf-8")
+    from .commons import credit as photo_credit
+
+    photos = [photo_credit(p) for p in picked if p]  # real photos used (Wikimedia Commons) must be credited
+    (job / "post.txt").write_text(post_body(script.title, script.caption, tags, track, script.sources, photos),
+                                  encoding="utf-8")
     log(f"Done: {final}  ({t:.1f}s)")
     return final

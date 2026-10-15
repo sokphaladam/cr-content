@@ -8,6 +8,7 @@ import unicodedata
 from array import array
 from pathlib import Path
 
+from . import emoji
 from .config import CACHE_DIR
 from .render import duration, run
 from .tts import Word, synthesize
@@ -16,7 +17,37 @@ VOICE_CACHE = CACHE_DIR / "voiceover"
 
 
 def voice_key(text: str, voice: str, rate: str) -> str:
-    return hashlib.sha1(f"{voice}|{rate}|{text.strip()}".encode("utf-8")).hexdigest()[:20]
+    return hashlib.sha1(f"{voice}|{rate}|{spoken(text)}".encode("utf-8")).hexdigest()[:20]
+
+
+def spoken(text: str) -> str:
+    """What the voice reads: the narration without its emoji (they'd be read out as "face with tears of joy")."""
+    if not emoji.EMOJI.search(text):  # unchanged, so voiceovers cached before emoji keep their key (and cuts)
+        return text.strip()
+    return emoji.strip(text) or text.strip()
+
+
+def with_emoji(text: str, words: list[Word]) -> list[Word]:
+    """The spoken `words` with the narration's emoji put back, each after the word it follows (before the first word
+    when it opens the line), so the captions show them."""
+    found = list(emoji.EMOJI.finditer(text))
+    if not found or not words:
+        return words
+    ends, cursor = [], 0  # where each word ends in `text`
+    for w in words:
+        at = text.find(w.text, cursor)
+        cursor = at + len(w.text) if at >= 0 else cursor
+        ends.append(cursor if at >= 0 else -1)
+    out = [Word(w.text, w.start, w.end) for w in words]
+    for m in found:
+        before = [i for i, end in enumerate(ends) if 0 <= end <= m.start()]
+        if not before:
+            out[0].text = f"{m.group()} {out[0].text}"
+        else:
+            k = before[-1]
+            out[k].text += m.group() if ends[k] == m.start() else f" {m.group()}"
+            ends[k] = m.end()  # a run of emoji stays together
+    return out
 
 
 def keyword(text: str) -> str:
@@ -40,7 +71,7 @@ def scene_voice(text: str, voice: str, rate: str) -> tuple[Path, list[Word]]:
     VOICE_CACHE.mkdir(parents=True, exist_ok=True)
     tmp = mp3.with_suffix(".part")
     try:
-        words = synthesize(text.strip(), voice, tmp, rate=rate)
+        words = synthesize(spoken(text), voice, tmp, rate=rate)
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
@@ -54,12 +85,13 @@ def transcript(text: str, voice: str, rate: str) -> dict:
     sits in `text` (character offsets, so deleting a word can edit the narration)."""
     mp3, words = scene_voice(text, voice, rate)
     out, cursor = [], 0
-    for w in words:
+    for w, shown in zip(words, with_emoji(text, words)):
         at = text.find(w.text, cursor)
         span = [at, at + len(w.text)] if at >= 0 else None
         if span:
             cursor = span[1]
-        out.append({"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3), "at": span})
+        out.append({"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3), "at": span,
+                    "caption": shown.text})
     return {"key": voice_key(text, voice, rate), "duration": round(duration(mp3), 3), "words": out}
 
 

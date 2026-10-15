@@ -8,6 +8,7 @@ model, film-still sentences for the cinematic one, simple visual metaphors for f
 """
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import anthropic
 
@@ -21,6 +22,8 @@ SCHEMA = {
     "type": "object",
     "properties": {
         "bible": {"type": "string"},
+        "subject": {"type": "string"},
+        "avoid": {"type": "string"},
         "shots": {
             "type": "array",
             "items": {
@@ -35,7 +38,7 @@ SCHEMA = {
             },
         },
     },
-    "required": ["bible", "shots"],
+    "required": ["bible", "subject", "avoid", "shots"],
     "additionalProperties": False,
 }
 
@@ -68,6 +71,19 @@ video must look like ONE film: the same characters, world, palette and light log
 First write the visual bible: recurring character(s) with fixed appearance details, the world/setting, era,
 palette and lighting style. Keep it under 70 words. Then one shot per requested slot, in order.
 
+Real subjects must look right: viewers of fact videos notice a wrong animal at once ("that's not a mantis shrimp"),
+and it costs the creator their trust.
+- When the video is about a real animal, plant, object, vehicle or place, `subject` names it exactly (the precise
+  species or model, e.g. "peacock mantis shrimp", not "shrimp") followed by a colon and its 3-5 most recognisable
+  VISIBLE features, e.g. "peacock mantis shrimp: bright green and orange segmented body, eyes on stalks, folded
+  hammer-like club arms at the front, flat fan tail". Otherwise (fiction, people, abstract topics) leave it "".
+- Every prompt that shows the subject names it exactly and repeats those features, written as concrete visual
+  details the image model can draw (never only the name: image models don't know rare species).
+- `avoid`: comma-separated things the image model tends to draw instead (look-alikes and parts it gets confused
+  by), e.g. "snail shell, hermit crab, lobster, crayfish, isopod, beetle, plain orange shrimp". "" if no subject.
+- Shot 1 SHOWS the hook's promised action at its peak, the very moment it happens (the club striking the shell,
+  the shell shattering, the bubble flashing), close up and bright: never the subject just sitting there.
+
 Camera moves:
 - push_in: emotion, focus, a reveal; pull_out: ending, loneliness, scale
 - pan_left / pan_right: wide landscapes, cityscapes, travel; tilt_up / tilt_down: tall subjects, sky, buildings
@@ -96,7 +112,7 @@ def _client(client: anthropic.Anthropic | None) -> anthropic.Anthropic:
     return client or make_client()
 
 
-def _ask(task: str, count: int, style: str, client: anthropic.Anthropic | None) -> tuple[str, list[ShotPlan]]:
+def _ask(task: str, count: int, style: str, client: anthropic.Anthropic | None) -> tuple[str, list[ShotPlan], dict]:
     response = _client(client).beta.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=16000,
@@ -116,19 +132,97 @@ def _ask(task: str, count: int, style: str, client: anthropic.Anthropic | None) 
     while len(shots) < count:  # rare: pad by reusing from the start with a different move
         src = shots[len(shots) % max(len(shots), 1)]
         shots.append(ShotPlan(src.prompt, "pull_out" if src.motion != "pull_out" else "push_in", src.effects))
-    return data["bible"].strip(), shots[:count]
+    return data["bible"].strip(), shots[:count], {"subject": data.get("subject", "").strip(),
+                                                  "avoid": data.get("avoid", "").strip()}
 
 
 def plan_scenes(title: str, scenes: list[dict], style: str, idea: str = "", bible: str = "",
-                client: anthropic.Anthropic | None = None) -> tuple[str, list[ShotPlan]]:
+                client: anthropic.Anthropic | None = None) -> tuple[str, list[ShotPlan], dict]:
     """One shot per scene of a short. scenes: [{"narration", "visual_query"}]. `bible`: an existing visual bible
-    (perhaps edited by hand) to keep instead of writing a new one."""
+    (perhaps edited by hand) to keep instead of writing a new one. Also returns {"subject", "avoid"}: the real
+    subject every picture must get right, and what the image model should not draw instead."""
     listing = "\n".join(f"{i + 1}. narration: {s['narration']!r}" + (f" | idea: {s['visual_query']}" if s.get("visual_query") else "")
                         for i, s in enumerate(scenes))
     task = (f"A vertical 9:16 short video titled {title!r}." + (f"\nThe creator's direction: {idea}" if idea else "")
             + (f"\n\nUse this visual bible exactly as written (return it unchanged as `bible`):\n{bible}" if bible else "")
             + f"\n\nScenes (the narration may be in Khmer; the pictures must illustrate what is being said):\n{listing}")
     return _ask(task, len(scenes), style, client)
+
+
+SUBJECT_SCHEMA = {
+    "type": "object",
+    "properties": {"subject": {"type": "string"}, "avoid": {"type": "string"}},
+    "required": ["subject", "avoid"],
+    "additionalProperties": False,
+}
+
+
+def find_subject(title: str, narration: str, client: anthropic.Anthropic | None = None) -> dict:
+    """{"subject", "avoid"} for a video planned before subjects were (see SYSTEM): the real animal/object/place it is
+    about with its visible features, and the look-alikes an image model draws instead; both "" when there is none."""
+    task = (f"A short fact video titled {title!r}. Its narration: {narration}\n\n"
+            "subject: when the video is about one real animal, plant, object, vehicle or place, its exact name (the "
+            "precise species or model) followed by a colon and its 3-5 most recognisable VISIBLE features, e.g. "
+            "\"peacock mantis shrimp: bright green and orange segmented body, eyes on stalks, folded hammer-like club "
+            "arms at the front, flat fan tail\"; else \"\". avoid: comma-separated look-alikes an image model tends to "
+            "draw instead, or \"\".")
+    response = _client(client).beta.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": SUBJECT_SCHEMA}},
+        messages=[{"role": "user", "content": task}],
+    )
+    data = json.loads(next(b.text for b in response.content if b.type == "text"))
+    return {"subject": data["subject"].strip(), "avoid": data["avoid"].strip()}
+
+
+CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {"score": {"type": "integer"}, "problem": {"type": "string"},
+                   "x": {"type": "number"}, "y": {"type": "number"}},
+    "required": ["score", "problem", "x", "y"],
+    "additionalProperties": False,
+}
+
+
+def check_picture(image: Path, subject: str, prompt: str = "",
+                  client: anthropic.Anthropic | None = None) -> tuple[int, str, tuple[float, float]]:
+    """How well a picture shows the real `subject` ("name: visible features"), 0-10, what's wrong ("" when nothing
+    is), and where the subject is (its centre, as fractions of the width and height; the middle when it's not
+    there). An expert's eye: would a viewer who knows this animal/object say "that's not a ..."?"""
+    import base64
+    import io
+
+    from PIL import Image
+
+    pic = Image.open(image).convert("RGB")
+    pic.thumbnail((768, 768))
+    buf = io.BytesIO()
+    pic.save(buf, "JPEG", quality=85)
+    task = (f"This picture was drawn for a short fact video. It must clearly show: {subject}\n"
+            + (f"(The picture was asked for: {prompt})\n" if prompt else "")
+            + "Would a viewer who knows this subject recognise it at once, or comment \"that's not a "
+            + subject.split(":")[0].strip() + "\"? Judge only whether the subject is right (anatomy, colours, "
+            "the features listed), not the art style. score: 0 = a different animal/thing or not visible, 5 = "
+            "recognisable but key features wrong or missing, 8 = clearly right, 10 = perfect. problem: one short "
+            "sentence naming what's wrong, or \"\" when the score is 8 or more. x, y: the centre of the subject (its "
+            "head or the part a viewer looks at first) as fractions of the picture's width and height, 0..1.")
+    response = _client(client).beta.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": CHECK_SCHEMA}},
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                         "data": base64.b64encode(buf.getvalue()).decode()}},
+            {"type": "text", "text": task}]}],
+    )
+    data = json.loads(next(b.text for b in response.content if b.type == "text"))
+    centre = tuple(min(max(float(data.get(k) if data.get(k) is not None else 0.5), 0.0), 1.0) for k in ("x", "y"))
+    return max(0, min(int(data["score"]), 10)), data["problem"].strip(), centre
 
 
 def plan_song(title: str, mood: str, genre: str, slots: list[dict], style: str, aspect: str, idea: str = "",
@@ -153,7 +247,8 @@ def plan_song(title: str, mood: str, genre: str, slots: list[dict], style: str, 
                "\nChoruses should feel bigger: wider shots, stronger light, flash/sparkles; verses more intimate.")
             + (f"\n\nUse this visual bible exactly as written (return it unchanged as `bible`):\n{bible}" if bible else "")
             + f"\n\nPicture slots (lyrics may be in Khmer; illustrate their meaning):\n{listing}")
-    return _ask(task, len(slots), style, client)
+    bible, shots, _ = _ask(task, len(slots), style, client)
+    return bible, shots
 
 
 # ---------- turning a creator's concept into a shot list ----------

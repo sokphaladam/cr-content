@@ -3,6 +3,7 @@
 import { Pause, Play, Plus, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, type MusicResult } from "@/lib/api";
+import { USE_HINT, USE_LABEL, useMonetizableOnly, type MusicUse } from "@/lib/musicLicence";
 import { Button, IconButton, Spinner } from "./ui";
 
 const length = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}`;
@@ -28,6 +29,11 @@ export function MusicFinder({
   const [playing, setPlaying] = useState<string | null>(null);
   const [adding, setAdding] = useState<string | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
+  const [safeOnly, setSafeOnly] = useMonetizableOnly();
+  // an older engine sends only `commercial`
+  const licenceOf = (t: MusicResult): MusicUse => t.use ?? (t.commercial ? "ok" : "nc");
+  const shown = results && safeOnly ? results.filter((t) => licenceOf(t) === "ok") : results;
+  const hidden = (results?.length ?? 0) - (shown?.length ?? 0);
 
   useEffect(() => () => audio.current?.pause(), []);
 
@@ -113,8 +119,17 @@ export function MusicFinder({
             </div>
           )}
           {results && results.length > 0 && (
+            <label className="flex items-center gap-1.5 text-sm text-ink-soft">
+              <input type="checkbox" className="size-3.5" checked={safeOnly} onChange={(e) => setSafeOnly(e.target.checked)} />
+              Only music I can use in monetized videos{safeOnly && hidden > 0 ? ` (${hidden} hidden)` : ""}
+            </label>
+          )}
+          {results && results.length > 0 && shown?.length === 0 && (
+            <p className="m-0 text-sm text-ink-soft">All of these are non-commercial or no-derivatives. Try other words, or untick the filter to see them.</p>
+          )}
+          {shown && shown.length > 0 && (
             <ul className="m-0 grid max-h-64 list-none gap-1 overflow-y-auto p-0">
-              {results.map((t) => (
+              {shown.map((t) => (
                 <li key={t.id} className="flex items-center gap-2 rounded-lg bg-panel px-2 py-1.5">
                   <IconButton label={playing === t.id ? `Stop ${t.name}` : `Listen to ${t.name}`} onClick={() => listen(t)}>
                     {playing === t.id ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
@@ -122,9 +137,9 @@ export function MusicFinder({
                   <span className="grid min-w-0 flex-1 leading-tight">
                     <span className="flex min-w-0 items-center gap-1.5">
                       <span className="truncate text-base font-semibold">{t.name}</span>
-                      {!t.commercial && (
-                        <span title="Non-commercial licence: not for monetized videos" className="shrink-0 rounded bg-warn/15 px-1 text-2xs font-semibold text-warn">
-                          Non-commercial
+                      {licenceOf(t) !== "ok" && (
+                        <span title={USE_HINT[licenceOf(t) as Exclude<MusicUse, "ok">]} className="shrink-0 rounded bg-warn/15 px-1 text-2xs font-semibold text-warn">
+                          {USE_LABEL[licenceOf(t) as Exclude<MusicUse, "ok">]}
                         </span>
                       )}
                     </span>

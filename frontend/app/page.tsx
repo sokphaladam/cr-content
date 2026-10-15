@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CS
 import { api, type Aspect, type DraftSummary, type Job, type Lang, type MusicVideoSettings, type Options, type SongScript, type VideoDetail, type VideoSummary } from "@/lib/api";
 import { CreateForm } from "@/components/CreateForm";
 import { Library, type LibraryTab } from "@/components/Library";
-import { PreviewPane, settingsOf, type PreviewView } from "@/components/PreviewPane";
+import { ExportCards, PreviewPane, settingsOf, type PreviewView } from "@/components/PreviewPane";
 import { LyricsTiming } from "@/components/LyricsTiming";
 import { NavRail, type AppView } from "@/components/NavRail";
 import { Settings } from "@/components/Settings";
@@ -58,6 +58,8 @@ function Studio() {
   const [jobTitle, setJobTitle] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false); // slide-over below laptop width
   const [libraryHidden, setLibraryHidden] = useState(false); // collapsed from the rail at laptop width and up
+  // the draft editor uses the whole width: its library column only shows when opened from the rail
+  const [libraryInEditor, setLibraryInEditor] = useState(false);
   // the library and preview panes can be dragged wider or narrower; the widths are remembered
   const libraryPane = usePaneWidth("library", 288, 240, 440);
   const previewPane = usePaneWidth("preview", 340, 300, 560);
@@ -438,7 +440,12 @@ function Studio() {
   const rendering = job !== null && (job.status === "queued" || job.status === "running");
   const activeIndex = draft ? Math.max(0, draft.scenes.findIndex((s) => s.uid === activeUid)) : 0;
   const activeScene = draft ? (draft.scenes[activeIndex] ?? null) : null;
-  const hasPreview = !!draft || !!song || !!timing || rendering || job?.status === "error" || !!detail?.video || !!detail?.audio;
+  // The lyric timing editor has its own player, monitor and music video options: the preview pane would only repeat
+  // them (and play the song a second time), so it shows only while a job is running or has failed.
+  const timingOpen = !draft && !song && !!timing;
+  const hasPreview = timingOpen
+    ? rendering || job?.status === "error"
+    : !!draft || !!song || rendering || job?.status === "error" || !!detail?.video || !!detail?.audio;
 
   const library = (
     <Library
@@ -469,8 +476,12 @@ function Studio() {
     />
   );
 
-  const preview = (
+  const editing = !!draft && !!options && view === "studio";
+  const sidePreview = hasPreview && !editing; // the draft editor has its own player in the middle
+  const showLibrary = editing ? libraryInEditor : !libraryHidden;
+  const renderPreview = (variant: "full" | "stage") => (
     <PreviewPane
+      variant={variant}
       live={
         draft
           ? {
@@ -526,6 +537,9 @@ function Studio() {
       onDeleteVideo={deleteVideo}
     />
   );
+  const preview = renderPreview("full");
+  // the rendered video's export cards, in the draft editor's inspector
+  const exportDetail = detail?.video && detail.kind !== "song" && detail.kind !== "music_video" ? detail : null;
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -533,18 +547,19 @@ function Studio() {
       <div className="hidden shrink-0 lg:block">
         <NavRail
           view={view}
-          libraryOpen={!libraryHidden}
+          libraryOpen={showLibrary}
           options={options}
           onNew={startNew}
           onLibrary={() => {
             if (view === "settings") {
               setView("studio");
               setLibraryHidden(false);
-            } else setLibraryHidden((h) => !h);
+            } else if (editing) setLibraryInEditor((open) => !open);
+            else setLibraryHidden((h) => !h);
           }}
           onSettings={() => setView((v) => (v === "settings" ? "studio" : "settings"))}
           onCampaigns={() => setView((v) => (v === "campaigns" ? "studio" : "campaigns"))}
-          onPreview={view === "studio" && hasPreview ? () => setPreviewOpen(true) : undefined}
+          onPreview={view === "studio" && sidePreview ? () => setPreviewOpen(true) : undefined}
         />
       </div>
       <div className="flex min-w-0 flex-1 flex-col">
@@ -553,7 +568,7 @@ function Studio() {
           onOpenSettings={() => setView((v) => (v === "settings" ? "studio" : "settings"))}
           onOpenCampaigns={() => setView((v) => (v === "campaigns" ? "studio" : "campaigns"))}
           onOpenPreview={() => setPreviewOpen(true)}
-          showPreviewButton={view === "studio" && hasPreview}
+          showPreviewButton={view === "studio" && sidePreview}
           setupNeeded={!!options && (!options.keys.anthropic || !options.keys.stock)}
         />
 
@@ -588,12 +603,12 @@ function Studio() {
           hidden={view !== "studio"}
           style={{ "--lib-w": `${libraryPane.width}px`, "--prev-w": `${previewPane.width}px` } as CSSProperties}
           className={`grid min-h-0 flex-1 grid-cols-1 ${
-            libraryHidden
-              ? hasPreview ? "wide:grid-cols-[minmax(0,1fr)_var(--prev-w)]" : ""
-              : `lg:grid-cols-[var(--lib-w)_minmax(0,1fr)] ${hasPreview ? "wide:grid-cols-[var(--lib-w)_minmax(0,1fr)_var(--prev-w)]" : ""}`
+            !showLibrary
+              ? sidePreview ? "wide:grid-cols-[minmax(0,1fr)_var(--prev-w)]" : ""
+              : `lg:grid-cols-[var(--lib-w)_minmax(0,1fr)] ${sidePreview ? "wide:grid-cols-[var(--lib-w)_minmax(0,1fr)_var(--prev-w)]" : ""}`
           }`}
         >
-          {!libraryHidden && (
+          {showLibrary && (
             <aside aria-label="Library" className="relative hidden min-h-0 border-r border-line bg-paper lg:block">
               {library}
               <ResizeHandle
@@ -723,6 +738,21 @@ function Studio() {
                 activeUid={activeUid}
                 timeline={timeline}
                 onMusicAdded={reloadOptions}
+                stage={renderPreview("stage")}
+                exportKey={exportDetail?.name ?? null}
+                exportPanel={
+                  exportDetail && (
+                    <ExportCards
+                      detail={exportDetail}
+                      onThumbnail={(summary) => {
+                        setDetail((d) => (d && d.name === summary.name ? { ...d, ...summary } : d));
+                        setVideos((vs) => vs?.map((v) => (v.name === summary.name ? summary : v)) ?? vs);
+                      }}
+                      onDeleteVideo={deleteVideo}
+                      onOpenSettings={() => setView("settings")}
+                    />
+                  )
+                }
                 history={{ canUndo: historyFlags[0] === "1", canRedo: historyFlags[1] === "1", undo: () => step("undo"), redo: () => step("redo") }}
                 onActive={(uid, seek = true) => {
                   setActiveUid(uid);
@@ -752,7 +782,7 @@ function Studio() {
             )}
           </main>
 
-          {hasPreview && (
+          {sidePreview && (
             <aside aria-label="Preview" className="relative hidden min-h-0 border-l border-line bg-paper wide:block">
               <div className="relative h-full overflow-y-auto">{preview}</div>
               <ResizeHandle
@@ -774,7 +804,7 @@ function Studio() {
           </Drawer>
         </div>
         <div className="wide:hidden">
-          <Drawer open={previewOpen && hasPreview && view === "studio"} side="right" onClose={() => setPreviewOpen(false)} label="Preview">
+          <Drawer open={previewOpen && sidePreview && view === "studio"} side="right" onClose={() => setPreviewOpen(false)} label="Preview">
             {preview}
           </Drawer>
         </div>

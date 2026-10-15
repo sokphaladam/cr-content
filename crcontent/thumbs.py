@@ -40,6 +40,26 @@ def _frame_score(px: bytes) -> float:
             + 0.2 * min(contrast / 60, 1) + 0.2 * exposure)
 
 
+def opening_score(video: Path, seconds: float = 1.5, samples: int = 6) -> float:
+    """0..1 how well a clip works as a video's first frame in the feed: its opening is bright, colourful and sharp
+    (frame appeal), and moving (a still or near-still opening reads as a photo and gets scrolled past)."""
+    proc = subprocess.run(
+        ["ffmpeg", "-v", "error", "-t", f"{seconds:.2f}", "-i", str(video), "-an", "-vf",
+         f"fps={samples / seconds:.3f},scale={SAMPLE_W}:{SAMPLE_H}:force_original_aspect_ratio=increase,"
+         f"crop={SAMPLE_W}:{SAMPLE_H}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        stdin=subprocess.DEVNULL, capture_output=True, check=True)
+    size = SAMPLE_W * SAMPLE_H * 3
+    frames = [proc.stdout[k * size:(k + 1) * size] for k in range(len(proc.stdout) // size)]
+    if not frames:
+        return 0.0
+    appeal = sum(_frame_score(f) for f in frames) / len(frames)
+    lumas = [f[1::3] for f in frames]  # green is close enough to luma for brightness and change
+    bright = sum(sum(y) / len(y) for y in lumas) / len(lumas)
+    motion = (sum(sum(abs(a - b) for a, b in zip(lumas[k], lumas[k + 1])) / len(lumas[k])
+                  for k in range(len(lumas) - 1)) / (len(lumas) - 1)) if len(lumas) > 1 else 0.0
+    return 0.55 * appeal + 0.25 * min(motion / 18, 1) + 0.2 * min(bright / 130, 1)
+
+
 def best_frames(video: Path, count: int = 4, samples: int = 32) -> list[float]:
     """Times (s) of the `count` best-looking frames, spread across the video so the picks aren't near-duplicates."""
     length = duration(video)

@@ -43,6 +43,9 @@ class Scene(BaseModel):
     # Transcript edits: words shown in the keyword colour in the captions (voiceover.keyword() form), and stretches
     # (seconds) cut out of the voiceover, which only apply to the voiceover they were made on (cuts_key).
     keywords: list[str] = []
+    # words of the narration that land with a hit (zoom punch, shake, flash, sound); pacing.py also finds punchy
+    # words by itself
+    impacts: list[str] = []
     cuts: list[tuple[float, float]] = []
     cuts_key: str = ""
     # Timeline edits: where the footage starts (seconds into the clip), how it fills the frame, the second clip of a
@@ -81,6 +84,10 @@ class VideoScript(BaseModel):
     # art_bible: the director's notes (characters, world, palette) that keep every picture in one style
     art_style: str = ""
     art_bible: str = ""
+    # the real subject the pictures must get right ("peacock mantis shrimp: green and orange body, eyes on stalks..."),
+    # checked by Claude on every picture that shows it; and what the image model must not draw instead
+    art_subject: str = ""
+    art_avoid: str = ""
 
     @property
     def narration(self) -> str:
@@ -106,8 +113,9 @@ SCHEMA = {
                     "narration": {"type": "string"},
                     "visual_query": {"type": "string"},
                     "on_screen_text": {"type": "string"},
+                    "impacts": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["narration", "visual_query", "on_screen_text"],
+                "required": ["narration", "visual_query", "on_screen_text", "impacts"],
                 "additionalProperties": False,
             },
         },
@@ -121,21 +129,40 @@ SCHEMA = {
 SYSTEM = """You write scripts for faceless short-form vertical videos (TikTok, Instagram Reels, YouTube Shorts).
 
 What makes these videos perform:
-- Scene 1 is the hook. It must stop the scroll within 2 seconds: a surprising claim, a question, or a bold promise. Never open with "Hey guys", "In this video", or a greeting.
-- Every scene delivers one concrete, specific idea. Use numbers, names, and vivid details instead of generalities.
-- Short spoken sentences. It is heard, not read.
-- Build curiosity so viewers keep watching; save a strong payoff for the end.
-- The last scene closes with a short call to action (follow for more, comment your answer, etc.).
+- In the feed nobody sees the title: they see the first frame for less than a second. So scene 1 opens with the
+  PAYOFF, not the setup. State the claim itself in the first sentence, while the picture shows it, so within one
+  second the viewer knows what the video claims and wants the reason. Good: "If your cat sleeps like THIS, it trusts
+  you completely." Bad: "Here's why your cat sleeps like this..." Never open with "Hey guys", "In this video", "Did
+  you know", a greeting or background.
+- Then explain: every later scene delivers one concrete, specific reason or detail. Numbers, names, vivid details.
+- Short spoken sentences. It is heard, not read. No filler: every line earns its second.
+- Make it loop. The last scene ends with a line that leads straight back into the opening, so the end runs into the
+  start without a seam: e.g. the last line asks the question that the first line answers, or is a half sentence the
+  first line completes ("...and that's exactly why" -> "If your cat sleeps like THIS..."). No sign-off, no "follow
+  for more", no "thanks for watching" at the end; it would break the loop (the call to action goes in the caption).
 - Only state facts you are confident are true.
 
 Field rules:
 - narration: the exact words spoken, written in the requested language.
 - visual_query: always ENGLISH, 2-4 concrete nouns that a stock video site would have (e.g. "octopus underwater", "city night traffic"). No abstract concepts.
-- on_screen_text: a 1-5 word headline for the scene in the requested language, or "" if not needed.
+  Scene 1's query must find a BRIGHT, CLOSE-UP, MOVING shot of the subject doing the thing the claim is about,
+  ideally something funny or strange (e.g. "cat sleeping belly up", "cat close up funny"), never a dark, wide or
+  empty shot.
+- on_screen_text: scene 1 always gets one: the hook as a short, bold line of 2-6 words in the requested language that
+  states the claim (e.g. "IT TRUSTS YOU" or "This means LOVE"); no emoji (the video's fonts can't draw them; they
+  belong in the caption). Later scenes: "" unless a number or a
+  name really helps; less text on screen reads better.
+- impacts: 0-2 single words copied exactly from this scene's narration that should land with a HIT on screen (a zoom
+  punch, a flash and a sound): the action or the payoff word ("punches", "boils", "smashes", "faster"). Scene 1
+  always gets one, early in its first sentence: the hook's promised action must be SHOWN hitting in the first two
+  seconds, not just described.
 - title: 30-60 characters (Khmer: under about 40), specific and front-loaded: a number, a name, a vivid detail or a
   clear promise. Title Case for English, no hashtags, no clickbait the video doesn't deliver.
-- caption: the social post caption in the requested language: a first line that hooks on its own, one line that
-  teases the payoff, then a question that is easy to answer to drive comments. Short lines, 0-2 emoji.
+- caption: the social post caption in the requested language: a first line that hooks on its own with the most
+  surprising fact (never a repeat or rewording of the title, which shows right above it), one line that teases the
+  payoff, then a question that is easy to answer to drive comments. When the hook simplifies something for effect
+  ("the water boils"), name the precise term once in passing, e.g. "(technically called cavitation)". Short lines,
+  0-2 emoji.
 - hashtags: 4-7 tags without the # sign, mixing broad, topic and niche tags; never fyp, viral, foryou or trending."""
 
 def make_client() -> anthropic.Anthropic:
@@ -150,7 +177,7 @@ The language is Khmer. Write natural spoken Khmer. Put a normal space between ph
 because the captions are timed per space-separated phrase; never leave a phrase longer than about 25 characters."""
 
 
-def generate_script(topic: str, lang: str = "en", scenes: int = 6, seconds: int = 45,
+def generate_script(topic: str, lang: str = "en", scenes: int = 4, seconds: int = 20,
                     style: str = "", client: anthropic.Anthropic | None = None) -> VideoScript:
     profile = LANGS[lang]
     client = client or make_client()
@@ -217,6 +244,56 @@ def suggest_queries(narration: str, current: str = "", client: anthropic.Anthrop
         raise RuntimeError("Claude declined to suggest footage for this scene.")
     text = next(b.text for b in response.content if b.type == "text")
     return [q.strip() for q in json.loads(text)["queries"] if q.strip()][:6]
+
+
+TOPICS_SCHEMA = {
+    "type": "object",
+    "properties": {"topics": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"format": {"type": "string"}, "topic": {"type": "string"}, "hook": {"type": "string"}},
+        "required": ["format", "topic", "hook"],
+        "additionalProperties": False,
+    }}},
+    "required": ["topics"],
+    "additionalProperties": False,
+}
+
+# hook styles worth testing against each other: one channel finds which one breaks out by mixing them
+TOPIC_FORMATS = ["payoff-first claim (\"If your X does THIS, it means...\")", "rank these", "which one is...",
+                 "surprising ability", "myth vs fact", "this vs that", "POV / what it's really like",
+                 "quiz: guess before the end"]
+
+
+def suggest_topics(niche: str, lang: str, recent: list[str], client: anthropic.Anthropic | None = None) -> list[dict]:
+    """Ideas for the next Shorts in a niche, in a mix of formats, none a near-repeat of the channel's recent titles.
+    Each: {format, topic (what to give the script writer), hook (the opening line, payoff first)}."""
+    client = client or make_client()
+    listing = "\n".join(f"- {t}" for t in recent[:60]) or "(none yet)"
+    prompt = (
+        f"Niche / channel subject: {niche or 'the same subject as the recent videos below'}\n"
+        f"Language of the videos: {LANGS[lang].name}\n\n"
+        f"Recent video titles on this channel:\n{listing}\n\n"
+        "Suggest 8 ideas for the next 15-25 second YouTube Shorts. Rules:\n"
+        "- Vary the format: use at least 5 different formats from: " + "; ".join(TOPIC_FORMATS) + ".\n"
+        "- Never a near-repeat of a recent title: a different angle, not the same question reworded (\"why your cat"
+        " ignores you\" and \"why your cat ignores your dessert\" count as the same).\n"
+        "- Each must work as a short: one clear claim or question, visual (stock footage of it exists), and true.\n"
+        "- format: the format's short name in English. topic: one line for the script writer, in English, saying"
+        " the angle and the format. hook: the video's first spoken line, in the video's language, payoff first"
+        " (states the claim immediately, under 12 words)."
+    )
+    response = client.beta.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=4000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": TOPICS_SCHEMA}},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if response.stop_reason == "refusal":
+        raise RuntimeError("Claude declined to suggest topics for this niche.")
+    text = next(b.text for b in response.content if b.type == "text")
+    return [t for t in json.loads(text)["topics"] if t["topic"].strip()][:8]
 
 
 TRANSLATE_SCHEMA = {

@@ -83,7 +83,9 @@ function Footage({ seg, offset, playing }: { seg: Segment; offset: number; playi
   const scene = seg.scene;
   const src = seg.footage;
   const time = offset + (scene.media_start ?? 0);
-  const grade = "brightness-[0.94] saturate-[1.1]";
+  // like crcontent/render.py: the opening scene is lifted (it's the frame people see in the feed), the rest darkened
+  // a little so white captions stay readable
+  const grade = seg.index === 0 ? "brightness-[1.03] contrast-[1.06] saturate-[1.25]" : "brightness-[0.94] saturate-[1.1]";
   if (scene.layout === "split") {
     return (
       <div className="absolute inset-0 grid grid-rows-2">
@@ -190,7 +192,10 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
   const offset = pos.t - cutBefore(seg.cuts, pos.t);
   const px = LANG_CAPTION[lang].size * SIZE[style.size];
   const font = fontOf(style, lang);
-  const caption = captionAt(seg, pos.t, style.words || LANG_CAPTION[lang].words, !playing);
+  // like the render: the hook (the opening scene's headline) is the only text while it's on screen
+  const headline = scene.on_screen_text.trim(); // emoji included: the render draws them in colour
+  const hookOnly = seg.index === 0 && !!headline;
+  const caption = hookOnly ? null : captionAt(seg, pos.t, style.words || LANG_CAPTION[lang].words, !playing);
   const keys = new Set(scene.keywords ?? []);
   const counted = segments.filter((s) => s.length > 0);
   const broll = (scene.broll ?? []).find((b) => offset >= b.at && offset < b.at + b.duration);
@@ -214,7 +219,7 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
           <Media src={broll.media} time={offset - broll.at} playing={playing} className="object-cover brightness-[0.94] saturate-[1.1]" />
         </div>
       )}
-      {scene.on_screen_text && (
+      {headline && (
         <Draggable
           frame={frame}
           label="Drag to move the headlines"
@@ -222,12 +227,19 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
           className="absolute left-1/2 w-max max-w-[85%] -translate-x-1/2"
           style={{ top: `${style.headline_y * 100}%` }}
         >
+          {/* the opening scene's headline is the hook: bigger, dark on a white box (the render's Hook style) */}
           <span
             lang={lang}
-            style={{ fontFamily: font, fontSize: cq(px * 0.8), padding: `${cq(px * 0.8 * 0.15)} ${cq(px * 0.8 * 0.35)}` }}
-            className="block bg-black/90 text-center leading-tight font-bold uppercase"
+            style={
+              seg.index === 0
+                ? { fontFamily: font, fontSize: cq(px * 0.8 * 1.3), padding: `${cq(px * 1.04 * 0.12)} ${cq(px * 1.04 * 0.3)}` }
+                : { fontFamily: font, fontSize: cq(px * 0.8), padding: `${cq(px * 0.8 * 0.15)} ${cq(px * 0.8 * 0.35)}` }
+            }
+            className={`block text-center leading-tight font-bold uppercase ${
+              seg.index === 0 ? "animate-[caption-pop_120ms_ease-out] bg-white text-[#141414]" : "bg-black/90"
+            }`}
           >
-            {scene.on_screen_text}
+            {headline}
           </span>
         </Draggable>
       )}
@@ -251,7 +263,7 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
             <span style={letterStyle(style, px)}>
               {caption.words.map((w, j) => (
                 <span key={j} style={{ color: j === caption.spoken && (playing || pos.t >= w.start) ? style.highlight : keys.has(keyword(w.text)) ? style.keyword : undefined }}>
-                  {cased(w.text, style, lang)}
+                  {cased(w.caption ?? w.text, style, lang)}
                   {j < caption.words.length - 1 ? " " : ""}
                 </span>
               ))}
@@ -294,7 +306,7 @@ function TextItem({
       style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%` }}
     >
       <span lang={lang} style={{ fontFamily: font, fontSize: cq(px), color: t.color, ...look }} className="block text-center leading-tight font-bold">
-        {t.text}
+        {t.text.trim()}
       </span>
     </Draggable>
   );

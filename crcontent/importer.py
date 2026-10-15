@@ -12,7 +12,7 @@ from .config import CLAUDE_MODEL, LANGS
 from .script import KHMER_NOTE, SCHEMA, Scene, VideoScript, make_client
 
 KHMER_CHARS = re.compile(r"[ក-៿]")
-# emoji & pictographs: the caption fonts can't draw them, they'd render as empty boxes
+# emoji & pictographs: pasted scripts are full of decorative ones; kept only in on-screen text (emoji.py draws them)
 EMOJI = re.compile(
     "[\U0001F000-\U0001FAFF\U000023E9-\U000023FA\U00002600-\U000027BF\U00002B00-\U00002BFF\U0001F1E6-\U0001F1FF"
     "\U0000FE0F\U0000200D\U000020E3]+"
@@ -40,7 +40,7 @@ Rules:
 - visual_query: 2-4 concrete ENGLISH words a stock footage site would have, based on the scene's visual description
   (e.g. "Close-up of an octopus eye staring at the camera" -> "octopus eye closeup"). Never describe animations,
   icons or text overlays; pick the real-world subject instead.
-- on_screen_text: the scene's on-screen text without emojis, or "" if none.
+- on_screen_text: the scene's on-screen text (keep its emoji), or "" if none.
 - title: the script's title, or a short catchy one if missing.
 - caption: the post caption if the script has one; otherwise write a 1-2 sentence caption in the script's language
   that ends with a question.
@@ -144,7 +144,7 @@ def parse_basic(text: str) -> VideoScript:
 
 def _clean(script: VideoScript) -> VideoScript:
     for s in script.scenes:
-        s.on_screen_text = strip_emoji(s.on_screen_text)
+        s.on_screen_text = s.on_screen_text.strip()  # emoji are drawn in colour (emoji.py)
         s.narration = strip_emoji(s.narration)
     script.title = strip_emoji(script.title)
     script.hashtags = [h.lstrip("#").replace(" ", "") for h in script.hashtags if h.strip("#")]

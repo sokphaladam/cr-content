@@ -2,7 +2,7 @@
 
 import { ClipboardPaste, Music, PenLine, Sparkles, Upload } from "lucide-react";
 import { useState } from "react";
-import { api, type Aspect, type Lang, type Options, type SongScript, type VideoScript } from "@/lib/api";
+import { api, type Aspect, type Lang, type Options, type SongScript, type TopicIdea, type VideoScript } from "@/lib/api";
 import { ExcelPlanForm } from "./ExcelPlanForm";
 import { Button, Field, Message, Segmented, Tabs } from "./ui";
 
@@ -147,8 +147,10 @@ export function CreateForm({
   const [songSource, setSongSource] = useState<"own" | "ai">("own");
   const [topic, setTopic] = useState("");
   const [lang, setLang] = useState<Lang>("en");
-  const [seconds, setSeconds] = useState(45);
-  const [scenes, setScenes] = useState(6);
+  // short by default: 15-25 s Shorts get watched to the end (and rewatched) far more than 45-60 s ones
+  const [seconds, setSeconds] = useState(20);
+  const [scenes, setScenes] = useState(4);
+  const [songSeconds, setSongSeconds] = useState(45);
   const [style, setStyle] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
@@ -157,6 +159,22 @@ export function CreateForm({
   const [importMsg, setImportMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
 
   const [vocal, setVocal] = useState("");
+  const [ideas, setIdeas] = useState<TopicIdea[] | null>(null);
+  const [ideasBusy, setIdeasBusy] = useState(false);
+  const [ideasError, setIdeasError] = useState("");
+
+  /** Topic ideas in a mix of formats; what's typed in Topic is taken as the niche. */
+  async function suggestTopics() {
+    setIdeasBusy(true);
+    setIdeasError("");
+    try {
+      setIdeas((await api.topicIdeas(topic.trim(), lang)).topics);
+    } catch (e) {
+      setIdeasError((e as Error).message);
+    } finally {
+      setIdeasBusy(false);
+    }
+  }
 
   const claudeMissing = options !== null && !options.keys.anthropic;
 
@@ -165,7 +183,7 @@ export function CreateForm({
     setBusy(true);
     setMsg({ text: "Claude is writing your song. This usually takes 15–40 seconds." });
     try {
-      const song = await api.writeSong({ topic: topic.trim(), lang, seconds, style, vocal });
+      const song = await api.writeSong({ topic: topic.trim(), lang, seconds: songSeconds, style, vocal });
       onSong(song, lang, topic.trim());
     } catch (err) {
       setMsg({ text: (err as Error).message, error: true });
@@ -290,8 +308,8 @@ export function CreateForm({
                   ]}
                 />
               </div>
-              <Field label={<>Length <output className="ml-1 font-semibold text-ink">{seconds} s</output></>} htmlFor="song-seconds">
-                <input id="song-seconds" type="range" min={15} max={120} step={5} value={seconds} onChange={(e) => setSeconds(+e.target.value)} className="h-10 w-full accent-cobalt" />
+              <Field label={<>Length <output className="ml-1 font-semibold text-ink">{songSeconds} s</output></>} htmlFor="song-seconds">
+                <input id="song-seconds" type="range" min={15} max={120} step={5} value={songSeconds} onChange={(e) => setSongSeconds(+e.target.value)} className="h-10 w-full accent-cobalt" />
               </Field>
             </div>
 
@@ -332,6 +350,40 @@ export function CreateForm({
                 placeholder={PLACEHOLDER[lang]}
                 className="field-input resize-y py-3 text-xl leading-snug font-medium"
               />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={ideasBusy}
+                  disabled={claudeMissing}
+                  icon={<Sparkles className="size-3.5" />}
+                  onClick={suggestTopics}
+                  title="Claude suggests topics in different formats (rankings, myth vs fact, which one is...), avoiding your recent titles. What you typed above is taken as your niche."
+                >
+                  {ideas ? "More topic ideas" : "Suggest topics"}
+                </Button>
+                <span className="text-sm text-ink-soft">Mix formats to find which hook style breaks out.</span>
+              </div>
+              {ideasError && <p className="m-0 text-sm text-danger">{ideasError}</p>}
+              {ideas && (
+                <ul className="m-0 grid list-none gap-1.5 p-0 sm:grid-cols-2">
+                  {ideas.map((idea, i) => (
+                    <li key={i}>
+                      <button
+                        type="button"
+                        onClick={() => setTopic(`${idea.topic}\nOpen with: "${idea.hook}"`)}
+                        className="grid h-full w-full cursor-pointer content-start gap-1 rounded-lg border border-line bg-panel p-2.5 text-left transition-colors hover:border-cobalt/60 hover:bg-cobalt/[0.04]"
+                      >
+                        <span className="justify-self-start rounded bg-ink/[0.06] px-1.5 py-0.5 text-xs font-semibold text-ink-soft">{idea.format}</span>
+                        <span className="text-base font-semibold text-ink">{idea.topic}</span>
+                        <span lang={lang} className="text-sm text-ink-soft">
+                          “{idea.hook}”
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Field>
 
             <div className="grid items-end gap-5 sm:grid-cols-[auto_1fr_1fr]">
@@ -348,7 +400,7 @@ export function CreateForm({
                 />
               </div>
               <Field label={<>Length <output className="ml-1 font-semibold text-ink">{seconds} s</output></>} htmlFor="seconds">
-                <input id="seconds" type="range" min={15} max={90} step={5} value={seconds} onChange={(e) => setSeconds(+e.target.value)} className="h-10 w-full accent-cobalt" />
+                <input id="seconds" type="range" min={10} max={90} step={5} value={seconds} onChange={(e) => setSeconds(+e.target.value)} className="h-10 w-full accent-cobalt" />
               </Field>
               <Field label={<>Scenes <output className="ml-1 font-semibold text-ink">{scenes}</output></>} htmlFor="scenes">
                 <input id="scenes" type="range" min={3} max={10} value={scenes} onChange={(e) => setScenes(+e.target.value)} className="h-10 w-full accent-cobalt" />
@@ -393,8 +445,8 @@ export function CreateForm({
               />
             </Field>
             <p className="m-0 text-base text-ink-soft">
-              English or ខ្មែរ, any layout. Voiceover is kept word for word, visual notes become footage searches, and extra notes like production tips are ignored. Emojis are removed
-              from on-screen text.
+              English or ខ្មែរ, any layout. Voiceover is kept word for word, visual notes become footage searches, and extra notes like production tips are ignored. Emoji in on-screen text are
+              kept and show in colour in the video.
             </p>
             <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
               <Button type="submit" variant="primary" loading={importing} icon={<ClipboardPaste className="size-4" />}>

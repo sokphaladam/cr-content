@@ -45,7 +45,11 @@ Titles:
   no clickbait the video doesn't deliver, no hashtags in the title.
 
 Descriptions:
-- Line 1 is a hook that works on its own; only about the first 125 characters show before "more".
+- Line 1 is a hook that works on its own; only about the first 125 characters show before "more". It never repeats
+  or rewords the title (both are shown together): start with the most surprising fact instead.
+- When the title or the video simplifies something for effect ("the water boils", "it's immortal"), name the precise
+  term once, in passing, e.g. "(technically called cavitation)", so the creator is covered when someone comments
+  "that's not really boiling".
 - Then 1-3 short lines that add value or intrigue: a key detail, the payoff teased (not spoiled), context.
 - End with one easy-to-answer question or call to action that drives comments, saves or shares.
 - Short lines separated by line breaks. Emoji sparingly as visual bullets (0-3 total). No hashtags inside it.
@@ -138,7 +142,9 @@ def write_post(job: Path, title: str, description: str, hashtags: list[str]) -> 
     old = (job / "post.txt").read_text(encoding="utf-8") if (job / "post.txt").exists() else ""
     tags = " ".join(f"#{h.lstrip('#').replace(' ', '')}" for h in hashtags if h.strip("# "))
     credit = f"\n{AI_CREDIT}\n" if AI_CREDIT in old else ""
-    kept = [line for line in old.splitlines() if line.startswith(("Sources: ", 'Music: "')) and line not in description]
+    # credits that must stay: the works cited, real photos used (their licence asks for it) and the music
+    kept = [line for line in old.splitlines()
+            if line.startswith(("Sources: ", "Photo: ", 'Music: "')) and line not in description]
     description = "\n\n".join([description.strip(), *kept])
     text = f"{title.strip()}\n\n{description}\n\n{tags}\n{credit}"
     (job / "post.txt").write_text(text, encoding="utf-8")

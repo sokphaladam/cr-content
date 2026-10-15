@@ -19,12 +19,9 @@ def _ts(sec: float) -> str:
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
-# emoji can't be drawn by the caption fonts (they'd show as empty boxes)
-_EMOJI = re.compile("[🀀-🫿☀-➿⬀-⯿🇦-🇿️‍⃣]+")
-
-
 def _esc(text: str) -> str:
-    text = _EMOJI.sub("", text).strip()
+    # emoji are kept: render.finalize() draws them in colour (emoji.py)
+    text = text.strip()
     return text.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
@@ -61,6 +58,9 @@ def build_ass(scenes: list[tuple], profile: LangProfile, style: "CaptionStyle | 
     style = (style or CaptionStyle()).clean(profile.code)
     high, key_c, base = ass_color(style.highlight), ass_color(style.keyword), ass_color(style.color)
     blur = r"\blur3" if style.outline == "shadow" else r"\blur10" if style.outline == "glow" else ""
+    # the opening scene's headline is the hook: bigger than other headlines, dark on a white box, so it reads in the
+    # feed at a glance on any footage
+    hook_px = round(profile.font_size * {"s": 0.8, "m": 1.0, "l": 1.25}[style.size] * 0.8 * 1.3)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {WIDTH}
@@ -72,6 +72,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {caption_styles(profile, style)}
 Style: Overlay,{style.font or profile.font_name},{profile.font_size},&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,{round(profile.font_size * 6 / 92)},2,5,40,40,0,1
+Style: Hook,{style.font or profile.font_name},{hook_px},&H00141414&,&H00141414&,&H00FFFFFF&,&H00FFFFFF&,-1,0,0,0,100,100,0,0,3,{round(hook_px * 0.22)},0,8,70,70,0,1
 Style: OverlayBox,{style.font or profile.font_name},{profile.font_size},&H00FFFFFF&,&H00FFFFFF&,&H33000000&,&H33000000&,-1,0,0,0,100,100,0,0,3,{round(profile.font_size * 14 / 92)},0,5,40,40,0,1
 
 [Events]
@@ -81,9 +82,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     cap_y = round(HEIGHT * style.y)
     head_y = round(HEIGHT * style.headline_y)
     n = style.words or profile.words_per_caption
-    for scene_start, scene_end, words, headline, *rest in scenes:
+    for si, (scene_start, scene_end, words, headline, *rest) in enumerate(scenes):
         keywords = rest[0] if rest else set()
-        if headline:
+        if headline and si == 0:  # the hook pops in on the very first frame
+            lines.append(f"Dialogue: 2,{_ts(scene_start)},{_ts(scene_end)},Hook,,0,0,0,,"
+                         f"{{\\an8\\pos({WIDTH // 2},{head_y})\\fscx80\\fscy80\\t(0,120,\\fscx100\\fscy100)}}"
+                         f"{_esc(headline.upper())}")
+            continue  # one strong line of text in the hook: its spoken words aren't captioned too
+        elif headline:
             lines.append(f"Dialogue: 1,{_ts(scene_start)},{_ts(scene_end)},Headline,,0,0,0,,"
                          f"{{\\an8\\pos({WIDTH // 2},{head_y})}}{_esc(headline.upper())}")
 
