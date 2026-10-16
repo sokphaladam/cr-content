@@ -15,6 +15,7 @@ python -m venv .venv
 
 Requires FFmpeg on PATH. In the app, open **Settings** (bottom of the left rail) to add or replace these keys;
 they're saved to `.env` in the data folder (created from `.env.example` on first run) and apply right away. Keys:
+
 - `ANTHROPIC_API_KEY`: Claude writes the scripts. Not needed with `--script`.
 - `PIXABAY_API_KEY` (or `PEXELS_API_KEY`): free stock footage. Without one you get animated gradient backgrounds, or clips from `assets/footage/`. Pixabay key: sign up, then see https://pixabay.com/api/docs/
 
@@ -30,10 +31,11 @@ npm run dev                  # desktop app with hot reload: Next.js dev server +
 
 **Where files are kept.** Dev runs, the web UI, `make.py` and the installed app all share one library, set in
 **Settings → Storage** (`crcontent/locations.py`, remembered in `%APPDATA%\com.crcontent.shorts-studio\locations.json`):
-- *Data folder* (default `Documents\Shorts Studio`, or `%USERPROFILE%\Shorts Studio` when Documents is synced by
+
+- _Data folder_ (default `Documents\Shorts Studio`, or `%USERPROFILE%\Shorts Studio` when Documents is synced by
   OneDrive): `.env`, `accounts.json`, `schedule.json`, `drafts/`, `uploads/`, `cache/`, `campaigns/`,
   `assets/music|fonts|footage/`.
-- *Finished videos* (default `output/` in the data folder, or any folder of yours).
+- _Finished videos_ (default `output/` in the data folder, or any folder of yours).
 
 Changing either one in Settings moves the files there and restarts the engine. The first run gathers the data that
 earlier versions kept in the project folder and in `%APPDATA%\com.crcontent.shorts-studio\`. `CRCONTENT_DATA_DIR`
@@ -51,11 +53,11 @@ all three. The installed app writes `engine.log` (for troubleshooting) to
 `%APPDATA%\com.crcontent.shorts-studio\`; its library is in the folders above. The music-video extras (torch / stable-ts / librosa) aren't bundled,
 so the installed app uses even lyric spacing and bpm-based cuts.
 
-| Part | Where |
-|---|---|
-| Window, engine start/stop | `src-tauri/src/main.rs` |
-| App name, window, bundle settings | `src-tauri/tauri.conf.json` (+ `tauri.bundle.json` for installer resources) |
-| Engine URL in the UI | `window.__ENGINE_URL__`, set by the Rust side, read in `frontend/lib/api.ts` |
+| Part                              | Where                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| Window, engine start/stop         | `src-tauri/src/main.rs`                                                      |
+| App name, window, bundle settings | `src-tauri/tauri.conf.json` (+ `tauri.bundle.json` for installer resources)  |
+| Engine URL in the UI              | `window.__ENGINE_URL__`, set by the Rust side, read in `frontend/lib/api.ts` |
 
 ### macOS
 
@@ -112,21 +114,21 @@ Open http://localhost:3000. The UI (`frontend/`, Next.js 16 + TypeScript + Tailw
 engine's API directly; `NEXT_PUBLIC_API_URL` (see `frontend/.env.example`) changes the engine address.
 Edits to the UI hot-reload; edits to `crcontent/` restart the engine automatically.
 
-| Part | Where |
-|---|---|
-| Page and state | `frontend/app/page.tsx` |
-| Components | `frontend/components/` (CreateForm, Storyboard, SceneCard, PreviewPane, Library, TopBar) and shared `ui.tsx` (Button, Tabs, Segmented, Toast, Drawer) |
-| API client and types | `frontend/lib/api.ts` |
-| Theme (colours, fonts) | `frontend/app/globals.css` |
+| Part                   | Where                                                                                                                                                 |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Page and state         | `frontend/app/page.tsx`                                                                                                                               |
+| Components             | `frontend/components/` (CreateForm, Storyboard, SceneCard, PreviewPane, Library, TopBar) and shared `ui.tsx` (Button, Tabs, Segmented, Toast, Drawer) |
+| API client and types   | `frontend/lib/api.ts`                                                                                                                                 |
+| Theme (colours, fonts) | `frontend/app/globals.css`                                                                                                                            |
 
 ### Where things are saved (all on this PC)
 
-| What | Folder |
-|---|---|
-| Drafts (scripts being edited, auto-saved ~1 s after each change) | `drafts/<id>/draft.json` |
-| Rendered videos (+ script, caption, thumbnail) | `output/<date>-<lang>-<title>/` |
-| Your uploaded photos/videos | `uploads/` |
-| Downloaded stock footage, voice previews | `cache/` |
+| What                                                             | Folder                          |
+| ---------------------------------------------------------------- | ------------------------------- |
+| Drafts (scripts being edited, auto-saved ~1 s after each change) | `drafts/<id>/draft.json`        |
+| Rendered videos (+ script, caption, thumbnail)                   | `output/<date>-<lang>-<title>/` |
+| Your uploaded photos/videos                                      | `uploads/`                      |
+| Downloaded stock footage, voice previews                         | `cache/`                        |
 
 Drafts include scenes, backgrounds, caption, hashtags, language, voice, speed and music. New scripts and
 translations become drafts immediately; opening a rendered video and editing it starts a new draft (the
@@ -143,6 +145,7 @@ Write a topic, let Claude draft the script, edit scenes in the storyboard, pick 
 then render and watch progress live.
 
 Each scene's background can be:
+
 - **Auto**: footage found from the scene's search words (Pixabay/Pexels); when none is found, Claude draws the scene
   (gradient only when Claude is unavailable too)
 - **Find footage**: search stock videos or photos and click one; **Ask Claude for ideas** suggests better search words;
@@ -352,7 +355,7 @@ Each platform uses your own developer app. Enter its keys in the card (the form 
 register, with a copy button; the key icon changes them later), then press **Connect**: the sign-in opens in
 your browser and comes back to the app. Keys from older `.env` setups are imported once.
 
-- **YouTube**: in Google Cloud Console enable *YouTube Data API v3*, set up the OAuth consent screen (add your
+- **YouTube**: in Google Cloud Console enable _YouTube Data API v3_, set up the OAuth consent screen (add your
   Google account as a test user), then create an OAuth client ID of type **Desktop app** and enter its
   client ID and secret. Vertical videos get `#Shorts`. The API's default quota allows
   about 6 uploads a day; until Google verifies your app, it may post them as private.
@@ -360,12 +363,12 @@ your browser and comes back to the app. Keys from older `.env` setups are import
   that owns it). One is the default (**Make default**); the Upload card has a channel picker for each upload,
   while auto-uploads and set-time uploads go to the default. All channels share the one developer app and its
   daily quota.
-- **TikTok**: at developers.tiktok.com create an app (platform **Desktop**), add *Login Kit* and the
-  *Content Posting API* (Direct Post), register the redirect URI `http://localhost:8765/callback/`, and enter
+- **TikTok**: at developers.tiktok.com create an app (platform **Desktop**), add _Login Kit_ and the
+  _Content Posting API_ (Direct Post), register the redirect URI `http://localhost:8765/callback/`, and enter
   its client key and secret. Until TikTok audits the app, direct posts can only be
   **Only me**; choose **Send to TikTok drafts** to finish and post publicly from the TikTok app instead.
 - **Facebook and Instagram** share one Meta app and one sign-in. At developers.facebook.com create an app with the
-  use cases for managing a Page and the *Instagram API with Facebook Login*, keep it in **Development mode** (as
+  use cases for managing a Page and the _Instagram API with Facebook Login_, keep it in **Development mode** (as
   its admin you can grant every permission without App Review; `http://localhost` redirects are allowed there), and
   enter its App ID and secret on the Facebook row. **Connect** asks Facebook for your Pages and the Instagram
   accounts linked to them: Instagram must be a professional (Business or Creator) account linked to a Page.
@@ -404,25 +407,25 @@ out when you open it. The queue is kept in `schedule.json`, campaigns in `campai
 
 ## Layout
 
-| Module | Job |
-|---|---|
-| `crcontent/script.py` | Claude prompt + JSON schema for hook, scenes, caption and hashtags |
-| `crcontent/sheet.py` | Reads an Excel content plan into one script per episode (`make.py --excel`) |
-| `crcontent/tts.py` | Edge TTS voiceover with word timings |
-| `crcontent/visuals.py` | Pexels search/download (cached), local footage, gradient fallback |
-| `crcontent/art.py` | Claude as art director: SVG backgrounds and designed covers, rendered with resvg |
-| `crcontent/motion.py` | Plays Claude's SMIL-animated SVG frame by frame into a looping mp4 (resvg + FFmpeg) |
-| `crcontent/captions.py` | Word-highlight `.ass` captions and scene headlines |
-| `crcontent/render.py` | FFmpeg scene clips, concat, burn-in, music ducking |
-| `crcontent/lyrics.py` | Claude prompt + schema for original songs (sections, lyrics, sound) |
-| `crcontent/song.py` | ElevenLabs Music: compose + vocal/instrumental stems |
-| `crcontent/align.py` | Lyric timing (stable-ts forced alignment + repair of stray words, even-spacing fallback) |
-| `crcontent/beats.py` | Beat detection and beat-synced shot plan |
-| `crcontent/campaigns.py` | Campaigns: read the brief and requirements (Claude), download and transcribe references, pick and cut clips |
-| `crcontent/schedule.py` | Scheduled uploads queue and posting-time slots |
-| `crcontent/publish.py` | YouTube / TikTok sign-in (OAuth + PKCE) and uploads, auto-upload settings |
-| `crcontent/web.py` + `web/` | FastAPI backend and the browser UI |
-| `crcontent/config.py` | Voices, fonts, sizes per language |
+| Module                      | Job                                                                                                         |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `crcontent/script.py`       | Claude prompt + JSON schema for hook, scenes, caption and hashtags                                          |
+| `crcontent/sheet.py`        | Reads an Excel content plan into one script per episode (`make.py --excel`)                                 |
+| `crcontent/tts.py`          | Edge TTS voiceover with word timings                                                                        |
+| `crcontent/visuals.py`      | Pexels search/download (cached), local footage, gradient fallback                                           |
+| `crcontent/art.py`          | Claude as art director: SVG backgrounds and designed covers, rendered with resvg                            |
+| `crcontent/motion.py`       | Plays Claude's SMIL-animated SVG frame by frame into a looping mp4 (resvg + FFmpeg)                         |
+| `crcontent/captions.py`     | Word-highlight `.ass` captions and scene headlines                                                          |
+| `crcontent/render.py`       | FFmpeg scene clips, concat, burn-in, music ducking                                                          |
+| `crcontent/lyrics.py`       | Claude prompt + schema for original songs (sections, lyrics, sound)                                         |
+| `crcontent/song.py`         | ElevenLabs Music: compose + vocal/instrumental stems                                                        |
+| `crcontent/align.py`        | Lyric timing (stable-ts forced alignment + repair of stray words, even-spacing fallback)                    |
+| `crcontent/beats.py`        | Beat detection and beat-synced shot plan                                                                    |
+| `crcontent/campaigns.py`    | Campaigns: read the brief and requirements (Claude), download and transcribe references, pick and cut clips |
+| `crcontent/schedule.py`     | Scheduled uploads queue and posting-time slots                                                              |
+| `crcontent/publish.py`      | YouTube / TikTok sign-in (OAuth + PKCE) and uploads, auto-upload settings                                   |
+| `crcontent/web.py` + `web/` | FastAPI backend and the browser UI                                                                          |
+| `crcontent/config.py`       | Voices, fonts, sizes per language                                                                           |
 
 ## Roadmap ideas
 
@@ -432,3 +435,5 @@ out when you open it. The queue is kept in `schedule.json`, campaigns in `campai
 4. **Templates**: per-channel brand presets (fonts, colours, logo watermark, intro/outro).
 5. **Web dashboard**: queue topics, preview and edit scripts, approve before posting.
 6. **Analytics loop**: feed best-performing videos back into the script prompt.
+
+-
