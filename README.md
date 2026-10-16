@@ -75,10 +75,11 @@ is `~/Library/Application Support/com.crcontent.shorts-studio/`, the tray icon i
 adds a LaunchAgent (`~/Library/LaunchAgents/com.crcontent.shorts-studio.plist`), and a click on the Dock icon
 reopens a closed window. The app adds Homebrew's folders to the engine's PATH so it finds FFmpeg. Caption fonts
 come from the macOS system fonts (Khmer uses Khmer Sangam MN unless you add Khmer OS fonts to `assets/fonts`).
-The build is unsigned: the first time, right-click the app → Open. **Settings → AI scene art → Install music extras**
-(~1 GB) adds Whisper lyric timing, beat detection and vocal separation: into `.venv` in dev runs, or into
-`<data folder>/addons/ai` (a portable Python) in the installed app; no restart needed. AI scene art needs an NVIDIA
-GPU, so it's Windows-only.
+The build is unsigned: the first time, right-click the app → Open. **Settings → AI scene art → Install AI add-on**
+(~1.5 GB) adds scene art (Stable Diffusion XL on the Mac's GPU through Metal), Whisper lyric timing, beat detection and
+vocal separation: into `.venv` in dev runs, or into `<data folder>/addons/ai` (a portable Python) in the installed app;
+no restart needed. Scene art needs Apple Silicon (M1 or newer; 16 GB+ memory recommended, 8 GB works but swaps and is
+slow); an Intel Mac gets the music extras only (~1 GB).
 
 ### Releases on GitHub (Windows and macOS installers)
 

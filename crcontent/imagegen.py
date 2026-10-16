@@ -1,4 +1,5 @@
-"""Local AI scene art: Stable Diffusion XL on this computer's NVIDIA GPU, free after a one-time model download.
+"""Local AI scene art: Stable Diffusion XL on this computer's GPU (NVIDIA with CUDA, or an Apple Silicon Mac's GPU
+through Metal), free after a one-time model download.
 
 Each look uses its own SDXL model (downloaded the first time that look is used, ~7 GB, into <ROOT>/models):
 anime (Animagine XL 4.0), cinematic (RealVisXL 5) and flat 2D motion-graphics (SDXL base). Pictures are drawn at
@@ -82,14 +83,46 @@ HIRES_STEPS = 16  # the hi-res pass runs strength x this many: 6 steps
 CFG_UNTIL = (0.6, 0.4)
 
 
-def gpu_name() -> str:
-    """The CUDA GPU's name, or "" when there is none (or torch isn't installed)."""
+def device() -> str:
+    """Where pictures are drawn: "cuda" (NVIDIA), "mps" (Apple Silicon), or "" when neither is usable."""
     try:
         import torch
 
-        return torch.cuda.get_device_name(0) if torch.cuda.is_available() else ""
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
     except Exception:
-        return ""
+        pass
+    return ""
+
+
+def gpu_name() -> str:
+    """The GPU's name, or "" when there is none (or torch isn't installed)."""
+    dev = device()
+    if dev == "cuda":
+        import torch
+
+        return torch.cuda.get_device_name(0)
+    if dev == "mps":
+        import subprocess
+
+        try:  # "Apple M2"
+            chip = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True,
+                                  timeout=5).stdout.strip()
+        except Exception:
+            chip = ""
+        return f"{chip or 'Apple Silicon'} GPU"
+    return ""
+
+
+def _empty_cache() -> None:
+    import torch
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
 
 
 def installed() -> bool:
@@ -285,25 +318,30 @@ def _load(style: str, log=print):
     import torch
     from diffusers import AutoencoderKL, StableDiffusionXLPipeline
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("AI scene art needs an NVIDIA GPU with CUDA (none was found).")
+    dev = device()
+    if not dev:
+        raise RuntimeError("AI scene art needs an NVIDIA GPU with CUDA or an Apple Silicon Mac (neither was found).")
     unload()
     spec = STYLES[style]
     if _parked is not None and _parked_style == style:
         log(f"      moving the {spec['label'].lower()} model back onto the GPU")
         pipe = _parked
         _parked, _parked_style = None, ""
-        pipe.to("cuda")
+        pipe.to(dev)
     else:
         drop_parked()  # another look: free its memory before reading this one
         path = download(style, log)
         log(f"      loading the {spec['label'].lower()} model onto the GPU")
-        # weights go straight from the files to the GPU, not through a full copy in system memory first
-        vae = AutoencoderKL.from_pretrained(MODELS_DIR / "sdxl-vae-fp16-fix", torch_dtype=torch.float16,
-                                            device_map="cuda")
+        # CUDA: weights go straight from the files to the GPU, not through a full copy in system memory first.
+        # A Mac's GPU shares system memory, so loading there and moving it over costs nothing extra.
+        placed = {"device_map": "cuda"} if dev == "cuda" else {}
+        vae = AutoencoderKL.from_pretrained(MODELS_DIR / "sdxl-vae-fp16-fix", torch_dtype=torch.float16, **placed)
         pipe = StableDiffusionXLPipeline.from_pretrained(
-            path, vae=vae, torch_dtype=torch.float16, use_safetensors=True, device_map="cuda",
+            path, vae=vae, torch_dtype=torch.float16, use_safetensors=True, **placed,
             **({"variant": spec["variant"]} if spec["variant"] else {}))
+        if dev == "mps":
+            pipe.to("mps")
+            pipe.enable_attention_slicing()  # diffusers' advice for Macs: much less memory at a small cost in speed
         pipe.scheduler = _scheduler(pipe, spec["scheduler"])
         pipe.set_progress_bar_config(disable=True)
         pipe.vae.enable_tiling()  # the hi-res pass decodes ~1.2k x 1.8k images; tiles keep it inside 12 GB
@@ -324,9 +362,9 @@ def unload() -> None:
         _pipe, _pipe_style = None, ""
         import gc
 
-        import torch
-
         try:
+            if device() == "mps":
+                raise MemoryError  # a Mac's GPU memory is system memory: parking would just hold on to it
             pipe.to("cpu")
             _parked, _parked_style = pipe, style
             if _park_timer:
@@ -338,7 +376,7 @@ def unload() -> None:
             _parked, _parked_style = None, ""
         del pipe
         gc.collect()
-        torch.cuda.empty_cache()
+        _empty_cache()
 
 
 def drop_parked() -> None:
@@ -513,7 +551,8 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
             pipe.set_ip_adapter_scale(IP_SCALE if reference else 0.0)
             ip = {"ip_adapter_image": _reference_image(reference) if reference else Image.new("RGB", (224, 224))}
         neg = ", ".join(x for x in (spec["negative"], _sex_negative(prompt, style), negative) if x)
-        generator = torch.Generator("cuda").manual_seed(seed)
+        # on a Mac the seed's noise comes from the CPU: diffusers' advice, for the same picture every time
+        generator = torch.Generator("cuda" if device() == "cuda" else "cpu").manual_seed(seed)
         image = _run(pipe, CFG_UNTIL[0], prompt=full_prompt(prompt, style), negative_prompt=neg, width=w, height=h,
                      num_inference_steps=spec["steps"], guidance_scale=spec["cfg"], generator=generator, **ip)
         if hires:

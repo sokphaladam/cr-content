@@ -1,6 +1,7 @@
 """Topic (or script file) in -> finished vertical video + post metadata out."""
 import hashlib
 import json
+import platform
 import random
 import re
 import shutil
@@ -253,14 +254,14 @@ def art_ready(style: str, log: Callable[[str], None] = print) -> bool:
 
     if style not in imagegen.STYLES:
         return False
-    if sys.platform == "darwin":
-        log("      ! AI scene art needs an NVIDIA GPU, which Macs don't have; using stock footage")
+    if sys.platform == "darwin" and platform.machine() != "arm64":
+        log("      ! AI scene art needs an Apple Silicon Mac (M1 or newer); using stock footage")
         return False
     if not imagegen.installed():
         log("      ! AI scene art isn't installed (Settings → AI features → Install AI add-on); using stock footage")
         return False
     if not imagegen.gpu_name():
-        log("      ! AI scene art needs an NVIDIA GPU, none found; using stock footage")
+        log("      ! AI scene art needs an NVIDIA GPU or an Apple Silicon Mac, none found; using stock footage")
         return False
     return True
 

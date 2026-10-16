@@ -418,7 +418,7 @@ function SceneArt() {
             <StatusDot on>Music extras installed: Whisper lyric timing, beat detection, vocal separation</StatusDot>
           </div>
         )}
-        <p className="m-0 px-4 py-3 text-base text-ink-soft">AI scene art needs an NVIDIA graphics card, which Macs don&apos;t have, so videos use stock footage.</p>
+        <p className="m-0 px-4 py-3 text-base text-ink-soft">AI scene art needs an Apple Silicon Mac (M1 or newer), so videos use stock footage.</p>
       </>
     );
   }
@@ -426,7 +426,7 @@ function SceneArt() {
   if (!status.installed || !status.gpu) {
     return (
       <p className="m-0 p-4 text-base text-ink-soft">
-        {!status.installed ? "AI scene art isn't installed on this computer." : "No NVIDIA graphics card was found, so videos use stock footage."}
+        {!status.installed ? "AI scene art isn't installed on this computer." : "No NVIDIA graphics card or Apple Silicon GPU was found, so videos use stock footage."}
       </p>
     );
   }

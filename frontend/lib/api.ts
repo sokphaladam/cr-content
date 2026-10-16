@@ -54,7 +54,7 @@ export const MOOD_EFFECTS: Effect[] = ["dust", "snow", "embers", "sparkles", "pe
 
 export interface ArtStatus {
   installed: boolean; // diffusers + torch are installed
-  gpu: string; // "" = no CUDA GPU
+  gpu: string; // "" = no usable GPU (NVIDIA with CUDA, or an Apple Silicon Mac)
   folder: string; // where models are kept
   styles: Record<
     ArtStyle,
@@ -76,7 +76,7 @@ export interface ArtStatus {
 export interface AddonStatus {
   needed: boolean; // this engine lacks the AI libraries and the add-on can be installed here
   ready: boolean;
-  scope: "all" | "music"; // a Mac gets the music extras only (scene art needs an NVIDIA GPU)
+  scope: "all" | "music"; // an Intel Mac gets the music extras only (scene art needs NVIDIA or Apple Silicon)
   size: string; // "about 3 GB"
   installing: boolean;
   stage: string; // "Downloading torch", "Installing (a few minutes…)"…

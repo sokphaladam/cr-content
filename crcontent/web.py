@@ -288,7 +288,7 @@ def art_progress():
 
 @app.post("/api/addon/install")
 def addon_install():
-    """Install the AI add-on (~3 GB; the music extras only on a Mac, ~1 GB). Progress streams from /api/art/progress."""
+    """Install the AI add-on (~3 GB; ~1.5 GB on an Apple Silicon Mac, the music extras only on an Intel Mac). Progress streams from /api/art/progress."""
     if not addons.needed() and not addons.status()["installing"]:
         raise HTTPException(400, "The AI add-on is already installed, or can't be installed here.")
     addons.install()
@@ -303,7 +303,7 @@ def art_download(style: str):
     if style not in imagegen.STYLES:
         raise HTTPException(404, "Unknown art style.")
     if not imagegen.installed():
-        raise HTTPException(400, "AI scene art needs an NVIDIA graphics card, which Macs don't have." if addons.MAC
+        raise HTTPException(400, "AI scene art needs an Apple Silicon Mac (M1 or newer)." if addons.MUSIC_ONLY
                             else "AI scene art isn't installed. Install the AI add-on in Settings → AI features.")
     with art_lock:
         if art_downloads.get(style) == "downloading":
@@ -330,10 +330,10 @@ def _art_check(style: str) -> None:
     if style not in imagegen.STYLES:
         raise HTTPException(400, "Pick an art style first.")
     if not imagegen.installed():
-        raise HTTPException(400, "AI scene art needs an NVIDIA graphics card, which Macs don't have." if addons.MAC
+        raise HTTPException(400, "AI scene art needs an Apple Silicon Mac (M1 or newer)." if addons.MUSIC_ONLY
                             else "AI scene art isn't installed. Install the AI add-on in Settings → AI features.")
     if not imagegen.gpu_name():
-        raise HTTPException(400, "AI scene art needs an NVIDIA graphics card, and none was found.")
+        raise HTTPException(400, "AI scene art needs an NVIDIA graphics card or an Apple Silicon Mac, and none was found.")
     if not imagegen.downloaded(style):
         raise HTTPException(400, f"Download the {imagegen.STYLES[style]['label']} model first (Settings → AI features).")
 

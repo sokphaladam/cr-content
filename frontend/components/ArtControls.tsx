@@ -87,14 +87,14 @@ export function AddonProgress({ addon }: { addon: NonNullable<ArtStatus["addon"]
 export function artBlocker(status: ArtStatus | null, style: ArtStyle | ""): string {
   if (!style) return "";
   if (!status) return "Checking the AI art engine…";
-  if (status.addon?.scope === "music") return "AI scene art needs an NVIDIA graphics card, which Macs don't have. Stock footage will be used.";
+  if (status.addon?.scope === "music") return "AI scene art needs an Apple Silicon Mac (M1 or newer). Stock footage will be used.";
   if (!status.installed) {
     if (status.addon?.installing) return "Installing the AI add-on…";
     return status.addon?.needed
       ? `AI scene art needs the AI add-on (one-time, ${status.addon.size}). Install it in Settings → AI features.`
       : "AI scene art isn't installed on this computer.";
   }
-  if (!status.gpu) return "AI scene art needs an NVIDIA graphics card, and none was found. Stock footage will be used.";
+  if (!status.gpu) return "AI scene art needs an NVIDIA graphics card or an Apple Silicon Mac, and none was found. Stock footage will be used.";
   const s = status.styles[style];
   if (s.downloading) return `Downloading the ${s.label} model…`;
   if (!s.downloaded) return `The ${s.label} model isn't downloaded yet (about 7 GB, one time).`;

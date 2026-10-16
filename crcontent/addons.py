@@ -1,7 +1,7 @@
 """The AI add-on: torch (CUDA), Stable Diffusion, Whisper lyric timing and beat detection, installed from Settings.
 
-On a Mac it is the music extras only (Whisper lyric timing, beat detection, vocal separation): scene art needs an
-NVIDIA GPU with CUDA, which Macs don't have.
+On an Apple Silicon Mac, scene art runs on the Mac's GPU through Metal (torch from PyPI); an Intel Mac has no GPU
+torch can use, so it gets the music extras only (Whisper lyric timing, beat detection, vocal separation).
 
 How it installs depends on where the engine runs (_mode()):
   venv        dev runs: pip installs into the engine's own Python (the project's .venv); usable right away.
@@ -48,12 +48,17 @@ PINNED = [
 APPROX_BYTES = 3_100_000_000  # what pip downloads in all (torch's CUDA wheel is ~2.5 GB of it)
 
 MAC = sys.platform == "darwin"
-# Mac: the music extras only, on the CPU (torch from PyPI); pip picks versions that fit the engine's Python
+# Apple Silicon: scene art on the Mac's GPU (Metal); an Intel Mac gets the music extras only
+MUSIC_ONLY = MAC and platform.machine() != "arm64"
+# Mac: torch from PyPI (Metal on Apple Silicon); pip picks versions that fit the engine's Python
 MAC_PACKAGES = ["torch", "torchaudio", "stable-ts>=2.17", "openai-whisper", "demucs>=4.0", "librosa>=0.10",
                 "soundfile"]
-MAC_APPROX_BYTES = 400_000_000
+if not MUSIC_ONLY:
+    MAC_PACKAGES += ["diffusers>=0.32", "transformers>=4.46", "accelerate>=1.0", "huggingface_hub", "hf_xet",
+                     "safetensors"]
+MAC_APPROX_BYTES = 400_000_000 if MUSIC_ONLY else 600_000_000
 # what each kind of install makes importable
-MODULES = ("torch", "stable_whisper", "librosa") if MAC else ("torch", "diffusers", "stable_whisper", "librosa")
+MODULES = ("torch", "stable_whisper", "librosa") if MUSIC_ONLY else ("torch", "diffusers", "stable_whisper", "librosa")
 STANDALONE_LATEST = ("https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/"
                      "latest-release.json")
 
@@ -103,7 +108,8 @@ def _present() -> bool:
 def ready() -> bool:
     if _mode() == "venv":
         return _present()
-    return MARKER.exists() and (_site() / "torch").exists()
+    # every module, so a Mac add-on installed before scene art ran on Macs is offered again (pip adds what's missing)
+    return MARKER.exists() and all((_site() / m).exists() for m in MODULES)
 
 
 def needed() -> bool:
@@ -152,8 +158,8 @@ def status() -> dict:
     with _lock:
         state = dict(_state)
     venv = _mode() == "venv"
-    return {"needed": needed(), "ready": ready(), "scope": "music" if MAC else "all",
-            "size": "about 1 GB" if MAC else "about 3 GB", "folder": str(Path(sys.prefix) if venv else ADDON_DIR),
+    return {"needed": needed(), "ready": ready(), "scope": "music" if MUSIC_ONLY else "all",
+            "size": "about 1 GB" if MUSIC_ONLY else "about 1.5 GB" if MAC else "about 3 GB", "folder": str(Path(sys.prefix) if venv else ADDON_DIR),
             **state}
 
 
@@ -314,7 +320,7 @@ def _install() -> None:
     try:
         ADDON_DIR.mkdir(parents=True, exist_ok=True)
         free = shutil.disk_usage(_python().parent if _mode() == "venv" else ADDON_DIR).free
-        need = 3e9 if MAC else 10e9
+        need = 3e9 if MUSIC_ONLY else 5e9 if MAC else 10e9
         if free < need:
             raise RuntimeError(f"The AI add-on needs about {need / 1e9:.0f} GB free disk space ({free / 1e9:.1f} GB free).")
         _prepare_python()
