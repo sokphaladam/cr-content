@@ -312,7 +312,29 @@ Sections, in order:
 {listing}
 
 The creator's concept:
+<concept>
 {idea}
+</concept>
+
+The concept may be a short sentence or a full written treatment (often Markdown uploaded as a file) with parts like a
+scene flow, style, colours, effects, lyrics look, locations, AI prompt tips and a Shorts/hook cut. A treatment is the
+creator's plan: follow it, don't reinvent it.
+- Scene flow: map its beats onto the song's sections by name first (Intro, Verse 1, Pre-chorus, Chorus, Bridge,
+  Instrumental break, Final chorus, Outro; "Hook" = chorus, "Break"/"Solo" = instrumental), otherwise in order. Keep
+  each beat's concrete details in that section's scene: the action, props, place, weather and light (e.g. "rain on a
+  puddle reflecting pink and blue neon signs", not "a rainy night"). When the song has more sections than beats,
+  progress the nearest beat; when it has fewer, merge neighbouring beats in order, never dropping the opening image,
+  the climax or the ending. A beat written for a camera move (the camera rises above the city) becomes a wide picture
+  that the move can animate.
+- Style, colours and locations: the palette, era, places and the recurring people (fixed appearance, both of a couple)
+  go into the bible, and the scenes stay in those places. Its colour grade picks `look`; its lyrics description
+  (font feel, how words appear) picks `lyric_preset` and `lyric_font`.
+- AI prompt tips: keep their wording and style in the bible and scenes so every picture matches.
+- A Shorts/hook cut, caption or hashtags are for a separate clip and the post: they don't change these sections
+  (mention nothing about them in notes).
+- Glow, film grain, soft blur and the colour grade are added automatically; light streaks, light leaks, rain/particle
+  feel and flashes come from effects; slow motion = a slow pace. Only list what truly can't be done (e.g. rain
+  running down a glass overlay, lyrics written on a fogged window) in notes, with what is done instead.
 
 How the video is made: AI-drawn still pictures, each moved by a camera move (push in, pan, 3D parallax), cut on the
 beat, with effects (light trails, light leaks, particles, flashes), a colour grade over everything and the lyrics as

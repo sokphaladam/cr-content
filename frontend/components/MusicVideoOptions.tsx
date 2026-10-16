@@ -1,7 +1,7 @@
 "use client";
 
-import { ChevronDown, Sparkles } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ChevronDown, FileText, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { ArtStylePicker, artBlocker, useArtStatus } from "./ArtControls";
 import { ShotList } from "./ShotList";
 import { SongPictures } from "./SongPictures";
@@ -71,6 +71,10 @@ const PACES: Record<PicturePace, { label: string; hint: string }> = {
   fewer: { label: "Fewer", hint: "A new picture every ~8 s: about 20 pictures for a 3-minute song (~13 min to draw). Good for slow songs and quick drafts." },
   normal: { label: "Normal", hint: "A new picture every ~4.5 s: about 35 pictures for a 3-minute song (~25 min to draw)." },
   more: { label: "More", hint: "A new picture every ~3 s: about 50 pictures for a 3-minute song (~35 min to draw). For fast, high-energy songs." },
+  cover: {
+    label: "One cover",
+    hint: "One character picture on a flat pastel background for the whole song, held with a slow breathing move and floating lights, never cut. The playlist / lyric-video look. Draws in under a minute.",
+  },
 };
 
 export function textCss(style: LyricStyle, font: string, sung: boolean): React.CSSProperties {
@@ -132,6 +136,8 @@ function Pick<T extends string>({ label, value, options, onChange }: { label: st
   );
 }
 
+const IDEA_MAX = 12000; // crcontent/web.py IDEA_MAX
+
 /** Idea, footage look and lyric style for a music video. `name` is the song's folder (for Claude's idea suggestions). */
 export function MusicVideoOptions({
   name,
@@ -156,10 +162,28 @@ export function MusicVideoOptions({
   const [ideasBusy, setIdeasBusy] = useState(false);
   const [ideasError, setIdeasError] = useState("");
   const [custom, setCustom] = useState(false);
+  const [ideaFile, setIdeaFile] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const look: Look = value.look || "natural";
   const style: LyricStyle | null = catalog ? (value.lyric_style ?? fromPreset(catalog, "classic")) : null;
   const setStyle = (patch: Partial<LyricStyle>) => style && onChange({ ...value, lyric_style: { ...style, ...patch } });
+
+  /** A written video idea (.md / .txt: scene flow, style, shorts cut...) becomes the idea; Direct my idea follows it. */
+  async function loadIdeaFile(file: File | undefined) {
+    if (!file) return;
+    setIdeasError("");
+    if (file.size > 200_000) {
+      setIdeasError("That file is too big for a video idea (keep it to a few pages of text).");
+      return;
+    }
+    const text = (await file.text()).replace(/\r\n/g, "\n").trim();
+    if (text.length > IDEA_MAX) {
+      setIdeasError(`That idea is ${text.length.toLocaleString()} characters; only the first ${IDEA_MAX.toLocaleString()} are used.`);
+    }
+    setIdeaFile(file.name);
+    onChange({ ...value, idea: text.slice(0, IDEA_MAX) });
+  }
 
   async function suggest() {
     setIdeasBusy(true);
@@ -181,19 +205,48 @@ export function MusicVideoOptions({
           <label htmlFor={ideaId} className="field-label">
             Video idea <span className="font-normal">optional</span>
           </label>
-          <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} loading={ideasBusy} onClick={suggest}>
-            {ideas ? "More ideas" : "Suggest ideas"}
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<FileText className="size-3.5" />}
+              title="Use a written video idea (.md or .txt): the scene flow, style and lyrics notes are followed part by part"
+              onClick={() => fileInput.current?.click()}
+            >
+              Upload idea
+            </Button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".md,.markdown,.txt,text/markdown,text/plain"
+              className="hidden"
+              onChange={(e) => {
+                void loadIdeaFile(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
+            <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} loading={ideasBusy} onClick={suggest}>
+              {ideas ? "More ideas" : "Suggest ideas"}
+            </Button>
+          </div>
         </div>
         <textarea
           id={ideaId}
-          rows={2}
-          maxLength={4000}
+          rows={value.idea.length > 400 ? 8 : 2}
+          maxLength={IDEA_MAX}
           value={value.idea}
-          onChange={(e) => onChange({ ...value, idea: e.target.value })}
+          onChange={(e) => {
+            setIdeaFile("");
+            onChange({ ...value, idea: e.target.value });
+          }}
           placeholder="Empty city streets at blue hour, rain on neon signs, a lone figure under an umbrella"
           className="field-input min-h-[3.5rem] resize-y text-base"
         />
+        {ideaFile && (
+          <p className="m-0 text-sm text-ink-soft">
+            Loaded <span className="font-semibold text-ink">{ideaFile}</span>. {sections.length > 0 ? "Now Direct my idea to turn it into a shot list." : ""}
+          </p>
+        )}
         {ideasError && <p className="m-0 text-sm text-danger">{ideasError}</p>}
         {ideas && (
           <ul className="m-0 grid list-none gap-1.5 p-0">
@@ -257,7 +310,10 @@ export function MusicVideoOptions({
                 name={`${ideaId}-pictures`}
                 size="sm"
                 value={value.pictures ?? "normal"}
-                onChange={(pictures: PicturePace) => onChange({ ...value, pictures })}
+                onChange={(pictures: PicturePace) =>
+                  // a cover picture reads best with plain fading lyrics: switch to Playlist (still changeable below)
+                  onChange({ ...value, pictures, ...(pictures === "cover" && catalog?.presets.playlist ? { lyric_style: fromPreset(catalog, "playlist") } : {}) })
+                }
                 options={(Object.keys(PACES) as PicturePace[]).map((k) => ({ value: k, label: PACES[k].label }))}
               />
               <p className="m-0 text-sm text-ink-soft">{PACES[value.pictures ?? "normal"].hint}</p>
@@ -275,6 +331,22 @@ export function MusicVideoOptions({
             />
           </>
         )}
+      </div>
+
+      <div className="grid gap-1">
+        <label className="flex cursor-pointer items-center gap-2 text-base font-semibold">
+          <input
+            type="checkbox"
+            className="size-4 accent-cobalt"
+            checked={value.cold_open ?? false}
+            onChange={(e) => onChange({ ...value, cold_open: e.target.checked })}
+          />
+          Cold open
+        </label>
+        <p className="m-0 text-sm text-ink-soft">
+          Start on about 5 seconds of the chorus with the song title in neon, then a lightning flash and thunder, then the song from the beginning. Viewers
+          hear the hook before they decide to stay. Adds about 7 seconds.
+        </p>
       </div>
 
       {catalog && style && (

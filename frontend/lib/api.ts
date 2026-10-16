@@ -47,8 +47,8 @@ export const ART_STYLES: { value: ArtStyle; label: string; hint: string }[] = [
   { value: "flat", label: "Flat 2D", hint: "Flat motion-graphics illustration, for explainers" },
 ];
 /** Camera moves over a picture (crcontent/fx.py MOTIONS); the _3d ones split it into depth layers. */
-export type Motion = "push_in" | "pull_out" | "pan_left" | "pan_right" | "tilt_up" | "tilt_down" | "orbit_3d" | "dolly_3d" | "rise_3d" | "still";
-export type Effect = "glow" | "light_leak" | "dust" | "snow" | "embers" | "sparkles" | "petals" | "speed_lines" | "chromatic" | "grain" | "vignette" | "flash";
+export type Motion = "push_in" | "pull_out" | "pan_left" | "pan_right" | "tilt_up" | "tilt_down" | "orbit_3d" | "dolly_3d" | "rise_3d" | "still" | "breathe";
+export type Effect = "glow" | "light_leak" | "dust" | "snow" | "embers" | "sparkles" | "petals" | "bokeh" | "speed_lines" | "chromatic" | "grain" | "vignette" | "flash";
 /** Effects you pick per scene; bloom, grain and vignette come with the art style. */
 export const MOOD_EFFECTS: Effect[] = ["dust", "snow", "embers", "sparkles", "petals", "speed_lines", "light_leak", "flash"];
 
@@ -209,7 +209,7 @@ export interface SongScript {
 }
 
 export type Look = "natural" | "cinematic" | "film" | "moody" | "vibrant" | "dusk" | "mono";
-export type LyricPreset = "classic" | "neon" | "bold_pop" | "cinematic" | "minimal" | "retro" | "boxed";
+export type LyricPreset = "classic" | "neon" | "bold_pop" | "cinematic" | "minimal" | "retro" | "boxed" | "playlist";
 export type CutPace = "slow" | "normal" | "fast";
 /** Old-tape treatments for a section (crcontent/fx.py TAPES / FRAMES). */
 export type Tape = "" | "play" | "rewind" | "static_in" | "static";
@@ -258,7 +258,7 @@ export interface StyleCatalog {
 }
 
 /** How many AI pictures a music video gets (crcontent/pipeline.py PICTURE_PACES): fewer = one per ~8 s, normal ~4.5 s, more ~3 s. */
-export type PicturePace = "fewer" | "normal" | "more";
+export type PicturePace = "fewer" | "normal" | "more" | "cover";
 
 /** One planned picture of a music video (crcontent/pipeline.py song_slots + Claude's prompt). */
 export interface SongArtSlot {
@@ -271,7 +271,7 @@ export interface SongArtSlot {
   motion: Motion;
   effects: Effect[];
   seed: number;
-  frame?: "4:3"; // a home-video section: drawn landscape
+  frame?: "4:3" | "cover"; // a home-video section: drawn landscape; a cover character: drawn portrait, set on a flat frame
   picture: MediaInfo | null; // already drawn (free to check before the render)
 }
 
@@ -294,6 +294,7 @@ export interface MusicVideoSettings {
   art_style?: ArtStyle | ""; // "" = stock footage; undefined = the song's last choice
   pictures?: PicturePace; // undefined = the song's last choice
   direction?: SongDirection | null; // the shot list for the idea; undefined = the song's
+  cold_open?: boolean; // open on the chorus with the title in neon, then lightning; undefined = the song's last choice
 }
 
 export interface VideoIdeaSuggestion {
@@ -341,6 +342,19 @@ export interface TikTokCreator {
   nickname: string;
   privacy_options: TikTokPrivacy[];
   max_seconds: number;
+  // interactions the creator turned off in TikTok's own settings
+  comment_disabled: boolean;
+  duet_disabled: boolean;
+  stitch_disabled: boolean;
+}
+
+/** What a TikTok direct post allows and discloses, chosen on the Upload card (TikTok's Direct Post guidelines). */
+export interface TikTokPost {
+  allow_comment: boolean;
+  allow_duet: boolean;
+  allow_stitch: boolean;
+  brand_organic: boolean; // "Your brand": promoting yourself or your own business
+  brand_content: boolean; // "Branded content": a paid partnership with a third party
 }
 
 /** A connected channel/account and its upload settings (crcontent/publish.py status()). */
@@ -557,6 +571,7 @@ export interface VideoDetail extends VideoSummary {
   art_style?: ArtStyle | ""; // same, for the AI scene art ("" = stock footage)
   pictures?: PicturePace; // same, for how many AI pictures
   direction?: SongDirection | null; // songs: the shot list made from the idea
+  cold_open?: boolean; // same, for the chorus cold open
   lyric_style?: LyricStyle | null; // same, for the lyrics
   post: string;
   published?: Partial<Record<Platform, Published>>; // missing on an older engine
@@ -578,7 +593,7 @@ export interface PostSuggestion {
   hashtags: string[];
 }
 
-export type ThumbStyle ="bold" | "box" | "stacked" | "designed"; // designed: a full layout Claude draws
+export type ThumbStyle = "bold" | "box" | "stacked" | "designed" | "magazine"; // designed: a full layout Claude draws; magazine: a one-cover video's character in front of huge words
 
 export interface ThumbSuggestion {
   text: string;
@@ -893,6 +908,7 @@ export const api = {
       category?: string;
       channel?: string;
       tiktok_privacy?: TikTokPrivacy | "DRAFT";
+      tiktok_post?: TikTokPost; // direct posts only
       facebook_publish_at?: string; // uploads now; Facebook publishes it at this local time (10 min to 28 days ahead)
     } = {},
   ) =>

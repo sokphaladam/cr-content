@@ -364,6 +364,9 @@ your browser and comes back to the app. Keys from older `.env` setups are import
   *Content Posting API* (Direct Post), register the redirect URI `http://localhost:8765/callback/`, and enter
   its client key and secret. Until TikTok audits the app, direct posts can only be
   **Only me**; choose **Send to TikTok drafts** to finish and post publicly from the TikTok app instead.
+  Direct posts follow TikTok's Direct Post rules: the Upload card has Comment / Duet / Stitch (off until you tick
+  them), **Disclose video content** (Your brand / Branded content) and the Music Usage Confirmation line.
+  Auto-uploads and set-time posts allow all three interactions and disclose nothing.
 - **Facebook and Instagram** share one Meta app and one sign-in. At developers.facebook.com create an app with the
   use cases for managing a Page and the *Instagram API with Facebook Login*, keep it in **Development mode** (as
   its admin you can grant every permission without App Review; `http://localhost` redirects are allowed there), and

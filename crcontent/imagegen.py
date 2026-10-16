@@ -448,7 +448,24 @@ def full_prompt(prompt: str, style: str) -> str:
         # without it Animagine draws "1boy" with long or messy hair as a girl (and pastes any beard onto her)
         head, _, rest = prompt.partition(",")
         prompt = f"{head}, male focus,{rest}" if rest else f"{head}, male focus"
+    if _flat(prompt, style):
+        # a cover on a plain background: its background tags first (the text encoder drops whatever passes ~75
+        # tokens), and no "cinematic lighting", which pulls in a lit scene behind the character
+        tags = [t.strip() for t in prompt.split(",")]
+        back = [t for t in tags if t.lower().endswith("background")]
+        back = back[:1] + ["plain background"] + back[1:] if "plain background" not in back else back
+        return f"{spec['prefix']}{', '.join(back + [t for t in tags if t not in back])}, anime illustration"
     return f"{spec['prefix']}{prompt}{spec['suffix']}"
+
+
+def _flat(prompt: str, style: str) -> bool:
+    """An anime picture on a plain background (a music video's cover picture)."""
+    return style == "anime" and "simple background" in prompt.lower()
+
+
+FLAT_NEGATIVE = ("scenery, outdoors, indoors, building, architecture, window, sky, detailed background, gradient "
+                 "background, abstract background, multicolored background, patterned background, paint splatter, "
+                 "splashes, border, frame, picture frame, panel, from below, foreshortening, reaching towards viewer")
 
 
 def _sex_negative(prompt: str, style: str) -> str:
@@ -471,7 +488,7 @@ def cache_file(prompt: str, style: str, size: tuple[int, int], seed: int, hires:
     w, h = base_size(size)
     # the full prompt and hi-res scale are part of the key, so changing a look's wording draws new pictures
     ref = f"\nref {hashlib.sha1(reference.read_bytes()).hexdigest()[:12]} {IP_SCALE}" if reference else ""
-    key = hashlib.sha1(f"{style}\n{w}x{h}\n{seed}\n{hires}{HIRES_SCALE}\n{negative}{_sex_negative(prompt, style)}\n"
+    key = hashlib.sha1(f"{style}\n{w}x{h}\n{seed}\n{hires}{HIRES_SCALE}\n{negative}{_sex_negative(prompt, style)}{FLAT_NEGATIVE if _flat(prompt, style) else ''}\n"
                        f"{full_prompt(prompt.strip(), style)}{ref}"
                        .encode()).hexdigest()[:16]
     return GEN_CACHE / f"{style}-{key}.png"
@@ -550,7 +567,8 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
             # once loaded, the model needs a photo every time: a blank one at no weight draws as without IP-Adapter
             pipe.set_ip_adapter_scale(IP_SCALE if reference else 0.0)
             ip = {"ip_adapter_image": _reference_image(reference) if reference else Image.new("RGB", (224, 224))}
-        neg = ", ".join(x for x in (spec["negative"], _sex_negative(prompt, style), negative) if x)
+        neg = ", ".join(x for x in (spec["negative"], _sex_negative(prompt, style), negative,
+                                    FLAT_NEGATIVE if _flat(prompt, style) else "") if x)
         # on a Mac the seed's noise comes from the CPU: diffusers' advice, for the same picture every time
         generator = torch.Generator("cuda" if device() == "cuda" else "cpu").manual_seed(seed)
         image = _run(pipe, CFG_UNTIL[0], prompt=full_prompt(prompt, style), negative_prompt=neg, width=w, height=h,
@@ -568,3 +586,39 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
         image.save(tmp)
         os.replace(tmp, out)
     return out
+
+
+def outpaint(image, mask, prompt: str, style: str, seed: int, log=print):
+    """Paint the white part of `mask` (a PIL "L" image) in `image` (a PIL picture at an SDXL size) so it continues
+    the rest: a picture widened to another shape. The unpainted part is kept exactly; the result then gets the same
+    hi-res pass as generate(). Returns a PIL picture HIRES_SCALE x bigger."""
+    import torch
+    from diffusers import StableDiffusionXLImg2ImgPipeline, StableDiffusionXLInpaintPipeline
+    from PIL import Image, ImageFilter
+
+    with _lock:
+        spec = STYLES[style]
+        pipe = _load(style, log)
+        ip = {}
+        if getattr(pipe, "image_encoder", None) is not None:  # loaded for an earlier picture: draw as without it
+            pipe.set_ip_adapter_scale(0.0)
+            ip = {"ip_adapter_image": Image.new("RGB", (224, 224))}
+        neg = ", ".join(x for x in (spec["negative"], _sex_negative(prompt, style),
+                                    FLAT_NEGATIVE if _flat(prompt, style) else "") if x)
+        generator = torch.Generator("cuda" if device() == "cuda" else "cpu").manual_seed(seed)
+        paint = StableDiffusionXLInpaintPipeline(**pipe.components)  # the same modules: no second copy
+        paint.set_progress_bar_config(disable=True)
+        # full guidance throughout (not _run): the inpainting blend splits its mask by guidance, and switching it
+        # off midway leaves the mask and the picture with different batch sizes
+        painted = paint(prompt=full_prompt(prompt, style), negative_prompt=neg, image=image, mask_image=mask,
+                        width=image.width, height=image.height, strength=0.99, num_inference_steps=spec["steps"] + 8,
+                        guidance_scale=spec["cfg"], generator=generator, **ip).images[0]
+        soft = mask.filter(ImageFilter.GaussianBlur(6))
+        image = Image.composite(painted, image, soft)  # what wasn't to be painted stays exactly as it was
+        refine = StableDiffusionXLImg2ImgPipeline(**pipe.components)
+        refine.set_progress_bar_config(disable=True)
+        w, h = image.size
+        image = image.resize((round(w * HIRES_SCALE / 8) * 8, round(h * HIRES_SCALE / 8) * 8), resample=3)
+        return _run(refine, CFG_UNTIL[1], prompt=full_prompt(prompt, style), negative_prompt=neg, image=image,
+                    strength=0.3, num_inference_steps=HIRES_STEPS, guidance_scale=spec["cfg"], generator=generator,
+                    **ip)

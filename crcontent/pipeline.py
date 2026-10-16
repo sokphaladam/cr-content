@@ -166,6 +166,92 @@ def draw_designed(job: Path, text: str, at: float, lang: str, out: Path, emphasi
     return at
 
 
+COVER_FRAME = "cover.png"  # a one-cover music video keeps its frame in work/ for the magazine thumbnail
+
+
+def _fit_font(draw, text: str, file: str, width: float, most: int, least: int):
+    """The biggest font (at most `most` px) at which `text` fits `width`; None below `least`."""
+    from PIL import ImageFont
+
+    from .styles import font_path
+
+    found = font_path(file)
+    px = most
+    while px >= least:
+        font = ImageFont.truetype(str(found), px) if found else ImageFont.load_default(px)
+        if draw.textlength(text, font=font) <= width:
+            return font
+        px = int(px * 0.92)
+    return None
+
+
+def draw_magazine(job: Path, text: str, lang: str, out: Path) -> bool:
+    """A magazine-cover thumbnail from a one-cover music video's frame: `text` in huge heavy letters across the
+    top with the character standing in front of it, two small lines of info at the sides. False when the video has
+    no cover frame (made before one-cover mode, or with several pictures)."""
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter, ImageOps
+
+    from .lyrics import SongScript
+    from .styles import FONTS, font_path
+
+    frame = job / "work" / COVER_FRAME
+    if not frame.exists():
+        return False
+    cover = Image.open(frame).convert("RGB")
+    W, H = cover.size
+    target = np.median(np.concatenate([np.asarray(cover)[0], np.asarray(cover)[:, 0]]), axis=0).astype(np.float32)
+    _, bg = _flatten(cover, target, with_mask=True)
+    person = ImageOps.invert(bg).filter(ImageFilter.GaussianBlur(1.2))  # the character, in front of the words
+    ink = (22, 22, 26)
+    words = Image.new("RGB", (W, H), tuple(int(c) for c in target))
+    draw = ImageDraw.Draw(words)
+    heavy = FONTS["km"]["Khmer OS Muol Light"] if lang == "km" else (
+        "seguibl.ttf" if font_path("seguibl.ttf") else FONTS["en"]["Impact"])
+    big = (text if lang == "km" else text.upper()).strip()
+    # where the character's head and shoulders are: two or more words go either side of them ("CHILL" | "J-POP")
+    top = np.asarray(person, dtype=np.float32)[: round(H * 0.35)] > 128
+    cols = np.where(top.mean(0) > 0.3)[0]  # solid head and shoulders, not wisps of flowing hair
+    x_left, x_right = (int(cols[0]), int(cols[-1])) if len(cols) else (W // 2, W // 2)
+    words_ = big.split()
+    y = round(H * 0.03)
+    if len(words_) >= 2:
+        half = len(big) // 2
+        cut = min((i for i, ch in enumerate(big) if ch == " "), key=lambda i: abs(i - half))
+        pair = [big[:cut], big[cut + 1:]]
+        overlap = W * 0.07  # the words tuck a little behind the character
+        room = [x_left + overlap - W * 0.04, W * 0.96 - (x_right - overlap)]
+        sizes = [_fit_font(draw, t, heavy, r, round(H * 0.3), round(H * 0.08)) for t, r in zip(pair, room)]
+        if all(sizes):
+            font = min(sizes, key=lambda f: f.size)
+            lbox, rbox = (draw.textbbox((0, 0), t, font=font) for t in pair)
+            draw.text((x_left + overlap - (lbox[2] - lbox[0]) - lbox[0], y - lbox[1]), pair[0], font=font, fill=ink)
+            draw.text((x_right - overlap - rbox[0], y - rbox[1]), pair[1], font=font, fill=ink)
+            words_ = []
+    if words_:  # one word (or the sides are too narrow): across the top, behind the head
+        font = (_fit_font(draw, big, heavy, W * 0.94, round(H * 0.42), round(H * 0.12))
+                or _fit_font(draw, big, heavy, W * 0.94, round(H * 0.12), 8))
+        box = draw.textbbox((0, 0), big, font=font)
+        draw.text(((W - (box[2] - box[0])) / 2 - box[0], y - box[1]), big, font=font, fill=ink)
+    # the small print at the sides, the way playlist covers carry their mood and use
+    try:
+        song = SongScript.load(job / "song.json")
+        mood, genre = song.mood.split(",")[0].strip().upper(), song.genre.split(",")[0].strip().upper()
+    except Exception:
+        mood, genre = "", ""
+    small = _fit_font(draw, "LYRIC VIDEO", heavy if lang != "km" else FONTS["en"]["Impact"], W, round(H * 0.034), 8)
+    left = [f"{datetime.now().year} {mood} MOOD".replace("  ", " "), f"{genre} SONG" if genre else ""]
+    right = ["LYRIC VIDEO", "CHILL / WORK / STUDY"]
+    for k, (l_txt, r_txt) in enumerate(zip(left, right)):
+        ly = round(H * 0.8) + k * round(H * 0.045)  # low, beside the clothes rather than the hair
+        if l_txt:
+            draw.text((round(W * 0.05), ly), l_txt, font=small, fill=ink)
+        rw = draw.textlength(r_txt, font=small)
+        draw.text((round(W * 0.95 - rw), ly), r_txt, font=small, fill=ink)
+    Image.composite(cover, words, person).save(out, quality=92)
+    return True
+
+
 def make_thumbnail(job: Path, text: str, at: float, lang: str, style: str = "bold", emphasis: str = "",
                    image: str = "", design: str = "") -> Path:
     """(Re)draw job/thumbnail.jpg and remember the choices in meta.json. `image`: a project-relative photo to use
@@ -174,7 +260,9 @@ def make_thumbnail(job: Path, text: str, at: float, lang: str, style: str = "bol
     out = job / "thumbnail.jpg"
     photo = ROOT / image if image else None
     photo = photo if photo and photo.exists() else None
-    if style == "designed" and text.strip():
+    if style == "magazine" and text.strip() and draw_magazine(job, text, lang, out):
+        at = 0.0
+    elif style == "designed" and text.strip():
         start = job / design if design else out.with_suffix(".svg")
         at = draw_designed(job, text, at, lang, out, emphasis, photo, start if start.exists() else None)
     else:
@@ -433,7 +521,121 @@ def draw_checked(prompt: str, style: str, size: tuple[int, int], seed: int | Non
 
 # how many AI pictures a music video gets: seconds each picture stays on screen, and a cap for long songs.
 # A picture takes ~40 s to draw on an RTX 3060, so "normal" on a 3-minute song is ~25 minutes of drawing.
-PICTURE_PACES = {"fewer": (8.0, 24), "normal": (4.5, 40), "more": (3.0, 60)}
+# "cover": one character picture for the whole song on a flat pastel background, held with a slow breathing move and
+# floating lights, never cut (the playlist / lyric-video look).
+PICTURE_PACES = {"fewer": (8.0, 24), "normal": (4.5, 40), "more": (3.0, 60), "cover": (float("inf"), 1)}
+# the model's own colour tags (a softer "pastel pink" draws as near-white), and the flat pastel each becomes
+COVER_COLOURS = {"purple": (201, 182, 238), "light blue": (178, 214, 245), "orange": (250, 203, 168),
+                 "aqua": (170, 228, 216), "pink": (246, 188, 212), "yellow": (250, 230, 160), "red": (240, 150, 152),
+                 "blue": (160, 186, 240)}
+COVER_EFFECTS = ["bokeh", "sparkles", "glow", "grain"]
+COVER_SHAPE = "9:16"  # a cover character is drawn portrait (head to thighs with room above), then set on a flat frame
+
+
+def _flatten(img, target, tolerance: float = 26, with_mask: bool = False):
+    """`img` (a PIL picture) with its plain background (found by spreading in from the edges through pixels of its
+    colour, plus pockets of that colour shut in by hair or arms) turned into the flat `target` colour, blended over a
+    soft mask so hair edges stay soft and keep no rim of the old colour. Pixels already near `target` count as
+    background too (a widened picture's kept middle). with_mask: also return the background mask (PIL "L")."""
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    small = np.asarray(img.resize((max(img.width * 512 // img.height, 1), 512)), dtype=np.float32)
+    edge = np.concatenate([small[0], small[:, 0], small[:, -1]])  # not the bottom: the body is cut off there
+    ref = np.median(edge, axis=0)
+    near = np.linalg.norm(small - ref, axis=2) < tolerance  # tight: hair or clothes close to it stay
+    near |= np.linalg.norm(small - target, axis=2) < 18
+    bg = np.zeros_like(near)
+    bg[0], bg[-1], bg[:, 0], bg[:, -1] = near[0], near[-1], near[:, 0], near[:, -1]
+    for _ in range(small.shape[0] + small.shape[1]):  # grow from the edges through similar pixels only
+        grown = bg.copy()
+        grown[1:] |= bg[:-1]
+        grown[:-1] |= bg[1:]
+        grown[:, 1:] |= bg[:, :-1]
+        grown[:, :-1] |= bg[:, 1:]
+        grown &= near
+        if (grown == bg).all():
+            break
+        bg = grown
+    bg |= (np.linalg.norm(small - ref, axis=2) < 18) | (np.linalg.norm(small - target, axis=2) < 12)
+    mask = Image.fromarray((bg * 255).astype(np.uint8)).resize(img.size, Image.BILINEAR)
+    core = np.asarray(mask.filter(ImageFilter.GaussianBlur(1.5)), dtype=np.float32)[..., None] / 255
+    rim = np.asarray(mask.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(4)),
+                     dtype=np.float32)[..., None] / 255
+    pic = np.asarray(img, dtype=np.float32)
+    # edge pixels are part old background: shift that part to the pastel (no coloured rim), then fill flat
+    pic = np.clip(pic + (target - ref) * rim * (1 - core), 0, 255) * (1 - core) + target * core
+    flat = Image.fromarray(pic.astype(np.uint8))
+    return (flat, mask) if with_mask else flat
+
+
+OUTPAINT_SIZE = (1344, 768)  # the SDXL size a landscape cover is widened at (16:9 within 2%)
+
+
+def cover_canvas(picture: Path, size: tuple[int, int], colour: str, prompt: str = "", seed: int = 1,
+                 log: Callable[[str], None] = print) -> Path:
+    """The drawn cover character (portrait) as a picture of the frame's shape on a flat `colour` background. A
+    landscape frame is widened by the drawing model itself: the character is set on a canvas of that colour and the
+    sides, the strip above the head and a band over the picture's edges are painted to continue it (hair and clothes
+    the portrait cut off run on), so there is no pasted-on edge. Made once next to the picture."""
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter, ImageOps
+
+    from . import imagegen
+
+    W, H = size
+    out = picture.with_name(f"{picture.stem}-cover9-{W}x{H}-{colour.replace(' ', '_')}.png")
+    if out.exists():
+        return out
+    target = np.array(COVER_COLOURS.get(colour, (246, 188, 212)), dtype=np.float32)
+    flat, bg = _flatten(Image.open(picture).convert("RGB"), target, with_mask=True)
+    if W > H and prompt:
+        CW, CH = OUTPAINT_SIZE
+        h = round(CH * 0.92)  # room above the head
+        w = round(flat.width * h / flat.height)
+        x0, y0 = (CW - w) // 2, CH - h
+        canvas = Image.new("RGB", (CW, CH), tuple(int(c) for c in target))
+        canvas.paste(flat.resize((w, h), Image.LANCZOS), (x0, y0))
+        # keep only the character (a little inside its outline), minus a band along the picture's edges so what
+        # they cut off continues; everything else is painted, so no trace of the picture's rectangle is left
+        person = ImageOps.invert(bg).resize((w, h), Image.BILINEAR).point(lambda v: 255 if v > 128 else 0)
+        band = 28
+        ImageDraw.Draw(person).rectangle((0, 0, w, band), fill=0)
+        ImageDraw.Draw(person).rectangle((0, 0, band, h), fill=0)
+        ImageDraw.Draw(person).rectangle((w - band, 0, w, h), fill=0)
+        keep = Image.new("L", (CW, CH), 0)
+        keep.paste(person.filter(ImageFilter.MinFilter(7)), (x0, y0))
+        mask = ImageOps.invert(keep)
+        log("      widening the cover picture to the frame")
+        wide = imagegen.outpaint(canvas, mask, prompt, "anime", seed, log=log)
+        _flatten(wide, target, tolerance=34).resize((W, H), Image.LANCZOS).save(out)
+        return out
+    if abs(flat.width / flat.height - W / H) < 0.05:  # a portrait frame: the picture's own shape, edge to edge
+        flat.resize((W, H), Image.LANCZOS).save(out)
+        return out
+    # no prompt to widen it with: the picture on the flat colour
+    h = round(H * 0.94)
+    w = round(flat.width * h / flat.height)
+    frame = Image.new("RGB", (W, H), tuple(int(c) for c in target))
+    frame.paste(flat.resize((w, h), Image.LANCZOS), ((W - w) // 2, H - h))
+    frame.save(out)
+    return out
+
+
+def cover_colour(title: str) -> str:
+    """The flat pastel background of a song's cover picture (the same every time for the same song)."""
+    return list(COVER_COLOURS)[int(hashlib.sha1(title.strip().lower().encode()).hexdigest(), 16) % len(COVER_COLOURS)]
+
+
+def cover_scene(song) -> str:
+    """The direction for a song's single cover picture (director.plan_song follows it exactly)."""
+    colour = cover_colour(song.title)
+    return (f"COVER ART for the whole song, like a J-pop playlist cover: one anime character (the main character of "
+            f"the creator's idea when it describes one, with their look, hair and outfit; otherwise one who fits the "
+            f"song's mood and lyrics), cowboy shot (head to thighs, with room above the head), centred, eye level, facing the viewer with a lively expressive "
+            f"pose (hands near the face or at the sides, never reaching at the camera), a stylish outfit with {colour} "
+            f"accents, on a plain flat {colour} background with nothing else in it. Keep the prompt under 30 words "
+            f"and end it with: simple background, {colour} background")
 
 
 def _repeats(song) -> dict[int, int]:
@@ -456,6 +658,11 @@ def _repeats(song) -> dict[int, int]:
 
 
 HOME_VIDEO = (1440, 1080)  # the shape a 4:3 home-video section's pictures are drawn in
+
+
+def picture_shape(slot: dict, size: tuple[int, int]) -> tuple[int, int]:
+    """The shape a planned picture is drawn in: landscape for a 4:3 home video, portrait for a cover character."""
+    return HOME_VIDEO if slot.get("frame") == "4:3" else frame_size(COVER_SHAPE) if slot.get("frame") == "cover" else size
 ART_PLAN = "art_plan.json"  # a song's picture plan, kept in the song folder so it can be checked before a render
 
 
@@ -466,6 +673,12 @@ def song_slots(song, spans: list[tuple[float, float]], shots: list, lines: list,
     again, unless `scenes` (a directed idea, one per section) asks for something else there. `frames`: the
     directed frame per section; "4:3" slots are drawn as landscape home-video pictures.
     Returns (slots, the slot of every shot, the shots that show a repeated picture)."""
+    if pace == "cover" and shots:  # one picture for every shot (the render holds it as one long shot)
+        chorus = cold_open_window(song, lines, spans, spans[-1][1]) if lines else None
+        sung = " / ".join(l.text for l in lines if chorus and chorus[0] <= l.start < chorus[1])
+        return ([{"section": song.sections[shots[0].section].name, "lyrics": sung[:300], "start": 0.0,
+                  "seconds": round(shots[-1].end, 2), "also": [], "scene": cover_scene(song), "frame": "cover"}],
+                [0] * len(shots), set())
     seconds_each, cap = PICTURE_PACES.get(pace, PICTURE_PACES["normal"])
     per_section: dict[int, list[int]] = {}
     for i, shot in enumerate(shots):
@@ -597,6 +810,13 @@ def _new_art_plan(song, slots: list[dict], style: str, pace: str, aspect: str, i
             sec = next(x for x in song.sections if x.name == s["section"])
             plans.append(director.ShotPlan(s.get("scene") or sec.visual_query or f"{song.mood} {song.genre}",
                                            "push_in", []))
+    if pace == "cover":  # held for the whole song: the breathing move and floating lights, on a flat background
+        tags = f"simple background, {cover_colour(song.title)} background"
+        if not bible:  # Claude couldn't plan it: a short tag prompt the model reads whole (the direction is too long)
+            plans = [director.ShotPlan(f"1girl, solo, cowboy shot, looking at viewer, {song.mood.split(',')[0].strip().lower()} expression, "
+                                       f"stylish casual outfit, dark hoodie", "breathe", [])]
+        plans = [director.ShotPlan(p.prompt if tags in p.prompt else f"{p.prompt.rstrip(' ,.')}, {tags}", "breathe",
+                                   COVER_EFFECTS) for p in plans]
     return {"style": style, "pictures": pace, "idea": idea, "aspect": aspect, "bible": bible,
             "direction": _direction_key(direction),
             "slots": [{**s, "prompt": p.prompt, "motion": p.motion, "effects": p.effects, "seed": k + 1}
@@ -652,7 +872,7 @@ def song_art(song_dir: Path, song, spans: list[tuple[float, float]], shots: list
     for k, s in enumerate(plan["slots"]):
         seed = s.get("seed") or k + 1
         plans.append(director.ShotPlan(s["prompt"], s.get("motion") or "push_in", s.get("effects") or []))
-        shape = HOME_VIDEO if s.get("frame") == "4:3" else size  # a home video's picture is drawn landscape
+        shape = picture_shape(s, size)
         log(f"      drawing picture {k + 1}/{len(plan['slots'])}"
             + (" (already drawn)" if imagegen.drawn(s["prompt"], style, shape, seed) else ""))
         pictures.append(imagegen.generate(s["prompt"], style, shape, seed=seed, log=log))
@@ -783,9 +1003,81 @@ def sync_lyrics(job: Path, log: Callable[[str], None] = print, step: str = "[2/2
     return lines
 
 
+COLD_OPEN_GAP = 1.8  # seconds of lightning and thunder between the chorus preview and the song's start
+COLD_OPEN_SECONDS = (3.5, 5.5, 8.0)  # the preview's shortest, ideal and longest length
+
+
+def cold_open_window(song, lines: list, spans: list[tuple[float, float]], total: float) -> tuple[float, float] | None:
+    """(start, end) in the song of a cold open's chorus preview: the first chorus (else the first section sung again),
+    from just before its first line to the end of the line that ends nearest ~5.5 s in. None without a chorus."""
+    names = [s.name.lower() for s in song.sections]
+    chorus = next((i for i, n in enumerate(names) if any(w in n for w in ("chorus", "hook", "refrain"))
+                   and "pre" not in n), None)
+    if chorus is None:
+        chorus = min(_repeats(song).values(), default=None)
+    sung = [l for l in lines if l.section == chorus] if chorus is not None else []
+    if not sung:
+        return None
+    start = max(spans[chorus][0], sung[0].start - 0.3)
+    shortest, ideal, longest = COLD_OPEN_SECONDS
+    ends = [l.end for l in sung if shortest <= l.end - start <= longest]
+    end = (min(ends, key=lambda e: abs(e - start - ideal)) if ends else start + ideal) + 0.25
+    return (start, min(end, total)) if min(end, total) - start >= shortest else None
+
+
+def _cold_open_lines(lines: list, start: float, end: float) -> list:
+    """The lyrics for a cold open: the preview's lines moved to the very start, then every line after the gap."""
+    from dataclasses import replace
+
+    def moved(line, by: float, upto: float = float("inf")):
+        words = [replace(w, start=min(w.start + by, upto), end=min(w.end + by, upto)) for w in line.words]
+        return replace(line, start=min(line.start + by, upto), end=min(line.end + by, upto), words=words)
+
+    length = end - start
+    preview = [moved(l, -start, length) for l in lines if start - 0.05 <= l.start < end - 0.5]
+    # a blank line where the lightning strikes: the preview's last line ends there instead of lingering on the flash
+    cut = replace(lines[0], text="", start=length, end=length, words=[])
+    return preview + [cut] + [moved(l, length + COLD_OPEN_GAP) for l in lines]
+
+
+def neon_title(title: str) -> str:
+    """The song's name from a post title: "Signal Lost - Song About ... (Official Lyric Video)" -> "Signal Lost"."""
+    name = re.split(r"\s[-–—|:]\s|\s*[(\[]", title, maxsplit=1)[0].strip()
+    return name or title.strip()
+
+
+def _cold_open_media(work: Path, song_video: str, mix: Path, start: float, end: float, size: tuple[int, int]) -> Path:
+    """The cold open's pictures and sound: preview.mp4 (the chorus's shots), flash.mp4 (lightning: white flickering,
+    then fading to black) and the soundtrack cold_open.wav (the chorus, cut dead into thunder, then the whole song)."""
+    from .config import FPS
+
+    length, W, H = end - start, *size
+    clip = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS),
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2"]
+    run(["ffmpeg", "-y", "-hide_banner", "-ss", f"{start:.3f}", "-i", song_video, "-t", f"{length:.3f}", *clip,
+         "preview.mp4"], cwd=work)
+    # on, a flicker off, on again, then the white dies to black before the intro
+    light = "if(lt(t,0.1),0,if(lt(t,0.18),-0.75,if(lt(t,0.34),0,-min(1,(t-0.34)/0.9))))"
+    run(["ffmpeg", "-y", "-hide_banner", "-f", "lavfi", "-i", f"color=c=white:s={W}x{H}:r={FPS}:d={COLD_OPEN_GAP}",
+         "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-vf", f"format=yuv420p,eq=brightness='{light}':eval=frame",
+         "-t", f"{COLD_OPEN_GAP}", *clip, "flash.mp4"], cwd=work)
+    stereo = "aresample=44100,aformat=channel_layouts=stereo"
+    ms = round(length * 1000)
+    run(["ffmpeg", "-y", "-hide_banner", "-i", str(mix.resolve()), "-i", str(sfx.sound("thunder").resolve()),
+         "-filter_complex",
+         f"[0:a]{stereo},asplit=2[x][y];"
+         f"[x]atrim={start:.3f}:{end:.3f},asetpts=PTS-STARTPTS,afade=t=out:st={max(length - 0.12, 0):.3f}:d=0.12[p];"
+         f"anullsrc=r=44100:cl=stereo:d={COLD_OPEN_GAP}[g];[y]asetpts=PTS-STARTPTS[s];"
+         f"[p][g][s]concat=n=3:v=0:a=1[c];[1:a]{stereo},adelay={ms}|{ms},volume=0.8[t];"
+         f"[c][t]amix=inputs=2:duration=first:normalize=0[a]",
+         "-map", "[a]", "-c:a", "pcm_s16le", "cold_open.wav"], cwd=work)
+    return work / "cold_open.wav"
+
+
 def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: str = "", look: str = "",
                      lyric_style: "dict | None" = None, art_style: str | None = None,
-                     pictures: str | None = None, direction: dict | None = None) -> Path:
+                     pictures: str | None = None, direction: dict | None = None,
+                     cold_open: bool | None = None) -> Path:
     """Song folder in -> a NEW video folder next to it: beat-cut footage per section, karaoke lyrics, the song as audio.
 
     The song folder works like a draft: its lyrics and timing stay editable, and every render is a separate version
@@ -793,8 +1085,10 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     version only, the song keeps its own searches). `look`: colour grade for the footage (styles.LOOKS);
     `lyric_style`: how the lyrics are drawn (styles.LyricStyle fields). `art_style`: "" = stock footage, else an
     imagegen.STYLES look drawn on this computer (None = the song's last choice). `pictures`: how many of them
-    (PICTURE_PACES: "fewer", "normal", "more"; None = the song's last choice). Idea, look and styles are
-    remembered on the song for the next version. Returns the new video.mp4.
+    (PICTURE_PACES: "fewer", "normal", "more"; None = the song's last choice). `cold_open`: open on a few seconds
+    of the chorus with the title in neon, then a lightning flash and thunder, then the song from the start (None =
+    the song's last choice). Idea, look and styles are remembered on the song for the next version. Returns the new
+    video.mp4.
     """
     from .align import load_lines, save_lines
     from .captions import build_karaoke_ass
@@ -809,10 +1103,11 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     style = LyricStyle.model_validate(lyric_style or song_meta.get("lyric_style") or {}).clean(lang)
     art_style = song_meta.get("art_style", "") if art_style is None else art_style
     pictures = pictures if pictures in PICTURE_PACES else song_meta.get("pictures") or "normal"
+    cold_open = bool(song_meta.get("cold_open")) if cold_open is None else cold_open
     # the shot list made from this idea (director.direct_idea, maybe edited); None = the song's, if it fits the idea
     direction = song_direction(song, song_meta.get("direction") if direction is None else direction, idea)
     remembered = {"idea": idea, "look": look, "lyric_style": style.model_dump(), "art_style": art_style,
-                  "pictures": pictures, **({"direction": direction} if direction else {})}
+                  "pictures": pictures, "cold_open": cold_open, **({"direction": direction} if direction else {})}
     if any(song_meta.get(k) != v for k, v in remembered.items()):  # remembered for the next version
         song_meta.update(remembered)
         _save_meta(song_dir, song_meta)
@@ -868,7 +1163,18 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     shown: dict[int, int] = {}  # section -> shots so far
     exhausted: set[int] = set()  # sections whose search has no new clips left
     clips = []
-    for i, shot in enumerate(shots):
+    held = bool(shot_art) and pictures == "cover"
+    if held:  # one picture held for the whole song: no cuts, no beat punches
+        picture, plan = shot_art[0]
+        seed = (json.loads((work / "art.json").read_text(encoding="utf-8"))["slots"][0].get("seed") or 1)
+        picture = cover_canvas(picture, size, cover_colour(song.title), plan.prompt, seed, log)
+        shutil.copy(picture, work / COVER_FRAME)  # for the magazine thumbnail
+        log(f"      holding one picture for the whole song ({total:.0f}s)")
+        clip = work / "shot_00.mp4"
+        fx.render_shot(picture, total, clip, size=size, motion="breathe", effects=plan.effects or COVER_EFFECTS,
+                       look=look, seed=7)
+        clips.append(clip)
+    for i, shot in enumerate([] if held else shots):
         if shot_art:
             picture, plan = shot_art[i]
             first = i == 0 or shot_art[i - 1][0] != picture
@@ -924,27 +1230,48 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
         render_scene(footage, None, shot.length, clip, start=start, size=size, look=look, drift=drift)
         clips.append(clip)
     release_gpu()
-    concat(clips, work, "joined.mp4")
+    opening = cold_open_window(song, lines, spans, total) if cold_open else None
+    soundtrack, sung, title = mix, lines, None
+    if opening:
+        # the chorus's own shots, then lightning, then the whole video; the song cut the same way
+        a, b = opening
+        log(f"      cold open: the chorus from {a:.1f}s to {b:.1f}s, then lightning and thunder")
+        concat(clips, work, "song_cut.mp4")
+        soundtrack = _cold_open_media(work, "song_cut.mp4", mix, a, b, size)
+        concat([work / "preview.mp4", work / "flash.mp4", work / "song_cut.mp4"], work, "joined.mp4")
+        sung = _cold_open_lines(lines, a, b)
+        title = (neon_title(song.title), min(1.0, (b - a) * 0.2), b - a)
+    else:
+        if cold_open:
+            log("      no chorus found for a cold open; the video starts with the song")
+        concat(clips, work, "joined.mp4")
 
     # 3. Karaoke captions
     log("[3/4] Captions")
-    (work / "captions.ass").write_text(build_karaoke_ass(lines, profile, size=size, style=style), encoding="utf-8")
+    (work / "captions.ass").write_text(build_karaoke_ass(sung, profile, size=size, style=style, title=title),
+                                       encoding="utf-8")
     _install_font(profile, work / "fonts", FONTS.get(lang, FONTS["en"]).get(style.font, ""))
 
     # 4. Final render with the song as the soundtrack + cover + post text
     log("[4/4] Final render")
     final = job / "video.mp4"
-    finalize(work, "joined.mp4", "captions.ass", final, None, soundtrack=mix, fade_out=2.0)
+    finalize(work, "joined.mp4", "captions.ass", final, None, soundtrack=soundtrack, fade_out=2.0)
+    if opening:
+        total += opening[1] - opening[0] + COLD_OPEN_GAP
     try:
         cover_at = thumbs.best_frames(work / "joined.mp4", 1)[0]
     except Exception:
         cover_at = min(1.0, total / 2)
     hook = next((l.text for l in lines), "")
-    make_thumbnail(job, song.title, cover_at, lang)
+    if held:  # the song's name in huge letters behind the character
+        make_thumbnail(job, neon_title(song.title), cover_at, lang, style="magazine")
+    else:
+        make_thumbnail(job, song.title, cover_at, lang)
     tags = " ".join(f"#{h}" for h in song.hashtags)
     credit = "" if own else "\nMusic and vocals are AI-generated.\n"
     (job / "post.txt").write_text(f"{song.title}\n\n{song.caption}\n\n{tags}\n{credit}", encoding="utf-8")
-    _save_meta(job, {**_meta(job), "timing": timing, "beats": beat_method, "shots": len(shots), "hook": hook})
+    _save_meta(job, {**_meta(job), "timing": timing, "beats": beat_method, "shots": len(shots), "hook": hook,
+                     "cold_open": bool(opening), "duration": round(total, 2)})
     log(f"Done: {final}  ({total:.1f}s)")
     return final
 

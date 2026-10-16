@@ -139,7 +139,8 @@ def _case(text: str, case: str, lang: str) -> str:
 
 
 def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: float = 0.8,
-                      size: tuple[int, int] = (WIDTH, HEIGHT), style: "LyricStyle | None" = None) -> str:
+                      size: tuple[int, int] = (WIDTH, HEIGHT), style: "LyricStyle | None" = None,
+                      title: tuple[str, float, float] | None = None) -> str:
     """Lyrics as karaoke, drawn in `style` (font, colours, size, position, effect; see styles.py).
 
     lines: align.LyricLine items (absolute word times). A line appears `lead_in` s before its first word and
@@ -147,6 +148,8 @@ def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: 
     karaoke: the whole line shown, words change colour as they're sung.  fill: a smooth colour sweep through
     each word.  pop: words appear one by one with a little bounce.  fade: the whole line fades in and out.
     Landscape frames show the upcoming line dimmed underneath (karaoke and fill), like a lyric video.
+    title: (text, start, end) the song's title flickering on like a neon sign in the sung-word colour (a cold open),
+    away from the lyrics.
     """
     from .styles import LyricStyle, ass_color
 
@@ -165,7 +168,8 @@ def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: 
     if style.outline == "box":
         border, outline, shadow, out_c, back_c = 3, max(10, font // 7), 0, "&H55000000&", "&H55000000&"
     elif style.outline == "shadow":
-        border, outline, shadow, out_c, back_c = 1, 1, max(3, font // 22), "&H60000000&", "&H70000000&"
+        # a soft dark halo as well as the drop shadow, so white lines read on light pictures too
+        border, outline, shadow, out_c, back_c = 1, max(2, font // 28), max(3, font // 22), "&H70000000&", "&H70000000&"
         blur = r"\blur3"
     elif style.outline == "glow":
         border, outline, shadow, out_c, back_c = 1, max(4, font // 18), 2, ass_color(style.highlight, 0x40), "&H70000000&"
@@ -240,7 +244,26 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 and next_start - line_end < 2.5 and _esc(lines[li + 1].text)):
             dialogue(show, line_end, next_pos + _esc(_case(lines[li + 1].text, style.case, profile.code)), "LyricNext")
         prev_end = line_end
+    if title and _esc(title[0]):
+        events += _neon_title(_esc(_case(title[0], "upper", profile.code)), title[1], title[2], style, font, W,
+                              round(H * (0.72 if style.position == "high" else 0.3)))
     return header + "\n".join(events) + "\n"
+
+
+def _neon_title(text: str, start: float, end: float, style: "LyricStyle", font: int, W: int, y: int) -> list[str]:
+    """A title that flickers on like a neon tube: a wide blurred glow in the neon colour under a pale, sharp core."""
+    from .styles import ass_color
+
+    neon = ass_color(style.highlight)
+    px = round(font * 1.9)
+    # on, off, on, dim, on: the first second of a neon sign being switched on; fades out at the end
+    flicker = (r"\alpha&HFF&\t(0,40,\alpha&H00&)\t(90,110,\alpha&HC0&)\t(170,190,\alpha&H00&)"
+               r"\t(330,350,\alpha&H70&)\t(420,440,\alpha&H00&)\fad(0,250)")
+    common = f"\\pos({W // 2},{y})\\an5\\fn{style.font}\\fs{px}\\b1\\fsp{round(px * 0.08)}"
+    glow = f"{{{common}\\1c{neon}\\3c{neon}\\bord{max(6, px // 9)}\\shad0\\blur{max(12, px // 5)}{flicker}}}{text}"
+    core = f"{{{common}\\1c&H00F4F0FF&\\3c{neon}\\bord{max(2, px // 40)}\\shad0\\blur2{flicker}}}{text}"
+    return [f"Dialogue: 3,{_ts(start)},{_ts(end)},Lyric,,0,0,0,,{glow}",
+            f"Dialogue: 4,{_ts(start)},{_ts(end)},Lyric,,0,0,0,,{core}"]
 
 
 THUMB_STYLES = ("bold", "box", "stacked")

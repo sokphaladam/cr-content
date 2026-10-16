@@ -877,7 +877,8 @@ def _run_music_video(job_id: str, folder: Path, req: "MusicVideoRequest") -> Non
         job["status"] = "running"
     try:
         final = make_music_video(folder, log=log, idea=req.idea[:IDEA_MAX], look=req.look, lyric_style=req.lyric_style,
-                                 art_style=req.art_style, pictures=req.pictures, direction=req.direction)
+                                 art_style=req.art_style, pictures=req.pictures, direction=req.direction,
+                                 cold_open=req.cold_open)
         with jobs_lock:
             job.update(status="done", step=4, video=final.parent.name)
         _auto_publish(final.parent, log)
@@ -887,7 +888,7 @@ def _run_music_video(job_id: str, folder: Path, req: "MusicVideoRequest") -> Non
             job.update(status="error", error=str(e).strip().splitlines()[-1] if str(e).strip() else repr(e))
 
 
-IDEA_MAX = 4000  # a scene-by-scene concept runs to a page
+IDEA_MAX = 12000  # a scene-by-scene concept runs to a page or more (an uploaded .md idea doc)
 
 
 class DirectRequest(BaseModel):
@@ -957,6 +958,7 @@ class MusicVideoRequest(BaseModel):
     art_style: str | None = None  # "" = stock footage, else an AI art look (imagegen.STYLES); None = the song's last
     pictures: str | None = None  # how many AI pictures (pipeline.PICTURE_PACES); None = the song's last choice
     direction: dict | None = None  # the shot list for the idea (POST .../direct); None = the song's, if it fits
+    cold_open: bool | None = None  # open on the chorus + neon title, then lightning; None = the song's last choice
 
 
 @app.post("/api/videos/{name}/music-video")
@@ -985,11 +987,11 @@ def _plan_view(folder: Path, plan: dict | None) -> dict:
     song = SongScript.load(folder / "song.json")
     current = song_direction(song, _read_meta(folder).get("direction"), plan.get("idea", ""))
     plan["direction_current"] = plan_follows(plan, current)
-    from .pipeline import HOME_VIDEO
+    from .pipeline import picture_shape
 
     size = frame_size(plan.get("aspect") or "9:16")
     for k, slot in enumerate(plan["slots"]):
-        shape = HOME_VIDEO if slot.get("frame") == "4:3" else size  # drawn landscape, like a 16:9 picture
+        shape = picture_shape(slot, size)  # a home video is drawn landscape, a cover character portrait
         path = imagegen.drawn(slot["prompt"], plan["style"], shape, slot.get("seed") or k + 1)
         slot["picture"] = _media_info(path) if path else None
     return {"plan": plan}
@@ -1401,6 +1403,7 @@ def video_detail(name: str):
     data["art_style"] = meta.get("art_style", plan.get("style", ""))
     data["pictures"] = meta.get("pictures", plan.get("pictures", "normal"))
     data["direction"] = meta.get("direction")  # the shot list made from the idea (songs)
+    data["cold_open"] = bool(meta.get("cold_open"))
     data["duration"] = (round(duration(folder / "video.mp4"), 2) if data["video"]
                         else meta.get("duration", 0))
     data["thumb_text"] = meta.get("thumb_text", data["title"])
@@ -2140,6 +2143,19 @@ class PublishRequest(BaseModel):
     category: str | None = None  # YouTube only: a category id for this upload (see publish.YT_CATEGORIES)
     channel: str = ""  # YouTube only: the channel id to upload to; "" = the default channel
     tiktok_privacy: str | None = None  # TikTok: a privacy level or "DRAFT" for this upload; None = Settings
+    tiktok_post: "TikTokPost | None" = None  # TikTok direct post: interactions and content disclosure picked on the card
+
+
+class TikTokPost(BaseModel):
+    """What TikTok's Direct Post guidelines ask the creator to choose for each post (all off unless they turn it on)."""
+    allow_comment: bool = False
+    allow_duet: bool = False
+    allow_stitch: bool = False
+    brand_organic: bool = False  # "Your brand": promoting yourself or your own business
+    brand_content: bool = False  # "Branded content": a paid partnership with a third party
+
+
+PublishRequest.model_rebuild()
 
 
 @app.get("/api/tiktok/creator")
@@ -2186,6 +2202,8 @@ def publish_video(name: str, req: PublishRequest):
         if req.tiktok_privacy not in (*publish.TIKTOK_PRIVACY, "DRAFT"):
             raise HTTPException(400, "Unknown TikTok visibility.")
         tiktok["privacy"] = req.tiktok_privacy
+    if req.tiktok_post and "tiktok" in req.platforms:
+        tiktok["tiktok_post"] = req.tiktok_post.model_dump()
     facebook = {}
     if req.facebook_publish_at and "facebook" in req.platforms:
         try:

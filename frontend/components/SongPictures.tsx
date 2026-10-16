@@ -6,7 +6,7 @@ import { api, fileUrl, type ArtStatus, type ArtStyle, type Aspect, type Motion, 
 import { PictureReview } from "./PictureReview";
 import { Button, Message, Spinner } from "./ui";
 
-const MOTION_ORDER: Motion[] = ["dolly_3d", "orbit_3d", "rise_3d", "push_in", "pull_out", "pan_left", "pan_right", "tilt_up", "tilt_down", "still"];
+const MOTION_ORDER: Motion[] = ["dolly_3d", "orbit_3d", "rise_3d", "push_in", "pull_out", "pan_left", "pan_right", "tilt_up", "tilt_down", "still", "breathe"];
 const newSeed = () => Math.floor(Math.random() * 2 ** 31) + 1;
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const without = <T,>(o: Record<number, T>, k: number) => Object.fromEntries(Object.entries(o).filter(([i]) => Number(i) !== k)) as Record<number, T>;
@@ -127,7 +127,7 @@ export function SongPictures({
     const seed = newTake ? newSeed() : slot.seed;
     setBusy((b) => ({ ...b, [k]: "draw" }));
     try {
-      const m = await api.artDraw({ prompt: slot.prompt, style, seed, aspect: slot.frame === "4:3" ? "16:9" : aspect });
+      const m = await api.artDraw({ prompt: slot.prompt, style, seed, aspect: slot.frame === "4:3" ? "16:9" : slot.frame === "cover" ? "9:16" : aspect });
       update(k, { seed, picture: { media: m.media, url: m.url, kind: "photo" } }, newTake);
       return true;
     } catch (e) {
@@ -289,7 +289,7 @@ export function SongPictures({
           <ol className={`m-0 grid list-none gap-2 p-0 ${aspect === "16:9" ? "grid-cols-1" : "grid-cols-2"}`}>
             {plan.slots.map((slot, k) => (
               <li key={k} className="grid content-start gap-1.5 rounded-lg border border-line/70 bg-sunken p-1.5">
-                <div className={`relative grid place-items-center overflow-hidden rounded-md bg-ink/[0.06] ${slot.frame === "4:3" ? "aspect-[4/3] self-center" : aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"}`}>
+                <div className={`relative grid place-items-center overflow-hidden rounded-md bg-ink/[0.06] ${slot.frame === "4:3" ? "aspect-[4/3] self-center" : slot.frame === "cover" ? "aspect-[9/16] max-h-64 self-center" : aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"}`}>
                   {previews[k] ? (
                     <video src={fileUrl(previews[k])} autoPlay loop muted playsInline className="size-full object-cover" />
                   ) : slot.picture ? (

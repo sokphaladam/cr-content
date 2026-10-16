@@ -33,7 +33,7 @@ function SongPlayer({ detail }: { detail: VideoDetail }) {
 }
 
 /** The idea, look, lyric style and visuals a song's last music video used: the starting point for the next one. */
-export function settingsOf(detail: Pick<VideoDetail, "idea" | "look" | "lyric_style" | "art_style" | "pictures" | "direction">): MusicVideoSettings {
+export function settingsOf(detail: Pick<VideoDetail, "idea" | "look" | "lyric_style" | "art_style" | "pictures" | "direction" | "cold_open">): MusicVideoSettings {
   return {
     idea: detail.idea ?? "",
     look: detail.look ?? "",
@@ -41,6 +41,7 @@ export function settingsOf(detail: Pick<VideoDetail, "idea" | "look" | "lyric_st
     art_style: detail.art_style ?? "",
     pictures: detail.pictures ?? "normal",
     direction: detail.direction ?? null,
+    cold_open: detail.cold_open ?? false,
   };
 }
 
@@ -474,6 +475,7 @@ const THUMB_STYLES: { value: ThumbStyle; label: string }[] = [
   { value: "box", label: "Box" },
   { value: "stacked", label: "Stacked" },
   { value: "designed", label: "Designed" },
+  { value: "magazine", label: "Magazine" }, // one-cover music videos: the character in front of huge words (else Bold)
 ];
 
 /** Cover image: get ideas (Claude headline x best frame x style) or pick a frame and headline, then redraw thumbnail.jpg. */

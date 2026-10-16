@@ -11,6 +11,7 @@ FONTS: dict[str, dict[str, str]] = {
         "Arial": "arialbd.ttf",
         "Impact": "impact.ttf",
         "Segoe UI Black": "seguibl.ttf",
+        "Segoe UI Semibold": "seguisb.ttf",
         "Bahnschrift": "bahnschrift.ttf",
         "Georgia": "georgiab.ttf",
         "Trebuchet MS": "trebucbd.ttf",
@@ -130,7 +131,10 @@ PRESETS: dict[str, dict] = {
               "position": "middle", "color": "#FFE9C7", "highlight": "#FF8A3D", "effect": "fill", "outline": "shadow",
               "case": "as_is"},
     "boxed": {"label": "Boxed", "font": "Arial", "font_km": "Khmer OS Battambang", "size": "m", "position": "low",
-              "color": "#FFFFFF", "highlight": "#FFE500", "effect": "karaoke", "outline": "box", "case": "as_is"},
+              "color": "#FFFFFF", "highlight": "#FFE500", "effect": "karaoke", "outline": "box", "case": "as_is"},    # a playlist / lyric video: plain white lines fading in and out under a soft shadow, no colour sweep
+    "playlist": {"label": "Playlist", "font": "Segoe UI Semibold", "font_km": "Khmer OS Battambang", "size": "m",
+                 "position": "low", "color": "#FFFFFF", "highlight": "#FFFFFF", "effect": "fade", "outline": "shadow",
+                 "case": "as_is"},
 }
 
 

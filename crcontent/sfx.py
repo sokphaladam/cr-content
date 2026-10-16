@@ -72,7 +72,24 @@ def _whoosh():
     return _lowpass(rng.standard_normal(n), sweep) * env
 
 
-SOUNDS = {"impact": _impact, "whoosh": _whoosh}
+def _thunder():
+    import numpy as np
+
+    rng = np.random.default_rng(11)
+    n = int(RATE * 3.6)
+    t = np.arange(n) / RATE
+    # crack: a bright burst, then a second strike a moment later (lightning rarely hits just once)
+    noise = rng.standard_normal(n)
+    bright = noise - _lowpass(noise, 1800)
+    crack = bright * (np.exp(-t * 30) + 0.6 * np.where(t > 0.11, np.exp(-(t - 0.11) * 26), 0))
+    # rumble: low noise that rolls (slow swells) and dies away over a few seconds
+    roll = 0.65 + 0.35 * np.sin(2 * math.pi * 1.7 * t + 0.4) * np.sin(2 * math.pi * 0.6 * t + 1.1)
+    rumble = _lowpass(_lowpass(rng.standard_normal(n), 160), 220) * 9 * roll * np.exp(-t * 1.1) \
+        * np.clip(t / 0.08, 0, 1)
+    return crack * 1.1 + rumble
+
+
+SOUNDS = {"impact": _impact, "whoosh": _whoosh, "thunder": _thunder}
 
 
 def sound(name: str) -> Path:

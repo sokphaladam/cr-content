@@ -2,7 +2,7 @@
 
 import { CalendarClock, ExternalLink, ImageUp, MessageSquare, Settings as SettingsIcon, Upload, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { api, autostartLabel, isMac, outputUrl, type CommentState, type Job, type ThumbnailState, type Platform, type PublishAccounts, type Published, type ScheduledUpload, type TikTokCreator, type TikTokPrivacy, type VideoDetail, type YouTubeOptions } from "@/lib/api";
+import { api, autostartLabel, isMac, outputUrl, type CommentState, type Job, type ThumbnailState, type Platform, type PublishAccounts, type Published, type ScheduledUpload, type TikTokCreator, type TikTokPost, type TikTokPrivacy, type VideoDetail, type YouTubeOptions } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import { PLATFORM_NAMES as NAMES, PLATFORMS } from "./Settings";
 import { Button, IconButton, useToast } from "./ui";
@@ -40,6 +40,11 @@ const TT_VISIBILITY: { value: TikTokPrivacy | "DRAFT" | "SCHEDULE"; label: strin
   { value: "SCHEDULE", label: "Schedule (goes public later)" },
 ];
 type TikTokChoice = TikTokPrivacy | "DRAFT" | "SCHEDULE";
+
+// TikTok's Direct Post guidelines: every interaction and disclosure starts off; the creator turns on what they want
+const TT_POST_OFF: TikTokPost = { allow_comment: false, allow_duet: false, allow_stitch: false, brand_organic: false, brand_content: false };
+const TT_MUSIC_URL = "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en";
+const TT_BRANDED_URL = "https://www.tiktok.com/legal/page/global/bc-policy/en";
 
 const when = (at: string) =>
   new Date(at).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -222,6 +227,114 @@ function ThumbnailLine({ name, state, onChange }: { name: string; state: Thumbna
   );
 }
 
+/** TikTok's Direct Post choices: who may comment, Duet and Stitch, the commercial content disclosure and the
+ * consent line. Interactions the creator turned off in TikTok can't be turned on here. */
+function TikTokPostOptions({
+  creator,
+  post,
+  setPost,
+  disclose,
+  setDisclose,
+  privacy,
+}: {
+  creator: TikTokCreator | null;
+  post: TikTokPost;
+  setPost: (p: TikTokPost) => void;
+  disclose: boolean;
+  setDisclose: (on: boolean) => void;
+  privacy: TikTokChoice;
+}) {
+  const interactions: { key: "allow_comment" | "allow_duet" | "allow_stitch"; label: string; off: boolean }[] = [
+    { key: "allow_comment", label: "Comment", off: !!creator?.comment_disabled },
+    { key: "allow_duet", label: "Duet", off: !!creator?.duet_disabled },
+    { key: "allow_stitch", label: "Stitch", off: !!creator?.stitch_disabled },
+  ];
+  const selfOnly = privacy === "SELF_ONLY";
+  return (
+    <div className="grid gap-1.5 pt-1 text-sm">
+      <fieldset className="m-0 grid gap-1 border-0 p-0">
+        <legend className="p-0 text-xs font-semibold text-ink-soft">Allow users to</legend>
+        <div className="flex flex-wrap gap-3">
+          {interactions.map((i) => (
+            <label
+              key={i.key}
+              className={`flex items-center gap-1.5 ${i.off ? "opacity-50" : ""}`}
+              title={i.off ? `${i.label} is turned off in your TikTok settings` : undefined}
+            >
+              <input
+                type="checkbox"
+                className="size-4 accent-cobalt"
+                disabled={i.off}
+                checked={!i.off && post[i.key]}
+                onChange={(e) => setPost({ ...post, [i.key]: e.target.checked })}
+              />
+              {i.label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <label className="flex items-center gap-1.5 font-semibold">
+        <input type="checkbox" className="size-4 accent-cobalt" checked={disclose} onChange={(e) => setDisclose(e.target.checked)} />
+        Disclose video content
+      </label>
+      {disclose && (
+        <div className="grid gap-1 pl-5">
+          <p className="m-0 text-xs leading-snug text-ink-soft">Turn on if this video promotes goods or services in exchange for something of value.</p>
+          <label className="flex items-start gap-1.5">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 accent-cobalt"
+              checked={post.brand_organic}
+              onChange={(e) => setPost({ ...post, brand_organic: e.target.checked })}
+            />
+            <span>
+              <b>Your brand</b>
+              <span className="block text-xs text-ink-soft">You&apos;re promoting yourself or your own business.</span>
+            </span>
+          </label>
+          <label className={`flex items-start gap-1.5 ${selfOnly ? "opacity-50" : ""}`}>
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 accent-cobalt"
+              disabled={selfOnly}
+              checked={!selfOnly && post.brand_content}
+              onChange={(e) => setPost({ ...post, brand_content: e.target.checked })}
+            />
+            <span>
+              <b>Branded content</b>
+              <span className="block text-xs text-ink-soft">
+                {selfOnly ? <>Branded content can&apos;t be posted as &quot;Only me&quot;.</> : <>You&apos;re promoting another brand or a third party.</>}
+              </span>
+            </span>
+          </label>
+          {post.brand_organic || (post.brand_content && !selfOnly) ? (
+            <p className="m-0 text-xs leading-snug text-ink-soft">
+              Your video will be labeled &quot;{post.brand_content && !selfOnly ? "Paid partnership" : "Promotional content"}&quot;.
+            </p>
+          ) : (
+            <p className="m-0 text-xs leading-snug text-danger">Pick whether you&apos;re promoting your own brand, another brand, or both.</p>
+          )}
+        </div>
+      )}
+      <p className="m-0 text-xs leading-snug text-ink-soft">
+        By posting, you agree to TikTok&apos;s{" "}
+        {disclose && post.brand_content && !selfOnly && (
+          <>
+            <a href={TT_BRANDED_URL} target="_blank" rel="noreferrer" className="underline">
+              Branded Content Policy
+            </a>{" "}
+            and{" "}
+          </>
+        )}
+        <a href={TT_MUSIC_URL} target="_blank" rel="noreferrer" className="underline">
+          Music Usage Confirmation
+        </a>
+        .
+      </p>
+    </div>
+  );
+}
+
 /** Upload the rendered video (with its post text) to the connected channels. Connecting happens in Settings. */
 export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; onOpenSettings: () => void }) {
   const toast = useToast();
@@ -244,6 +357,8 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
   const [ttVisibility, setTtVisibility] = useState<TikTokChoice | null>(null);
   const [ttAt, setTtAt] = useState(nextHour); // when a scheduled TikTok post goes out
   const [ttCreator, setTtCreator] = useState<TikTokCreator | null>(null);
+  const [ttPost, setTtPost] = useState<TikTokPost>(TT_POST_OFF); // interactions and disclosure for a direct post
+  const [ttDisclose, setTtDisclose] = useState(false); // "Disclose video content" is on
   const [fbSchedule, setFbSchedule] = useState(false); // Facebook: upload now, Facebook publishes it at fbAt
   const [fbAt, setFbAt] = useState(fbNextHour);
 
@@ -339,6 +454,9 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
           ...(ytCategory ? { category: ytCategory } : {}),
           ...(ytChannel ? { channel: ytChannel } : {}),
           ...(platforms.includes("tiktok") && ttChoice && ttChoice !== "SCHEDULE" ? { tiktok_privacy: ttChoice } : {}),
+          ...(platforms.includes("tiktok") && ttDirect
+            ? { tiktok_post: { ...ttPost, brand_organic: ttDisclose && ttPost.brand_organic, brand_content: ttBranded } }
+            : {}),
           ...(platforms.includes("facebook") && fbSchedule ? { facebook_publish_at: fbAt } : {}),
         },
       );
@@ -362,18 +480,22 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
     ? "PUBLIC_TO_EVERYONE"
     : (ttCreator?.privacy_options[0] ?? "SELF_ONLY");
   const ttChoice = ttVisibility ?? (ttAllowed.some((o) => o.value === ttDefault) ? ttDefault : ttAllowed[0].value);
+  const ttDirect = ttChoice !== "DRAFT" && ttChoice !== "SCHEDULE"; // posts now, so the post settings apply
+  const ttBranded = ttDisclose && ttPost.brand_content && ttChoice !== "SELF_ONLY"; // branded content can't be private
+  // disclosure on but neither kind picked: TikTok asks the creator to pick one before posting
+  const ttBlocked = ttDirect && ttDisclose && !ttPost.brand_organic && !ttBranded;
   const connected = PLATFORMS.filter((p) => accounts[p]?.connected);
   const busy = (p: Platform) => !!running[p] && running[p].status !== "error";
   const channels = accounts.youtube.channels ?? [];
 
   return (
-    <section aria-labelledby={`publish-${detail.name}`} className="mx-auto w-full max-w-[300px] card">
+    <section aria-labelledby={`publish-${detail.name}`} className="mx-auto w-full max-w-[300px] card [&_.grid]:grid-cols-[minmax(0,1fr)] [&_select]:max-w-full [&_select]:min-w-0">
       <header className="flex items-center justify-between gap-2 px-3.5 pt-3 pb-2">
         <h3 id={`publish-${detail.name}`} className="m-0 font-display text-md font-bold">
           Upload
         </h3>
         {connected.length > 1 && (
-          <Button size="sm" variant="primary" icon={<Upload className="size-3.5" />} disabled={connected.some(busy)} onClick={() => upload(connected)}>
+          <Button size="sm" variant="primary" icon={<Upload className="size-3.5" />} disabled={connected.some(busy) || (connected.includes("tiktok") && ttBlocked)} onClick={() => upload(connected)}>
             Upload to both
           </Button>
         )}
@@ -416,7 +538,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                         <b>{NAMES[p]}</b> <span className="text-ink-soft">{accounts[p].account}</span>
                       </span>
                     )}
-                    <Button size="sm" variant={prev ? "ghost" : "secondary"} icon={<Upload className="size-3.5" />} loading={busy(p)} onClick={() => upload([p])}>
+                    <Button size="sm" variant={prev ? "ghost" : "secondary"} icon={<Upload className="size-3.5" />} loading={busy(p)} disabled={p === "tiktok" && ttBlocked} onClick={() => upload([p])}>
                       {(p === "youtube" && (ytVisibility ?? accounts.youtube.privacy) === "schedule") ||
                       (p === "tiktok" && ttChoice === "SCHEDULE") ||
                       (p === "facebook" && fbSchedule)
@@ -472,15 +594,15 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                         }}
                       >
                         {ttAllowed.map((o) => (
-                          <option key={o.value} value={o.value}>
+                          <option key={o.value} value={o.value} disabled={ttBranded && o.value === "SELF_ONLY"}>
                             {o.label}
                           </option>
                         ))}
                       </select>
                       {ttCreator && ttCreator.privacy_options.length === 1 && ttCreator.privacy_options[0] === "SELF_ONLY" && (
                         <p className="m-0 text-xs leading-snug text-ink-soft">
-                          TikTok lets this app post as &quot;Only me&quot; until TikTok audits it. Choose Drafts to post publicly from the TikTok app, or change it to
-                          public there after posting.
+                          Until TikTok audits this app it can only post as &quot;Only me&quot;, and only to a private TikTok account (TikTok → Settings and
+                          privacy → Privacy → Private account). Choose Drafts to post publicly from the TikTok app instead.
                         </p>
                       )}
                       {ttChoice === "SCHEDULE" && (
@@ -501,6 +623,9 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                       )}
                       {ttChoice === "DRAFT" && (
                         <p className="m-0 text-xs leading-snug text-ink-soft">Goes to your TikTok inbox; open TikTok to add sounds or edits and post it.</p>
+                      )}
+                      {ttDirect && (
+                        <TikTokPostOptions creator={ttCreator} post={ttPost} setPost={setTtPost} disclose={ttDisclose} setDisclose={setTtDisclose} privacy={ttChoice} />
                       )}
                     </div>
                   )}
