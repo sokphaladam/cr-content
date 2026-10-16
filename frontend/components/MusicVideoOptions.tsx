@@ -312,7 +312,12 @@ export function MusicVideoOptions({
                 value={value.pictures ?? "normal"}
                 onChange={(pictures: PicturePace) =>
                   // a cover picture reads best with plain fading lyrics: switch to Playlist (still changeable below)
-                  onChange({ ...value, pictures, ...(pictures === "cover" && catalog?.presets.playlist ? { lyric_style: fromPreset(catalog, "playlist") } : {}) })
+                  onChange({
+                    ...value,
+                    pictures,
+                    ...(pictures === "cover" ? { now_playing: true } : {}),
+                    ...(pictures === "cover" && catalog?.presets.playlist ? { lyric_style: fromPreset(catalog, "playlist") } : {}),
+                  })
                 }
                 options={(Object.keys(PACES) as PicturePace[]).map((k) => ({ value: k, label: PACES[k].label }))}
               />
@@ -347,6 +352,16 @@ export function MusicVideoOptions({
           Start on about 5 seconds of the chorus with the song title in neon, then a lightning flash and thunder, then the song from the beginning. Viewers
           hear the hook before they decide to stay. Adds about 7 seconds.
         </p>
+        <label className="mt-1 flex cursor-pointer items-center gap-2 text-base font-semibold">
+          <input
+            type="checkbox"
+            className="size-4 accent-cobalt"
+            checked={value.now_playing ?? false}
+            onChange={(e) => onChange({ ...value, now_playing: e.target.checked })}
+          />
+          Now-playing card
+        </label>
+        <p className="m-0 text-sm text-ink-soft">A dark card in the top-left corner with the song title, a progress bar and a spinning vinyl record, like playlist channels.</p>
       </div>
 
       {catalog && style && (

@@ -1077,7 +1077,7 @@ def _cold_open_media(work: Path, song_video: str, mix: Path, start: float, end: 
 def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: str = "", look: str = "",
                      lyric_style: "dict | None" = None, art_style: str | None = None,
                      pictures: str | None = None, direction: dict | None = None,
-                     cold_open: bool | None = None) -> Path:
+                     cold_open: bool | None = None, now_playing: bool | None = None) -> Path:
     """Song folder in -> a NEW video folder next to it: beat-cut footage per section, karaoke lyrics, the song as audio.
 
     The song folder works like a draft: its lyrics and timing stay editable, and every render is a separate version
@@ -1087,7 +1087,8 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     imagegen.STYLES look drawn on this computer (None = the song's last choice). `pictures`: how many of them
     (PICTURE_PACES: "fewer", "normal", "more"; None = the song's last choice). `cold_open`: open on a few seconds
     of the chorus with the title in neon, then a lightning flash and thunder, then the song from the start (None =
-    the song's last choice). Idea, look and styles are remembered on the song for the next version. Returns the new
+    the song's last choice). `now_playing`: a now-playing card in the top-left corner (title, progress bar, a
+    spinning record; None = the song's last choice). Idea, look and styles are remembered on the song for the next version. Returns the new
     video.mp4.
     """
     from .align import load_lines, save_lines
@@ -1104,10 +1105,11 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     art_style = song_meta.get("art_style", "") if art_style is None else art_style
     pictures = pictures if pictures in PICTURE_PACES else song_meta.get("pictures") or "normal"
     cold_open = bool(song_meta.get("cold_open")) if cold_open is None else cold_open
+    now_playing = bool(song_meta.get("now_playing")) if now_playing is None else now_playing
     # the shot list made from this idea (director.direct_idea, maybe edited); None = the song's, if it fits the idea
     direction = song_direction(song, song_meta.get("direction") if direction is None else direction, idea)
     remembered = {"idea": idea, "look": look, "lyric_style": style.model_dump(), "art_style": art_style,
-                  "pictures": pictures, "cold_open": cold_open, **({"direction": direction} if direction else {})}
+                  "pictures": pictures, "cold_open": cold_open, "now_playing": now_playing, **({"direction": direction} if direction else {})}
     if any(song_meta.get(k) != v for k, v in remembered.items()):  # remembered for the next version
         song_meta.update(remembered)
         _save_meta(song_dir, song_meta)
@@ -1248,7 +1250,14 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
 
     # 3. Karaoke captions
     log("[3/4] Captions")
-    (work / "captions.ass").write_text(build_karaoke_ass(sung, profile, size=size, style=style, title=title),
+    card = None
+    if now_playing:  # from where the song itself starts (after a cold open), over the whole song
+        start = (opening[1] - opening[0] + COLD_OPEN_GAP) if opening else 0.0
+        accent = "#%02X%02X%02X" % COVER_COLOURS[cover_colour(song.title)] if held else style.highlight
+        card = {"title": neon_title(song.title), "label": "Now playing", "start": start, "length": total,
+                "accent": accent}
+    (work / "captions.ass").write_text(build_karaoke_ass(sung, profile, size=size, style=style, title=title,
+                                                         now_playing=card),
                                        encoding="utf-8")
     _install_font(profile, work / "fonts", FONTS.get(lang, FONTS["en"]).get(style.font, ""))
 

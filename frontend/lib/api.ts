@@ -295,6 +295,7 @@ export interface MusicVideoSettings {
   pictures?: PicturePace; // undefined = the song's last choice
   direction?: SongDirection | null; // the shot list for the idea; undefined = the song's
   cold_open?: boolean; // open on the chorus with the title in neon, then lightning; undefined = the song's last choice
+  now_playing?: boolean; // a now-playing card: title, progress bar, spinning record; undefined = the song's last choice
 }
 
 export interface VideoIdeaSuggestion {
@@ -572,6 +573,7 @@ export interface VideoDetail extends VideoSummary {
   pictures?: PicturePace; // same, for how many AI pictures
   direction?: SongDirection | null; // songs: the shot list made from the idea
   cold_open?: boolean; // same, for the chorus cold open
+  now_playing?: boolean; // same, for the now-playing card
   lyric_style?: LyricStyle | null; // same, for the lyrics
   post: string;
   published?: Partial<Record<Platform, Published>>; // missing on an older engine

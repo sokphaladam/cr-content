@@ -140,7 +140,8 @@ def _case(text: str, case: str, lang: str) -> str:
 
 def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: float = 0.8,
                       size: tuple[int, int] = (WIDTH, HEIGHT), style: "LyricStyle | None" = None,
-                      title: tuple[str, float, float] | None = None) -> str:
+                      title: tuple[str, float, float] | None = None,
+                      now_playing: dict | None = None) -> str:
     """Lyrics as karaoke, drawn in `style` (font, colours, size, position, effect; see styles.py).
 
     lines: align.LyricLine items (absolute word times). A line appears `lead_in` s before its first word and
@@ -150,6 +151,7 @@ def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: 
     Landscape frames show the upcoming line dimmed underneath (karaoke and fill), like a lyric video.
     title: (text, start, end) the song's title flickering on like a neon sign in the sung-word colour (a cold open),
     away from the lyrics.
+    now_playing: {"title", "label", "start", "length", "accent"} for a now-playing card (now_playing_events).
     """
     from .styles import LyricStyle, ass_color
 
@@ -247,7 +249,85 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if title and _esc(title[0]):
         events += _neon_title(_esc(_case(title[0], "upper", profile.code)), title[1], title[2], style, font, W,
                               round(H * (0.72 if style.position == "high" else 0.3)))
+    if now_playing:
+        events += now_playing_events(now_playing["title"], now_playing.get("label") or "Now playing",
+                                     now_playing["start"], now_playing["length"], size, style.font,
+                                     now_playing.get("accent") or style.highlight)
     return header + "\n".join(events) + "\n"
+
+
+def _rounded(w: float, h: float, r: float) -> str:
+    """An ASS drawing of a w x h rectangle with corners of radius r (from 0,0)."""
+    k = r * 0.45  # bezier handle: close enough to a quarter circle
+    return (f"m {r:.0f} 0 l {w - r:.0f} 0 b {w - k:.0f} 0 {w:.0f} {k:.0f} {w:.0f} {r:.0f} l {w:.0f} {h - r:.0f} "
+            f"b {w:.0f} {h - k:.0f} {w - k:.0f} {h:.0f} {w - r:.0f} {h:.0f} l {r:.0f} {h:.0f} "
+            f"b {k:.0f} {h:.0f} 0 {h - k:.0f} 0 {h - r:.0f} l 0 {r:.0f} b 0 {k:.0f} {k:.0f} 0 {r:.0f} 0")
+
+
+def _circle(cx: float, cy: float, r: float) -> str:
+    """An ASS drawing of a circle (four bezier quarters)."""
+    k = r * 0.5523
+    return (f"m {cx:.1f} {cy - r:.1f} b {cx + k:.1f} {cy - r:.1f} {cx + r:.1f} {cy - k:.1f} {cx + r:.1f} {cy:.1f} "
+            f"b {cx + r:.1f} {cy + k:.1f} {cx + k:.1f} {cy + r:.1f} {cx:.1f} {cy + r:.1f} "
+            f"b {cx - k:.1f} {cy + r:.1f} {cx - r:.1f} {cy + k:.1f} {cx - r:.1f} {cy:.1f} "
+            f"b {cx - r:.1f} {cy - k:.1f} {cx - k:.1f} {cy - r:.1f} {cx:.1f} {cy - r:.1f}")
+
+
+def now_playing_events(title: str, label: str, start: float, length: float, size: tuple[int, int], font: str,
+                       accent: str) -> list[str]:
+    """A "now playing" card in the top-left corner, the way playlist channels show the song: a dark rounded card
+    with `label` (the channel or "NOW PLAYING"), the song `title`, a progress bar that fills over `length` seconds
+    from `start`, and a vinyl record spinning at its right edge. `accent`: the record label's colour (#RRGGBB)."""
+    from .styles import ass_color
+
+    W, H = size
+    u = min(W, H) / 1080  # everything scales with the frame's short side
+    x, y, w, h = round(42 * u), round(42 * u), round(600 * u), round(150 * u)
+    r = 64 * u  # the record
+    cx, cy = w - 22 * u - r, h / 2
+    pad = 30 * u
+    text_w = cx - r - 26 * u - pad  # room left of the record
+    end = start + length
+    t0, t1 = _ts(start), _ts(end)
+    fade = r"\fad(500,800)"
+    at = f"\\an7\\pos({x},{y})"
+    out = [f"Dialogue: 5,{t0},{t1},Lyric,,0,0,0,,{{{at}{fade}\\bord0\\shad0\\blur0\\1c&H1E1A18&\\1a&H38&\\p1}}"
+           f"{_rounded(w, h, 26 * u)}"]
+    # the record: black disc with grooves, a coloured label with a light spot that shows it turning
+    spin = round(length * 0.55 * 360)  # 33 rpm
+    org = f"\\org({x + cx:.0f},{y + cy:.0f})"
+    turn = f"\\t(0,{round(length * 1000)},\\frz{-spin})"
+
+    def disc(layer: int, dx: float, dy: float, radius: float, tags: str) -> None:
+        # every circle in the same square (the record's), placed by its top-left corner, so they share a centre
+        out.append(f"Dialogue: {layer},{t0},{t1},Lyric,,0,0,0,,{{\\an7\\pos({x + cx - r:.0f},{y + cy - r:.0f})"
+                   f"{org}{fade}\\bord0\\shad0{tags}\\p1}}{_circle(r + dx, r + dy, radius)}")
+
+    disc(6, 0, 0, r, "\\blur0.6\\1c&H101010&")
+    for g in (0.86, 0.72, 0.58):  # grooves
+        disc(7, 0, 0, r * g, f"\\bord{max(1, round(1.2 * u))}\\blur0.6\\1a&HFF&\\3c&H3A3A3A&")
+    disc(8, 0, 0, r * 0.36, f"\\blur0.4\\1c{ass_color(accent)}")  # the label
+    disc(9, r * 0.2, -r * 0.12, r * 0.07, f"\\blur1.5\\1c&HFFFFFF&\\1a&H60&{turn}")  # a light spot: it turns
+    disc(9, 0, 0, r * 0.06, "\\1c&H101010&")  # the spindle hole
+    # the words: the label small and dim, the title big; cut short with an ellipsis rather than run under the record
+    label_px, title_px = round(22 * u), round(40 * u)
+    title = _esc(title)
+    most = max(4, int(text_w / (title_px * 0.56)))
+    if len(title) > most:
+        title = title[:most - 1].rstrip() + "…"
+    out.append(f"Dialogue: 9,{t0},{t1},Lyric,,0,0,0,,{{\\an7\\pos({x + pad:.0f},{y + 26 * u:.0f}){fade}\\fn{font}"
+               f"\\fs{label_px}\\b1\\fsp{round(2 * u)}\\bord0\\shad0\\blur0\\1c&HFFFFFF&\\1a&H70&}}{_esc(label.upper())}")
+    out.append(f"Dialogue: 9,{t0},{t1},Lyric,,0,0,0,,{{\\an7\\pos({x + pad:.0f},{y + 54 * u:.0f}){fade}\\fn{font}"
+               f"\\fs{title_px}\\b1\\bord0\\shad0\\blur0\\1c&HFFFFFF&}}{title}")
+    # the progress bar: a dim track and a bright fill whose clip widens from nothing to the whole bar
+    bx, by, bw, bh = x + pad, y + h - 34 * u, text_w, max(4, round(6 * u))
+    bar = _rounded(bw, bh, bh / 2)
+    out.append(f"Dialogue: 9,{t0},{t1},Lyric,,0,0,0,,{{\\an7\\pos({bx:.0f},{by:.0f}){fade}\\bord0\\shad0\\blur0"
+               f"\\1c&HFFFFFF&\\1a&HC0&\\p1}}{bar}")
+    out.append(f"Dialogue: 10,{t0},{t1},Lyric,,0,0,0,,{{\\an7\\pos({bx:.0f},{by:.0f}){fade}\\bord0\\shad0\\blur0"
+               f"\\1c&HFFFFFF&\\clip({bx:.0f},{by - 4:.0f},{bx:.0f},{by + bh + 4:.0f})"
+               f"\\t(0,{round(length * 1000)},\\clip({bx:.0f},{by - 4:.0f},{bx + bw:.0f},{by + bh + 4:.0f}))\\p1}}{bar}")
+    return out
 
 
 def _neon_title(text: str, start: float, end: float, style: "LyricStyle", font: int, W: int, y: int) -> list[str]:

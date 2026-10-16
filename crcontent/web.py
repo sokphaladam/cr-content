@@ -878,7 +878,7 @@ def _run_music_video(job_id: str, folder: Path, req: "MusicVideoRequest") -> Non
     try:
         final = make_music_video(folder, log=log, idea=req.idea[:IDEA_MAX], look=req.look, lyric_style=req.lyric_style,
                                  art_style=req.art_style, pictures=req.pictures, direction=req.direction,
-                                 cold_open=req.cold_open)
+                                 cold_open=req.cold_open, now_playing=req.now_playing)
         with jobs_lock:
             job.update(status="done", step=4, video=final.parent.name)
         _auto_publish(final.parent, log)
@@ -959,6 +959,7 @@ class MusicVideoRequest(BaseModel):
     pictures: str | None = None  # how many AI pictures (pipeline.PICTURE_PACES); None = the song's last choice
     direction: dict | None = None  # the shot list for the idea (POST .../direct); None = the song's, if it fits
     cold_open: bool | None = None  # open on the chorus + neon title, then lightning; None = the song's last choice
+    now_playing: bool | None = None  # a now-playing card (title, progress, spinning record); None = the song's last
 
 
 @app.post("/api/videos/{name}/music-video")
@@ -1404,6 +1405,7 @@ def video_detail(name: str):
     data["pictures"] = meta.get("pictures", plan.get("pictures", "normal"))
     data["direction"] = meta.get("direction")  # the shot list made from the idea (songs)
     data["cold_open"] = bool(meta.get("cold_open"))
+    data["now_playing"] = bool(meta.get("now_playing"))
     data["duration"] = (round(duration(folder / "video.mp4"), 2) if data["video"]
                         else meta.get("duration", 0))
     data["thumb_text"] = meta.get("thumb_text", data["title"])

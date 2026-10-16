@@ -33,7 +33,7 @@ function SongPlayer({ detail }: { detail: VideoDetail }) {
 }
 
 /** The idea, look, lyric style and visuals a song's last music video used: the starting point for the next one. */
-export function settingsOf(detail: Pick<VideoDetail, "idea" | "look" | "lyric_style" | "art_style" | "pictures" | "direction" | "cold_open">): MusicVideoSettings {
+export function settingsOf(detail: Pick<VideoDetail, "idea" | "look" | "lyric_style" | "art_style" | "pictures" | "direction" | "cold_open" | "now_playing">): MusicVideoSettings {
   return {
     idea: detail.idea ?? "",
     look: detail.look ?? "",
@@ -42,6 +42,7 @@ export function settingsOf(detail: Pick<VideoDetail, "idea" | "look" | "lyric_st
     pictures: detail.pictures ?? "normal",
     direction: detail.direction ?? null,
     cold_open: detail.cold_open ?? false,
+    now_playing: detail.now_playing ?? false,
   };
 }
 
