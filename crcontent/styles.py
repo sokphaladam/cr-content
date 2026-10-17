@@ -1,4 +1,5 @@
 """Looks for music videos: how the lyrics are drawn (font, colours, effect) and how the footage is graded."""
+import re
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -171,6 +172,61 @@ LOOKS: dict[str, dict[str, str]] = {
 
 def look_filter(name: str) -> str:
     return LOOKS.get(name, LOOKS["natural"])["vf"]
+
+
+# words in a song's mood, genre and video idea -> the look and lyric style they point to (a free, instant
+# suggestion; Claude's ideas and shot lists pick their own)
+LOOK_WORDS = {
+    "film": ("nostalgic", "nostalgia", "retro", "vintage", "memory", "memories", "vhs", "hazy", "dreamy",
+             "summer", "warm", "disco", "lofi", "lo-fi", "bittersweet", "polaroid", "90s", "80s", "70s"),
+    "vibrant": ("energetic", "euphoric", "party", "dance", "upbeat", "bright", "cute", "happy", "playful", "fun",
+                "kawaii", "hype", "joyful"),
+    "moody": ("sad", "melancholic", "melancholy", "lonely", "loneliness", "dark", "moody", "heartbreak", "grief",
+              "cold", "longing", "empty"),
+    "dusk": ("neon", "night", "city lights", "cyberpunk", "synthwave", "nightclub", "midnight", "sunset"),
+    "cinematic": ("epic", "cinematic", "orchestral", "dramatic", "drama", "anthem", "heroic", "rock"),
+    "mono": ("black and white", "noir", "monochrome"),
+}
+LYRIC_WORDS = {
+    "glitch": ("glitch", "glitchy", "static", "signal", "disconnected", "lost connection", "cyber", "digital",
+               "broken", "distortion", "error", "fuzz"),
+    "neon": ("neon", "synthwave", "edm", "electronic", "nightclub", "club", "cyberpunk", "future bass"),
+    "retro": ("disco", "funk", "70s", "80s", "groovy", "retro", "boogie"),
+    "bold_pop": ("hip hop", "hip-hop", "rap", "phonk", "trap", "hype", "drill", "party"),
+    "cinematic": ("epic", "cinematic", "orchestral", "ballad", "film score", "anthem"),
+    "minimal": ("lofi", "lo-fi", "ambient", "acoustic", "chill", "soft", "minimal", "piano"),
+    "playlist": ("dreamy", "dream pop", "j-pop", "jpop", "k-pop", "city pop", "bedroom pop", "indie"),
+}
+LOOK_WHY = {"film": "warm and nostalgic", "vibrant": "bright and upbeat", "moody": "dark and sad",
+            "dusk": "neon night", "cinematic": "dramatic", "mono": "black and white", "natural": "clean and true"}
+# a flat pastel cover turns muddy under the dark grades (the app's One cover picks the same way)
+COVER_LOOKS = ("natural", "film", "vibrant")
+
+
+def _hits(text: str, words: tuple[str, ...]) -> list[str]:
+    return [w for w in words if re.search(rf"(?<!\w){re.escape(w)}(?!\w)", text)]
+
+
+def suggest_style(mood: str, genre: str, idea: str = "", cover: bool = False) -> dict:
+    """The footage look and lyric preset that fit a song: {"look", "lyric_preset", "reason"}. Counts the words of
+    LOOK_WORDS / LYRIC_WORDS in its mood, genre and video idea (the mood and genre count double: they describe
+    the song itself). A one-cover video keeps to looks that leave its pastel clean and leans to Playlist lyrics."""
+    song = f"{mood} {genre}".lower()
+    text = f"{song} {idea}".lower()
+
+    def score(words: tuple[str, ...]) -> int:
+        return len(_hits(text, words)) + len(_hits(song, words))
+
+    looks = {k: score(v) for k, v in LOOK_WORDS.items() if not cover or k in COVER_LOOKS}
+    look = max(looks, key=looks.get) if looks and max(looks.values()) > 0 else "natural"
+    lyrics = {k: score(v) for k, v in LYRIC_WORDS.items()}
+    if cover:  # a calm fade suits one held picture unless the song clearly asks for something else
+        lyrics["playlist"] += 1
+    preset = max(lyrics, key=lyrics.get) if max(lyrics.values()) > 0 else "classic"
+    words = _hits(song, tuple(dict.fromkeys(w for ws in (*LOOK_WORDS.values(), *LYRIC_WORDS.values()) for w in ws)))
+    found = [w for w in words if not any(w != o and w in o for o in words)][:3]  # "dreamy", not also "dream"
+    reason = (", ".join(found) or LOOK_WHY[look]) + (" song" if found else "")
+    return {"look": look, "lyric_preset": preset, "reason": reason}
 
 
 def catalog() -> dict:

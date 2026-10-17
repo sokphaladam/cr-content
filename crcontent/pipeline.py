@@ -753,6 +753,65 @@ def cover_effects(idea: str) -> list[str]:
     return base + [e for e in extra if e not in base]
 
 
+# what the song is about -> the one object that says it at a glance (first match wins: the idea, then the title,
+# then the lyrics), written the way the anime model draws it reliably
+COVER_PROPS = [
+    (("umbrella", "rain", "monsoon", "downpour", "storm", "ភ្លៀង"), "holding clear umbrella over shoulder"),
+    (("signal", "phone", "call", "text me", "no service", "connection"), "arm up, holding flip phone up to the sky"),
+    (("replay", "vhs", "videotape", "rewind", "tape"), "holding videocassette near face"),
+    (("cassette", "mixtape", "walkman"), "holding cassette tape near face"),
+    (("radio", "frequency", "broadcast"), "holding old radio against chest with both hands"),
+    (("awake", "asleep", "sleep", "bed", "pillow", "wake", "morning"), "hugging pillow, blanket over shoulders"),
+    (("guitar",), "holding acoustic guitar"),
+    (("headphones", "playlist", "listening"), "headphones around neck"),
+    (("letter", "write to you", "words unsaid"), "holding letter against chest with both hands"),
+    (("polaroid", "photo", "picture of you", "camera"), "holding polaroid photo near face"),
+    (("flower", "rose", "bouquet", "sakura", "petal"), "holding flowers against chest"),
+    (("coffee", "cafe", "café"), "holding coffee cup with both hands"),
+    (("book", "pages", "chapter"), "holding book against chest"),
+    (("star", "stars", "moon", "sky", "satellite", "galaxy"), "looking up at the sky"),
+]
+_HAIR_COLOURS = ("black", "brown", "blonde", "blond", "red", "orange", "auburn", "pink", "blue", "silver", "white",
+                 "purple", "green", "grey", "gray")
+_CLOTHES = ("hoodie", "sweater", "sundress", "dress", "t-shirt", "shirt", "jacket", "school uniform", "kimono",
+            "scarf", "skirt", "jeans", "coat", "cardigan", "blouse")
+
+
+def suggest_cover_prompt(song, idea: str = "", lyrics: str = "") -> str:
+    """A starter prompt for a song's cover picture, without Claude: the character and outfit the idea describes,
+    one object that says what the song is about (COVER_PROPS), the mood, the idea's weather, framing and the
+    background colour last. Edit it in the pictures panel and redraw; Plan pictures (Claude) writes its own."""
+    text = idea.lower()
+    he = re.search(r"\b(he|him|his|boy|man|guy)\b", text) and not re.search(r"\b(she|her|girl|woman)\b", text)
+    hair = re.search(rf"\b((?:long|short|shoulder-length|wavy|curly|straight)\s+)?({'|'.join(_HAIR_COLOURS)})\s+hair\b",
+                     text)
+    hair_tag = (f"{hair.group(1) or ''}{'orange' if hair.group(2) == 'auburn' else hair.group(2)} hair".strip()
+                if hair else ("short black hair" if he else "long black hair"))
+    clothes = [m.group(0) for m in re.finditer(rf"\b(?:[a-z-]+\s+)?(?:{'|'.join(_CLOTHES)})\b", text)][:2]
+    if not clothes:
+        clothes = ["oversized white hoodie"]
+    prop = ""
+    for source in (text, song.title.lower(), lyrics.lower()):
+        prop = next((tag for words, tag in COVER_PROPS
+                     if any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", source) for w in words)), "")
+        if prop:
+            break
+    mood = song.mood.lower()
+    feel = ("sad" if re.search(r"sad|melanchol|lonely|longing|yearning|heartbreak|grief", mood) else
+            "wistful smile" if re.search(r"nostalgi|bittersweet|wistful", mood) else
+            "gentle smile" if re.search(r"romantic|tender|love", mood) else
+            "smile" if re.search(r"happy|euphoric|upbeat|joy|playful|energetic", mood) else "soft smile")
+    if "pillow" in prop:
+        feel = "half-closed eyes, sleepy, " + feel
+    weather = {"rain": "wet hair, raindrops", "snow": "snowflakes", "petals": "cherry blossom petals",
+               "neon_glow": "neon light on face"}
+    extra = [weather[a] for a in atmospheres(idea) if a in weather]
+    look = "looking up" if "sky" in prop or "up to the sky" in prop else "looking at viewer"
+    parts = ["1boy" if he else "1girl", "solo", hair_tag, prop, *clothes, feel, *extra, look, "cowboy shot",
+             "simple background", f"{cover_colour(song.title, idea)} background"]
+    return ", ".join(p for p in parts if p)
+
+
 def cover_scene(song, idea: str = "") -> str:
     """The direction for a song's single cover picture (director.plan_song follows it exactly): the character, one
     object that says what the song is about, an expression that fits its mood and the idea's weather, on a flat
@@ -952,9 +1011,9 @@ def _new_art_plan(song, slots: list[dict], style: str, pace: str, aspect: str, i
                                            "push_in", []))
     if pace == "cover":  # held for the whole song: the breathing move and floating lights, on a flat background
         tags = f"simple background, {cover_colour(song.title, idea)} background"
-        if not bible:  # Claude couldn't plan it: a short tag prompt the model reads whole (the direction is too long)
-            plans = [director.ShotPlan(f"1girl, solo, cowboy shot, looking at viewer, {song.mood.split(',')[0].strip().lower()} expression, "
-                                       f"stylish casual outfit, dark hoodie", "breathe", [])]
+        if not bible:  # Claude couldn't plan it: the idea's character and the song's object, as tags
+            lyrics = " ".join(line for sec in song.sections for line in sec.lyrics)
+            plans = [director.ShotPlan(suggest_cover_prompt(song, idea, lyrics), "breathe", [])]
         plans = [director.ShotPlan(p.prompt if tags in p.prompt else f"{p.prompt.rstrip(' ,.')}, {tags}", "breathe",
                                    cover_effects(idea)) for p in plans]
     return {"style": style, "pictures": pace, "idea": idea, "aspect": aspect, "bible": bible,

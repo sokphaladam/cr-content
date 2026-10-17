@@ -298,6 +298,14 @@ export interface MusicVideoSettings {
   now_playing?: boolean; // a now-playing card: title, progress bar, spinning record; undefined = the song's last choice
 }
 
+/** The look and lyric style that fit a song, from its mood, genre and the idea (instant, no Claude call). */
+export interface StyleSuggestion {
+  look: Look;
+  lyric_preset: LyricPreset;
+  reason: string; // "nostalgic, hazy, dreamy song"
+  prompt: string; // a starter prompt for the cover picture: paste it into the picture and redraw
+}
+
 export interface VideoIdeaSuggestion {
   title: string;
   idea: string;
@@ -865,6 +873,8 @@ export const api = {
     request<{ id: string }>(`/api/videos/${encodeURIComponent(name)}/lyrics/sync`, { method: "POST", timeout: 0 }),
   musicVideo: (name: string, settings: MusicVideoSettings) =>
     request<{ id: string }>(`/api/videos/${encodeURIComponent(name)}/music-video`, { method: "POST", json: settings, timeout: 0 }),
+  styleSuggestion: (name: string, body: { idea: string; pictures: string }) =>
+    request<StyleSuggestion>(`/api/videos/${encodeURIComponent(name)}/style-suggestion`, { method: "POST", json: body }),
   videoIdeas: (name: string) =>
     request<{ ideas: VideoIdeaSuggestion[] }>(`/api/videos/${encodeURIComponent(name)}/video-ideas`, { method: "POST", timeout: 0 }),
   drafts: () => request<DraftSummary[]>("/api/drafts"),

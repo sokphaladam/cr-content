@@ -15,6 +15,7 @@ import {
   type MusicVideoSettings,
   type PicturePace,
   type StyleCatalog,
+  type StyleSuggestion,
   type VideoIdeaSuggestion,
 } from "@/lib/api";
 import { Button, Segmented } from "./ui";
@@ -168,6 +169,8 @@ export function MusicVideoOptions({
   const [ideasError, setIdeasError] = useState("");
   const [custom, setCustom] = useState(false);
   const [ideaFile, setIdeaFile] = useState("");
+  const [suggested, setSuggested] = useState<StyleSuggestion | null>(null);
+  const [copied, setCopied] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const look: Look = value.look || "natural";
@@ -201,6 +204,21 @@ export function MusicVideoOptions({
       setIdeasBusy(false);
     }
   }
+
+  // the look and lyric style that fit the song and idea (instant, free), asked again a moment after the idea changes
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(() => {
+      api
+        .styleSuggestion(name, { idea: value.idea, pictures: value.pictures ?? "" })
+        .then((s) => alive && setSuggested(s))
+        .catch(() => alive && setSuggested(null));
+    }, 600);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [name, value.idea, value.pictures]);
 
   const ideaId = `mv-idea-${name}`;
   return (
@@ -328,6 +346,28 @@ export function MusicVideoOptions({
                 options={(Object.keys(PACES) as PicturePace[]).map((k) => ({ value: k, label: PACES[k].label }))}
               />
               <p className="m-0 text-sm text-ink-soft">{PACES[value.pictures ?? "normal"].hint}</p>
+              {value.pictures === "cover" && suggested?.prompt && (
+                <div className="grid w-full gap-1 rounded-lg border border-line p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="field-label">Suggested picture prompt</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(suggested.prompt).then(() => setCopied(true));
+                        setTimeout(() => setCopied(false), 1800);
+                      }}
+                    >
+                      {copied ? "Copied" : "Copy"}
+                    </Button>
+                  </div>
+                  <code className="block text-sm break-words whitespace-pre-wrap text-ink">{suggested.prompt}</code>
+                  <span className="text-xs text-ink-soft">
+                    From your idea, the title and the lyrics: the character, one object that says what the song is about, its mood. Paste it into the
+                    picture below and press Redraw (free, no Claude), or let Plan pictures write one.
+                  </span>
+                </div>
+              )}
             </div>
             <SongPictures
               name={name}
@@ -372,6 +412,28 @@ export function MusicVideoOptions({
 
       {catalog && style && (
         <>
+          {suggested && catalog.presets[suggested.lyric_preset] && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line px-2.5 py-2 text-sm">
+              <span className="min-w-0 text-ink-soft">
+                <Sparkles className="mr-1 inline size-3.5 align-[-2px] text-cobalt" />
+                Suggested for this {suggested.reason}:{" "}
+                <span className="font-semibold text-ink">
+                  {catalog.looks[suggested.look]} look · {catalog.presets[suggested.lyric_preset].label} lyrics
+                </span>
+              </span>
+              {look === suggested.look && style.preset === suggested.lyric_preset ? (
+                <span className="text-ink-soft">Using it</span>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onChange({ ...value, look: suggested.look, lyric_style: fromPreset(catalog, suggested.lyric_preset) })}
+                >
+                  Use these
+                </Button>
+              )}
+            </div>
+          )}
           <div className="grid gap-1">
             <span className="field-label">Footage look</span>
             <div role="radiogroup" aria-label="Footage look" className="grid grid-cols-3 gap-1.5">

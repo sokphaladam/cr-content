@@ -1107,6 +1107,29 @@ def preview_shot(req: ShotPreviewRequest):
     return _media_info(out)
 
 
+class StyleSuggestionRequest(BaseModel):
+    idea: str = ""
+    pictures: str = ""  # "cover" keeps to looks that leave a flat pastel clean
+
+
+@app.post("/api/videos/{name}/style-suggestion")
+def style_suggestion(name: str, req: StyleSuggestionRequest):
+    """The footage look and lyric style that fit the song (its mood, genre and your idea), and a starter prompt for
+    its cover picture: instant and free, no Claude call. {"look", "lyric_preset", "reason", "prompt"}."""
+    from .styles import suggest_style
+
+    folder = _video_dir(name)
+    if not (folder / "song.json").exists():
+        raise HTTPException(400, "This isn't a song.")
+    from .pipeline import suggest_cover_prompt
+
+    song = SongScript.load(folder / "song.json")
+    idea = req.idea[:IDEA_MAX]
+    lyrics = " ".join(line for sec in song.sections for line in sec.lyrics)
+    return {**suggest_style(song.mood, song.genre, idea, cover=req.pictures == "cover"),
+            "prompt": suggest_cover_prompt(song, idea, lyrics)}
+
+
 @app.post("/api/videos/{name}/video-ideas")
 def video_ideas(name: str):
     """Claude pitches a few music video concepts for the song, each with a matching look and lyric style."""
