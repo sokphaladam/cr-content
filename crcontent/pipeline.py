@@ -771,7 +771,8 @@ def cover_scene(song, idea: str = "") -> str:
             f"on the object or at the sides, never reaching at the camera)"
             + (f", with {weather}" if weather else "")
             + f". A stylish outfit with {colour} accents, on a plain flat {colour} background with nothing else in it. "
-            f"Keep the prompt under 35 words, name the object early, and end it with: simple background, {colour} "
+            f"Keep the prompt under 35 words. Start with 1girl or 1boy, solo, then the hair colour and style (so the "
+            f"background colour can't tint the hair), then the object, and end it with: simple background, {colour} "
             f"background")
 
 

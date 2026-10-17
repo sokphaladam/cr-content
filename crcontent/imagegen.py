@@ -438,7 +438,7 @@ def _no_people(prompt: str, style: str) -> bool:
     return style == "anime" and ("no humans" in prompt.lower() or not _PEOPLE.search(prompt))
 
 
-def full_prompt(prompt: str, style: str) -> str:
+def full_prompt(prompt: str, style: str, legacy: bool = False) -> str:
     spec = STYLES[style]
     prompt = prompt.strip().rstrip(",")
     if _no_people(prompt, style) and "no humans" not in prompt.lower():
@@ -449,12 +449,18 @@ def full_prompt(prompt: str, style: str) -> str:
         head, _, rest = prompt.partition(",")
         prompt = f"{head}, male focus,{rest}" if rest else f"{head}, male focus"
     if _flat(prompt, style):
-        # a cover on a plain background: its background tags first (the text encoder drops whatever passes ~75
-        # tokens), and no "cinematic lighting", which pulls in a lit scene behind the character
+        # a cover on a plain background: "simple/plain background" first (the text encoder drops whatever passes
+        # ~75 tokens), the colour last (up front it leaks into the hair and clothes; the render repaints the
+        # background to the exact colour anyway), and no "cinematic lighting", which pulls in a lit scene
         tags = [t.strip() for t in prompt.split(",")]
         back = [t for t in tags if t.lower().endswith("background")]
-        back = back[:1] + ["plain background"] + back[1:] if "plain background" not in back else back
-        return f"{spec['prefix']}{', '.join(back + [t for t in tags if t not in back])}, anime illustration"
+        if legacy:  # how covers drawn before 2026-10-17 evening were worded: every background tag first
+            back = back[:1] + ["plain background"] + back[1:] if "plain background" not in back else back
+            return f"{spec['prefix']}{', '.join(back + [t for t in tags if t not in back])}, anime illustration"
+        plain = [t for t in back if t.lower() in ("simple background", "plain background")]
+        plain += [] if "plain background" in (t.lower() for t in plain) else ["plain background"]
+        colour = [t for t in back if t not in plain]
+        return f"{spec['prefix']}{', '.join(plain + [t for t in tags if t not in back] + colour)}, anime illustration"
     return f"{spec['prefix']}{prompt}{spec['suffix']}"
 
 
@@ -483,13 +489,13 @@ def _sex_negative(prompt: str, style: str) -> str:
 
 
 def cache_file(prompt: str, style: str, size: tuple[int, int], seed: int, hires: bool = True, negative: str = "",
-               reference: Path | None = None) -> Path:
+               reference: Path | None = None, legacy: bool = False) -> Path:
     """Where generate() keeps this picture (it may not be drawn yet)."""
     w, h = base_size(size)
     # the full prompt and hi-res scale are part of the key, so changing a look's wording draws new pictures
     ref = f"\nref {hashlib.sha1(reference.read_bytes()).hexdigest()[:12]} {IP_SCALE}" if reference else ""
     key = hashlib.sha1(f"{style}\n{w}x{h}\n{seed}\n{hires}{HIRES_SCALE}\n{negative}{_sex_negative(prompt, style)}{FLAT_NEGATIVE if _flat(prompt, style) else ''}\n"
-                       f"{full_prompt(prompt.strip(), style)}{ref}"
+                       f"{full_prompt(prompt.strip(), style, legacy)}{ref}"
                        .encode()).hexdigest()[:16]
     return GEN_CACHE / f"{style}-{key}.png"
 
@@ -498,8 +504,11 @@ def drawn(prompt: str, style: str, size: tuple[int, int], seed: int) -> Path | N
     """The picture if generate() already drew it, else None (nothing is drawn)."""
     if style not in STYLES or not prompt.strip():
         return None
-    out = cache_file(prompt, style, size, seed)
-    return out if out.exists() and out.stat().st_size else None
+    for legacy in (False, True):  # a cover drawn under the old wording is still that picture
+        out = cache_file(prompt, style, size, seed, legacy=legacy)
+        if out.exists() and out.stat().st_size:
+            return out
+    return None
 
 
 _CFG_INPUTS = ["prompt_embeds", "add_text_embeds", "add_time_ids"]
@@ -553,6 +562,9 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
     out = cache_file(prompt, style, size, seed, hires, negative, reference)
     if out.exists() and out.stat().st_size:
         return out
+    old = cache_file(prompt, style, size, seed, hires, negative, reference, legacy=True)
+    if _flat(prompt, style) and old.exists() and old.stat().st_size:  # drawn under the old cover wording: keep it
+        return old
     with _lock:
         import torch
         from diffusers import StableDiffusionXLImg2ImgPipeline
