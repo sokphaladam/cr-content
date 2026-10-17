@@ -754,11 +754,7 @@ def excel_render(req: ExcelRequest):
 def _run_render(job_id: str, req: RenderRequest) -> None:
     job = jobs[job_id]
 
-    def log(line: str) -> None:
-        with jobs_lock:
-            job["log"].append(line)
-            if line.startswith("[") and "/5]" in line:
-                job["step"] = int(line[1])
+    log = _job_logger(job, 5)
 
     with jobs_lock:
         job["status"] = "running"
@@ -829,11 +825,7 @@ def write_song(req: SongWriteRequest):
 def _run_song(job_id: str, req: SongComposeRequest) -> None:
     job = jobs[job_id]
 
-    def log(line: str) -> None:
-        with jobs_lock:
-            job["log"].append(line)
-            if line.startswith("[") and "/3]" in line:
-                job["step"] = int(line[1])
+    log = _job_logger(job, 3)
 
     with jobs_lock:
         job["status"] = "running"
@@ -867,11 +859,7 @@ def compose_song(req: SongComposeRequest):
 def _run_music_video(job_id: str, folder: Path, req: "MusicVideoRequest") -> None:
     job = jobs[job_id]
 
-    def log(line: str) -> None:
-        with jobs_lock:
-            job["log"].append(line)
-            if line.startswith("[") and "/4]" in line:
-                job["step"] = int(line[1])
+    log = _job_logger(job, 4)
 
     with jobs_lock:
         job["status"] = "running"
@@ -1134,11 +1122,18 @@ def video_ideas(name: str):
 # ---------- Your own songs (upload mp3 + lyrics -> lyric timing -> music video) ----------
 
 def _job_logger(job: dict, steps: int):
+    """A log function for a job: "[n/steps]" lines move it to step n (and reset its progress); "@progress f text"
+    lines (pipeline.progress_reporter) set how far the current step is, 0..1, and what it's doing, without going
+    into the log; everything else is appended to the log."""
     def log(line: str) -> None:
         with jobs_lock:
+            if line.startswith("@progress "):
+                _, fraction, *detail = line.split(" ", 2)
+                job["progress"], job["detail"] = float(fraction), (detail[0] if detail else "")
+                return
             job["log"].append(line)
             if line.startswith("[") and f"/{steps}]" in line:
-                job["step"] = int(line[1])
+                job.update(step=int(line[1]), progress=None, detail="")
     return log
 
 

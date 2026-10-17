@@ -321,6 +321,8 @@ export interface Job {
   kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips";
   status: "queued" | "running" | "done" | "error";
   step: number;
+  progress?: number | null; // how far the current step is, 0..1 (null/absent: no measure for it)
+  detail?: string; // what the current step is doing right now ("Rendering the cover 1:23 / 4:26")
   log: string[];
   title: string;
   video?: string;

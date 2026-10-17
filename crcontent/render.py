@@ -25,6 +25,25 @@ def run(cmd: list[str], cwd: Path | None = None) -> None:
         raise RuntimeError(f"ffmpeg failed ({proc.returncode}):\n{' '.join(cmd)}\n{proc.stderr[-2000:]}")
 
 
+def run_progress(cmd: list[str], seconds: float, progress, cwd: Path | None = None) -> None:
+    """run(), calling `progress` with 0..1 as FFmpeg gets through `seconds` of output (read from -progress)."""
+    import tempfile
+
+    with tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen([cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]], cwd=cwd,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err, text=True,
+                                encoding="utf-8", errors="replace")
+        for line in proc.stdout:
+            key, _, value = line.strip().partition("=")
+            if key in ("out_time_us", "out_time_ms") and value.isdigit() and seconds > 0:
+                progress(min(int(value) / 1e6 / seconds, 1.0))  # both are microseconds (FFmpeg's naming)
+        code = proc.wait()
+        if code != 0:
+            err.seek(0)
+            raise RuntimeError(f"ffmpeg failed ({code}):\n{' '.join(cmd)}\n"
+                               f"{err.read().decode('utf-8', 'replace')[-2000:]}")
+
+
 def duration(path: Path) -> float:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
@@ -248,12 +267,13 @@ def _with_emoji(workdir: Path, ass_name: str) -> str:
 
 def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
              music: Path | None, music_volume: float = 0.25, soundtrack: Path | None = None,
-             fade_out: float = 0.0, effects: list[tuple[Path, float, float]] = ()) -> None:
+             fade_out: float = 0.0, effects: list[tuple[Path, float, float]] = (), progress=None) -> None:
     """Burn captions, mix the audio (voice, ducked music, sound effects) at -14 LUFS, and write a web-optimized mp4.
 
     soundtrack replaces the video's own audio entirely (a music video's song); music is then ignored.
     fade_out: seconds the picture fades to black at the end (a music video's outro).
     effects: (sound file, start second, volume) sound effects (sfx.impact_track).
+    progress: called with 0..1 during the final encode (minutes for a full song).
     Runs inside workdir with relative names so the subtitles filter avoids Windows drive-letter escaping.
     """
     # complex (HarfBuzz) shaping is required for Khmer subscripts/vowel reordering; "auto" picks simple
@@ -269,7 +289,10 @@ def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
     cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-maxrate", MAX_RATE, "-bufsize", BUF_SIZE,
             "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", str(out.resolve())]
-    run(cmd, cwd=workdir)
+    if progress:
+        run_progress(cmd, duration(workdir / video_name), progress, cwd=workdir)
+    else:
+        run(cmd, cwd=workdir)
 
 
 def thumbnail(video: Path, at: float, out: Path, workdir: Path, ass_name: str | None = None,

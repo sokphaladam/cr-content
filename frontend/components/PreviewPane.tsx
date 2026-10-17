@@ -227,6 +227,26 @@ function ScenePreview({ scene, index, total, lang }: { scene: Scene; index: numb
   );
 }
 
+/** "about 2 min left" from how fast the current step has been going since it started reporting. */
+function useTimeLeft(step: number, progress: number | null | undefined) {
+  const start = useRef<{ step: number; at: number; from: number } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (progress == null) {
+    start.current = null;
+    return "";
+  }
+  if (!start.current || start.current.step !== step || progress < start.current.from) start.current = { step, at: Date.now(), from: progress };
+  const done = progress - start.current.from;
+  const elapsed = (now - start.current.at) / 1000;
+  if (done < 0.03 || elapsed < 4) return "";
+  const left = (elapsed / done) * (1 - progress);
+  return left < 50 ? "less than a minute left" : `about ${Math.round(left / 60)} min left`;
+}
+
 function Progress({ job, title }: { job: Job | null; title: string }) {
   const log = useRef<HTMLPreElement>(null);
   useEffect(() => {
@@ -234,6 +254,8 @@ function Progress({ job, title }: { job: Job | null; title: string }) {
   }, [job?.log.length]);
   const step = job?.step ?? 0;
   const finished = job?.status === "done";
+  const progress = job?.status === "running" ? job.progress : null;
+  const timeLeft = useTimeLeft(step, progress);
   return (
     <div className="flex h-full flex-col gap-3.5 px-5 pt-7 pb-4">
       <p className="m-0 font-display text-xl leading-tight font-bold">{title}</p>
@@ -251,7 +273,32 @@ function Progress({ job, title }: { job: Job | null; title: string }) {
               >
                 {done ? <Check className="size-3.5" /> : n}
               </span>
-              {label}
+              <span className="grid min-w-0 flex-1 gap-1">
+                {label}
+                {active && (progress != null || job?.detail) && (
+                  <span className="grid gap-1 font-normal">
+                    {progress != null && (
+                      <span
+                        role="progressbar"
+                        aria-label={label}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={Math.round(progress * 100)}
+                        className="h-1.5 overflow-hidden rounded-full bg-white/15"
+                      >
+                        <span className="block h-full rounded-full bg-caption transition-[width] duration-700 ease-linear" style={{ width: `${Math.max(2, progress * 100)}%` }} />
+                      </span>
+                    )}
+                    <span className="flex justify-between gap-2 text-xs text-white/60 tabular-nums">
+                      <span className="truncate">{job?.detail}</span>
+                      <span className="shrink-0">
+                        {progress != null ? `${Math.round(progress * 100)}%` : ""}
+                        {timeLeft ? ` · ${timeLeft}` : ""}
+                      </span>
+                    </span>
+                  </span>
+                )}
+              </span>
             </li>
           );
         })}

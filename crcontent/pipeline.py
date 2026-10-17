@@ -1009,12 +1009,14 @@ def song_art(song_dir: Path, song, spans: list[tuple[float, float]], shots: list
         log(f"      repeated sections show their pictures again ({len(reused)} shots)")
     (workdir / "art.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     plans, pictures = [], []
+    report = progress_reporter(log)
     for k, s in enumerate(plan["slots"]):
         seed = s.get("seed") or k + 1
         plans.append(director.ShotPlan(s["prompt"], s.get("motion") or "push_in", s.get("effects") or []))
         shape = picture_shape(s, size)
-        log(f"      drawing picture {k + 1}/{len(plan['slots'])}"
-            + (" (already drawn)" if imagegen.drawn(s["prompt"], style, shape, seed) else ""))
+        done = imagegen.drawn(s["prompt"], style, shape, seed)
+        log(f"      drawing picture {k + 1}/{len(plan['slots'])}" + (" (already drawn)" if done else ""))
+        report(k / len(plan["slots"]), f"Picture {k + 1} of {len(plan['slots'])}" + (" (already drawn)" if done else ""))
         pictures.append(imagegen.generate(s["prompt"], style, shape, seed=seed, log=log))
 
     def plan_for(i: int):
@@ -1178,6 +1180,23 @@ def neon_title(title: str) -> str:
     return name or title.strip()
 
 
+def _clock(seconds: float) -> str:
+    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
+
+
+def progress_reporter(log: Callable[[str], None]):
+    """A function (fraction 0..1, what is happening) that sends live progress through `log` as "@progress" lines,
+    which the app shows as a bar under the current step (and leaves out of the log). At most one per whole percent."""
+    last = [-1, ""]
+
+    def report(fraction: float, detail: str = "") -> None:
+        pct = int(max(0.0, min(fraction, 1.0)) * 100)
+        if pct != last[0] or detail != last[1]:
+            last[:] = [pct, detail]
+            log(f"@progress {max(0.0, min(fraction, 1.0)):.3f} {detail}")
+    return report
+
+
 def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: str = "", look: str = "",
                      lyric_style: "dict | None" = None, art_style: str | None = None,
                      pictures: str | None = None, direction: dict | None = None,
@@ -1268,18 +1287,22 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     shown: dict[int, int] = {}  # section -> shots so far
     exhausted: set[int] = set()  # sections whose search has no new clips left
     clips = []
+    report = progress_reporter(log)  # live progress for the app's bar
     held = bool(shot_art) and pictures == "cover"
     if held:  # one picture held for the whole song: no cuts, no beat punches
         picture, plan = shot_art[0]
         seed = (json.loads((work / "art.json").read_text(encoding="utf-8"))["slots"][0].get("seed") or 1)
+        report(0.0, "Setting the cover on the frame")
         picture = cover_canvas(picture, size, cover_colour(song.title, idea), plan.prompt, seed, log)
         shutil.copy(picture, work / COVER_FRAME)  # for the magazine thumbnail
         log(f"      holding one picture for the whole song ({total:.0f}s)")
         clip = work / "shot_00.mp4"
         fx.render_shot(picture, total, clip, size=size, motion="breathe", effects=cover_effects(idea),
-                       look=look, seed=7)
+                       look=look, seed=7, progress=lambda f: report(f, f"Rendering the cover {_clock(f * total)} / "
+                                                                       f"{_clock(total)}"))
         clips.append(clip)
     for i, shot in enumerate([] if held else shots):
+        report(i / max(len(shots), 1), f"Shot {i + 1} of {len(shots)}")
         if shot_art:
             picture, plan = shot_art[i]
             first = i == 0 or shot_art[i - 1][0] != picture
@@ -1363,7 +1386,9 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     # 4. Final render with the song as the soundtrack + cover + post text
     log("[4/4] Final render")
     final = job / "video.mp4"
-    finalize(work, "joined.mp4", "captions.ass", final, None, soundtrack=mix, fade_out=2.0)
+    report(0.0, "Mixing the sound")
+    finalize(work, "joined.mp4", "captions.ass", final, None, soundtrack=mix, fade_out=2.0,
+             progress=lambda f: report(f, f"Encoding the video {_clock(f * total)} / {_clock(total)}"))
     try:
         cover_at = thumbs.best_frames(work / "joined.mp4", 1)[0]
     except Exception:

@@ -493,7 +493,8 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                 motion: str = "push_in", effects: tuple[str, ...] | list[str] = (), beats: list[float] = (),
                 voice: Path | None = None, look: str = "", seed: int = 0, parallax: float = 1.0,
                 tape: str = "", wear: float = 0.0, frame: str = "full", stamp: str = "", fade: bool = False,
-                impacts: list[float] = (), cuts: list[float] = (), focus: tuple[float, float] | None = None) -> None:
+                impacts: list[float] = (), cuts: list[float] = (), focus: tuple[float, float] | None = None,
+                progress=None) -> None:
     """`image` filling a `size` frame for `length` seconds with a camera move and effects, as an mp4.
 
     beats: seconds (from the shot's start) to accent: a quick zoom punch, a flash with the "flash" effect, a
@@ -506,6 +507,7 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
     tape: an old-tape treatment (TAPES); wear: 0..1, how worn that tape is; frame: "4:3" shows the shot as a home
     video on a dark screen inside the frame (FRAMES); stamp: the camcorder's date ("MAY 31 1998"; with tape play or
     rewind); fade: the nearest subject fades out of the scene, more with wear.
+    progress: called with 0..1 as the frames are drawn (a long held shot takes minutes).
     """
     import numpy as np
     import torch
@@ -587,6 +589,8 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
             with torch.no_grad():
                 for n in range(frames):
                     t = n / FPS
+                    if progress and n % 15 == 0:
+                        progress(n / frames)
                     p = n / max(frames - 1, 1)
                     since = [t - b for b in beats if t >= b]
                     hit = math.exp(-min(since) * 9) if since else 0.0  # 1 on the beat, fading over ~0.3 s
