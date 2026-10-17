@@ -588,10 +588,12 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
     return out
 
 
-def outpaint(image, mask, prompt: str, style: str, seed: int, log=print):
+def outpaint(image, mask, prompt: str, style: str, seed: int, log=print, tidy=None):
     """Paint the white part of `mask` (a PIL "L" image) in `image` (a PIL picture at an SDXL size) so it continues
     the rest: a picture widened to another shape. The unpainted part is kept exactly; the result then gets the same
-    hi-res pass as generate(). Returns a PIL picture HIRES_SCALE x bigger."""
+    hi-res pass as generate(). `tidy`: a function (PIL picture -> PIL picture) run before that pass, e.g. to flatten
+    a background, so the pass doesn't sharpen a faint seam into a drawn line. Returns a PIL picture HIRES_SCALE x
+    bigger."""
     import torch
     from diffusers import StableDiffusionXLImg2ImgPipeline, StableDiffusionXLInpaintPipeline
     from PIL import Image, ImageFilter
@@ -613,8 +615,12 @@ def outpaint(image, mask, prompt: str, style: str, seed: int, log=print):
         painted = paint(prompt=full_prompt(prompt, style), negative_prompt=neg, image=image, mask_image=mask,
                         width=image.width, height=image.height, strength=0.99, num_inference_steps=spec["steps"] + 8,
                         guidance_scale=spec["cfg"], generator=generator, **ip).images[0]
-        soft = mask.filter(ImageFilter.GaussianBlur(6))
-        image = Image.composite(painted, image, soft)  # what wasn't to be painted stays exactly as it was
+        # what wasn't to be painted stays exactly as it was: the blend runs outside it (the painted part shrunk
+        # first), never over its outline
+        soft = mask.filter(ImageFilter.MinFilter(13)).filter(ImageFilter.GaussianBlur(4))
+        image = Image.composite(painted, image, soft)
+        if tidy:
+            image = tidy(image)
         refine = StableDiffusionXLImg2ImgPipeline(**pipe.components)
         refine.set_progress_bar_config(disable=True)
         w, h = image.size

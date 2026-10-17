@@ -612,51 +612,79 @@ def _flatten(img, target, tolerance: float = 26, with_mask: bool = False):
 OUTPAINT_SIZE = (1344, 768)  # the SDXL size a landscape cover is widened at (16:9 within 2%)
 
 
+def _drop_strays(img, character, target, tolerance: float = 34):
+    """`img` flattened (_flatten), without anything the painting added that floats free of the character (a loose
+    piece of scarf, a stray blob): only shapes joined to `character` (a PIL "L" mask at any size: where it was
+    before painting) are kept."""
+    import numpy as np
+    from PIL import Image, ImageFilter
+    from scipy import ndimage
+
+    small = np.asarray(img.resize((max(img.width * 512 // img.height, 1), 512)), dtype=np.float32)
+    bg, _ = _background(small, target, tolerance)
+    shapes, n = ndimage.label(~bg)
+    was = np.asarray(character.resize((small.shape[1], small.shape[0]))) > 128
+    joined = np.unique(shapes[was & ~bg])
+    stray = (~bg) & ~np.isin(shapes, joined[joined > 0])
+    if stray.any():
+        m = Image.fromarray((ndimage.binary_dilation(stray, iterations=2) * 255).astype(np.uint8))
+        soft = np.asarray(m.resize(img.size, Image.BILINEAR).filter(ImageFilter.GaussianBlur(2)),
+                          dtype=np.float32)[..., None] / 255
+        img = Image.fromarray((np.asarray(img, dtype=np.float32) * (1 - soft) + target * soft).astype(np.uint8))
+    return _flatten(img, target, tolerance=tolerance)
+
+
 def cover_canvas(picture: Path, size: tuple[int, int], colour: str, prompt: str = "", seed: int = 1,
                  log: Callable[[str], None] = print) -> Path:
-    """The drawn cover character (portrait) as a picture of the frame's shape on a flat `colour` background. A
-    landscape frame is widened by the drawing model itself: the character is set on a canvas of that colour and the
-    sides, the strip above the head and a band over the picture's edges are painted to continue it (hair and clothes
-    the portrait cut off run on), so there is no pasted-on edge. Made once next to the picture."""
+    """The drawn cover character (portrait) as a picture of the frame's shape on a flat `colour` background, set
+    in the middle with room above the head. Only what the portrait cut off is painted on by the drawing model (hair
+    or a sleeve running off a side or the top continues past it); a character the portrait shows whole is simply
+    placed, untouched (painting next to it invents ghost limbs and smears its outline). Made once next to it."""
     import numpy as np
-    from PIL import Image, ImageDraw, ImageFilter, ImageOps
+    from PIL import Image, ImageDraw, ImageOps
 
     from . import imagegen
 
     W, H = size
-    out = picture.with_name(f"{picture.stem}-cover13-{W}x{H}-{colour.replace(' ', '_')}.png")
+    out = picture.with_name(f"{picture.stem}-cover17-{W}x{H}-{colour.replace(' ', '_')}.png")
     if out.exists():
         return out
     target = np.array(COVER_COLOURS.get(colour, (246, 188, 212)), dtype=np.float32)
     flat, bg = _flatten(Image.open(picture).convert("RGB"), target, with_mask=True)
-    if W > H and prompt:
+    fill = tuple(int(c) for c in target)
+    if abs(flat.width / flat.height - W / H) < 0.05:  # a portrait frame: the picture's own shape, edge to edge
+        flat.resize((W, H), Image.LANCZOS).save(out)
+        return out
+    person = np.asarray(ImageOps.invert(bg)) > 128
+    cut = {"left": person[:, :4].mean() > 0.02, "right": person[:, -4:].mean() > 0.02, "top": person[:4].mean() > 0.02}
+    if W > H and prompt and any(cut.values()):
         CW, CH = OUTPAINT_SIZE
         h = round(CH * 0.92)  # room above the head
         w = round(flat.width * h / flat.height)
         x0, y0 = (CW - w) // 2, CH - h
-        canvas = Image.new("RGB", (CW, CH), tuple(int(c) for c in target))
+        canvas = Image.new("RGB", (CW, CH), fill)
         canvas.paste(flat.resize((w, h), Image.LANCZOS), (x0, y0))
-        # keep only the character (a little inside its outline), minus a band along the picture's edges so what
-        # they cut off continues; everything else is painted, so no trace of the picture's rectangle is left
-        person = ImageOps.invert(bg).resize((w, h), Image.BILINEAR).point(lambda v: 255 if v > 128 else 0)
-        band = 28
-        ImageDraw.Draw(person).rectangle((0, 0, w, band), fill=0)
-        ImageDraw.Draw(person).rectangle((0, 0, band, h), fill=0)
-        ImageDraw.Draw(person).rectangle((w - band, 0, w, h), fill=0)
-        keep = Image.new("L", (CW, CH), 0)
-        keep.paste(person.filter(ImageFilter.MinFilter(7)), (x0, y0))
-        mask = ImageOps.invert(keep)
-        log("      widening the cover picture to the frame")
-        wide = imagegen.outpaint(canvas, mask, prompt, "anime", seed, log=log)
-        _flatten(wide, target, tolerance=34).resize((W, H), Image.LANCZOS).save(out)
+        band = 16  # painted over the picture's edge too, so the cut-off hair or sleeve runs on smoothly
+        mask = Image.new("L", (CW, CH), 0)
+        draw = ImageDraw.Draw(mask)
+        if cut["left"]:
+            draw.rectangle((0, 0, x0 + band, CH), fill=255)
+        if cut["right"]:
+            draw.rectangle((x0 + w - band, 0, CW, CH), fill=255)
+        if cut["top"]:
+            draw.rectangle((x0, 0, x0 + w, y0 + band), fill=255)
+        log("      painting on what the cover picture cuts off (" + ", ".join(k for k, v in cut.items() if v) + ")")
+        whole = Image.new("L", (CW, CH), 0)  # where the character was before painting
+        whole.paste(Image.fromarray((person * 255).astype(np.uint8)).resize((w, h)), (x0, y0))
+        # tidied before the detail pass too: a faint seam between old and new background would become a drawn line
+        wide = imagegen.outpaint(canvas, mask, prompt, "anime", seed, log=log,
+                                 tidy=lambda im: _drop_strays(im, whole, target, tolerance=34))
+        _drop_strays(wide, whole, target, tolerance=34).resize((W, H), Image.LANCZOS).save(out)
         return out
-    if abs(flat.width / flat.height - W / H) < 0.05:  # a portrait frame: the picture's own shape, edge to edge
-        flat.resize((W, H), Image.LANCZOS).save(out)
-        return out
-    # no prompt to widen it with: the picture on the flat colour
-    h = round(H * 0.94)
+    # nothing cut off (or nothing to paint with): the picture on the flat colour
+    h = round(H * 0.92)
     w = round(flat.width * h / flat.height)
-    frame = Image.new("RGB", (W, H), tuple(int(c) for c in target))
+    frame = Image.new("RGB", (W, H), fill)
     frame.paste(flat.resize((w, h), Image.LANCZOS), ((W - w) // 2, H - h))
     frame.save(out)
     return out
