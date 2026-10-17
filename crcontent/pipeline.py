@@ -12,6 +12,7 @@ from typing import Callable
 
 from . import art, fx, pacing, sfx, thumbs, voiceover
 from .captions import THUMB_STYLES, build_ass, build_thumbnail_ass, overlay_lines
+from .captions import _bare as _bare_word
 from .config import ASSETS_DIR, LANGS, OUTPUT_DIR, ROOT, SCENE_PAD_SEC, frame_size, orientation
 from .render import concat, duration, finalize, render_scene, run, thumbnail
 from .script import VideoScript, generate_script
@@ -220,13 +221,18 @@ def draw_magazine(job: Path, text: str, lang: str, out: Path) -> bool:
         cut = min((i for i, ch in enumerate(big) if ch == " "), key=lambda i: abs(i - half))
         pair = [big[:cut], big[cut + 1:]]
         overlap = W * 0.07  # the words tuck a little behind the character
-        room = [x_left + overlap - W * 0.04, W * 0.96 - (x_right - overlap)]
+        left_end, right_start = x_left + overlap, x_right - overlap
+        gap = W * 0.07  # a narrow head would let them touch ("SIGNALLOST"): always a word space or more between
+        if right_start - left_end < gap:
+            mid = (x_left + x_right) / 2
+            left_end, right_start = mid - gap / 2, mid + gap / 2
+        room = [left_end - W * 0.04, W * 0.96 - right_start]
         sizes = [_fit_font(draw, t, heavy, r, round(H * 0.3), round(H * 0.08)) for t, r in zip(pair, room)]
         if all(sizes):
             font = min(sizes, key=lambda f: f.size)
             lbox, rbox = (draw.textbbox((0, 0), t, font=font) for t in pair)
-            draw.text((x_left + overlap - (lbox[2] - lbox[0]) - lbox[0], y - lbox[1]), pair[0], font=font, fill=ink)
-            draw.text((x_right - overlap - rbox[0], y - rbox[1]), pair[1], font=font, fill=ink)
+            draw.text((left_end - (lbox[2] - lbox[0]) - lbox[0], y - lbox[1]), pair[0], font=font, fill=ink)
+            draw.text((right_start - rbox[0], y - rbox[1]), pair[1], font=font, fill=ink)
             words_ = []
     if words_:  # one word (or the sides are too narrow): across the top, behind the head
         font = (_fit_font(draw, big, heavy, W * 0.94, round(H * 0.42), round(H * 0.12))
@@ -236,7 +242,9 @@ def draw_magazine(job: Path, text: str, lang: str, out: Path) -> bool:
     # the small print at the sides, the way playlist covers carry their mood and use
     try:
         song = SongScript.load(job / "song.json")
-        mood, genre = song.mood.split(",")[0].strip().upper(), song.genre.split(",")[0].strip().upper()
+        # the first word of each: "Indie rock / synth-pop with ..." -> "INDIE ROCK"
+        mood = re.split(r"[,/(]| and | with ", song.mood)[0].strip().upper()[:18]
+        genre = re.split(r"[,/(]| and | with ", song.genre)[0].strip().upper()[:20]
     except Exception:
         mood, genre = "", ""
     small = _fit_font(draw, "LYRIC VIDEO", heavy if lang != "km" else FONTS["en"]["Impact"], W, round(H * 0.034), 8)
@@ -532,39 +540,71 @@ COVER_EFFECTS = ["bokeh", "sparkles", "glow", "grain"]
 COVER_SHAPE = "9:16"  # a cover character is drawn portrait (head to thighs with room above), then set on a flat frame
 
 
+def _background(small, target, tolerance: float = 26):
+    """Which pixels of `small` (a float RGB array) are its plain background, and the background's colour on each row
+    (it may be a gradient). The picture is split into smooth regions by its line art and shading edges; regions
+    touching the top or sides in the background's colour are background, whatever their gradient, and so are
+    regions shut in by hair or arms whose colour matches the background's at the same height."""
+    import numpy as np
+    from scipy import ndimage
+
+    h, w = small.shape[:2]
+    soft = ndimage.uniform_filter(small, size=(3, 3, 1))
+    gy, gx = np.gradient(soft, axis=(0, 1))
+    edges = np.sqrt((gx ** 2 + gy ** 2).sum(2)) > 4.5  # outlines and shading steps; a smooth gradient stays under
+    regions, n = ndimage.label(~edges)
+    border = np.zeros((h, w), dtype=bool)
+    border[0], border[:, 0], border[:, -1] = True, True, True  # not the bottom: the body is cut off there
+    ref = np.median(np.concatenate([small[0], small[:, 0], small[:, -1]]), axis=0)
+    ids = np.arange(1, n + 1)
+    means = np.stack([ndimage.mean(small[..., c], regions, ids) for c in range(3)], 1) if n else np.zeros((0, 3))
+    touching = np.zeros(n + 1, dtype=bool)
+    touching[np.unique(regions[border])] = True
+    near_ref = np.linalg.norm(means - ref, axis=1) < 45
+    near_target = np.linalg.norm(means - target, axis=1) < 18
+    is_bg = np.zeros(n + 1, dtype=bool)
+    is_bg[1:] = (touching[1:] & (near_ref | near_target)) | near_target
+    bg = is_bg[regions] & ~edges
+    # the background's colour on each row, for the regions it shuts in and for the soft edges' old colour
+    counts = bg.sum(1)
+    rows = np.where(counts > 0)[0]
+    if len(rows) == 0:
+        return bg, np.tile(ref, (h, 1))
+    sums = (small * bg[..., None]).sum(1)
+    profile = np.stack([np.interp(np.arange(h), rows, sums[rows, c] / counts[rows]) for c in range(3)], 1)
+    sizes = ndimage.sum(np.ones((h, w)), regions, ids) if n else np.zeros(0)
+    off = np.linalg.norm(small - profile[:, None, :], axis=2)
+    match = ndimage.mean(off, regions, ids) if n else np.zeros(0)
+    pocket = np.zeros(n + 1, dtype=bool)
+    pocket[1:] = ~is_bg[1:] & (match < tolerance * 0.8) & (sizes >= 40)
+    bg |= pocket[regions]
+    # the edge pixels between background pieces belong to it, and so does the blended border round the character
+    # wherever it is still mostly background colour (else it shows as a light outline)
+    bg |= ndimage.binary_closing(bg, iterations=2) & (off < tolerance)
+    bg |= ndimage.binary_dilation(bg, iterations=3) & (off < tolerance * 1.4)
+    bg |= off < tolerance * 0.6  # specks of background between hair strands, too small to be regions
+    return bg, profile
+
+
 def _flatten(img, target, tolerance: float = 26, with_mask: bool = False):
-    """`img` (a PIL picture) with its plain background (found by spreading in from the edges through pixels of its
-    colour, plus pockets of that colour shut in by hair or arms) turned into the flat `target` colour, blended over a
-    soft mask so hair edges stay soft and keep no rim of the old colour. Pixels already near `target` count as
-    background too (a widened picture's kept middle). with_mask: also return the background mask (PIL "L")."""
+    """`img` (a PIL picture) with its plain background (_background: even a gradient, and pockets shut in by hair or
+    arms) turned into the flat `target` colour, blended over a soft mask so hair edges stay soft and keep no rim of
+    the old colour. Pixels already near `target` count as background too (a widened picture's kept middle).
+    with_mask: also return the background mask (PIL "L")."""
     import numpy as np
     from PIL import Image, ImageFilter
 
     small = np.asarray(img.resize((max(img.width * 512 // img.height, 1), 512)), dtype=np.float32)
-    edge = np.concatenate([small[0], small[:, 0], small[:, -1]])  # not the bottom: the body is cut off there
-    ref = np.median(edge, axis=0)
-    near = np.linalg.norm(small - ref, axis=2) < tolerance  # tight: hair or clothes close to it stay
-    near |= np.linalg.norm(small - target, axis=2) < 18
-    bg = np.zeros_like(near)
-    bg[0], bg[-1], bg[:, 0], bg[:, -1] = near[0], near[-1], near[:, 0], near[:, -1]
-    for _ in range(small.shape[0] + small.shape[1]):  # grow from the edges through similar pixels only
-        grown = bg.copy()
-        grown[1:] |= bg[:-1]
-        grown[:-1] |= bg[1:]
-        grown[:, 1:] |= bg[:, :-1]
-        grown[:, :-1] |= bg[:, 1:]
-        grown &= near
-        if (grown == bg).all():
-            break
-        bg = grown
-    bg |= (np.linalg.norm(small - ref, axis=2) < 18) | (np.linalg.norm(small - target, axis=2) < 12)
+    bg, profile = _background(small, target, tolerance)
     mask = Image.fromarray((bg * 255).astype(np.uint8)).resize(img.size, Image.BILINEAR)
     core = np.asarray(mask.filter(ImageFilter.GaussianBlur(1.5)), dtype=np.float32)[..., None] / 255
     rim = np.asarray(mask.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(4)),
                      dtype=np.float32)[..., None] / 255
     pic = np.asarray(img, dtype=np.float32)
+    old = np.interp(np.linspace(0, len(profile) - 1, img.height), np.arange(len(profile)), profile[:, 0]),         np.interp(np.linspace(0, len(profile) - 1, img.height), np.arange(len(profile)), profile[:, 1]),         np.interp(np.linspace(0, len(profile) - 1, img.height), np.arange(len(profile)), profile[:, 2])
+    old = np.stack(old, 1)[:, None, :]  # the background's own colour on each row (a gradient stays a gradient)
     # edge pixels are part old background: shift that part to the pastel (no coloured rim), then fill flat
-    pic = np.clip(pic + (target - ref) * rim * (1 - core), 0, 255) * (1 - core) + target * core
+    pic = np.clip(pic + (target - old) * rim * (1 - core), 0, 255) * (1 - core) + target * core
     flat = Image.fromarray(pic.astype(np.uint8))
     return (flat, mask) if with_mask else flat
 
@@ -584,7 +624,7 @@ def cover_canvas(picture: Path, size: tuple[int, int], colour: str, prompt: str 
     from . import imagegen
 
     W, H = size
-    out = picture.with_name(f"{picture.stem}-cover9-{W}x{H}-{colour.replace(' ', '_')}.png")
+    out = picture.with_name(f"{picture.stem}-cover13-{W}x{H}-{colour.replace(' ', '_')}.png")
     if out.exists():
         return out
     target = np.array(COVER_COLOURS.get(colour, (246, 188, 212)), dtype=np.float32)
@@ -622,20 +662,89 @@ def cover_canvas(picture: Path, size: tuple[int, int], colour: str, prompt: str 
     return out
 
 
-def cover_colour(title: str) -> str:
-    """The flat pastel background of a song's cover picture (the same every time for the same song)."""
-    return list(COVER_COLOURS)[int(hashlib.sha1(title.strip().lower().encode()).hexdigest(), 16) % len(COVER_COLOURS)]
+# words in an idea -> the cover colour they ask for (longer phrases are matched first: "light blue" before "blue")
+COLOUR_WORDS = {
+    "light blue": "light blue", "sky blue": "light blue", "baby blue": "light blue", "pastel blue": "light blue",
+    "lavender": "purple", "lilac": "purple", "violet": "purple", "purple": "purple", "mauve": "purple",
+    "peach": "orange", "coral": "orange", "orange": "orange", "sunset": "orange", "amber": "orange",
+    "teal": "aqua", "turquoise": "aqua", "mint": "aqua", "aqua": "aqua", "cyan": "aqua", "green": "aqua",
+    "emerald": "aqua",
+    "pink": "pink", "rose": "pink", "magenta": "pink", "sakura": "pink", "blush": "pink",
+    "yellow": "yellow", "gold": "yellow", "golden": "yellow", "lemon": "yellow", "sunflower": "yellow",
+    "red": "red", "crimson": "red", "scarlet": "red", "cherry": "red",
+    "blue": "blue", "navy": "blue", "cobalt": "blue", "cold": "blue", "icy": "blue",
+    # Khmer
+    "ខៀវខ្ចី": "light blue", "ស្វាយ": "purple", "ទឹកក្រូច": "orange", "បៃតង": "aqua", "ផ្កាឈូក": "pink",
+    "លឿង": "yellow", "ក្រហម": "red", "ខៀវ": "blue",
+}
 
 
-def cover_scene(song) -> str:
-    """The direction for a song's single cover picture (director.plan_song follows it exactly)."""
-    colour = cover_colour(song.title)
+def colour_from_idea(idea: str) -> str:
+    """The cover colour an idea names first ("rain on pink and blue neon" -> pink), or "" when it names none."""
+    text = idea.lower()
+    found = []
+    for word in sorted(COLOUR_WORDS, key=len, reverse=True):
+        for m in re.finditer(rf"(?<![\w-]){re.escape(word)}(?![\w-])" if word.isascii() else re.escape(word), text):
+            if not any(a <= m.start() < b for a, b, _ in found):  # "light blue" already covers its "blue"
+                found.append((m.start(), m.end(), COLOUR_WORDS[word]))
+    return min(found)[2] if found else ""
+
+
+def cover_colour(title: str, idea: str = "") -> str:
+    """The flat pastel background of a song's cover picture: the colour your idea names, else one picked from the
+    title (the same every time for the same song)."""
+    return colour_from_idea(idea) or list(COVER_COLOURS)[
+        int(hashlib.sha1(title.strip().lower().encode()).hexdigest(), 16) % len(COVER_COLOURS)]
+
+
+# words in an idea -> the weather and light a cover video gets on top of its floating lights (and the picture shows)
+ATMOSPHERES = {
+    "rain": ("rain", "rainy", "monsoon", "storm", "drizzle", "downpour", "umbrella", "thunder", "wet", "ភ្លៀង"),
+    "snow": ("snow", "snowy", "winter", "christmas", "frost", "ព្រិល"),
+    "petals": ("sakura", "cherry blossom", "petal", "petals", "spring", "flower"),
+    "embers": ("fire", "flame", "embers", "campfire", "burning"),
+    "neon_glow": ("neon", "city lights", "cyberpunk", "night city", "nightclub", "arcade"),
+}
+ATMOSPHERE_LOOKS = {"rain": "wet hair and raindrops on her", "snow": "snowflakes in her hair",
+                    "petals": "petals drifting around her", "embers": "warm firelight on her",
+                    "neon_glow": "pink and blue neon light on her face"}
+
+
+def atmospheres(idea: str) -> list[str]:
+    """The ATMOSPHERES an idea calls for ("rain on pink neon" -> rain, neon_glow), in a fixed order."""
+    text = idea.lower()
+    return [k for k, words in ATMOSPHERES.items()
+            if any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)" if w.isascii() else re.escape(w), text)  # "neon-lit" too
+                   for w in words)]
+
+
+def cover_effects(idea: str) -> list[str]:
+    """A cover video's effects: the floating lights, plus the idea's weather and light (rain replaces sparkles)."""
+    extra = atmospheres(idea)
+    base = [e for e in COVER_EFFECTS if not (e == "sparkles" and {"rain", "snow"} & set(extra))]
+    return base + [e for e in extra if e not in base]
+
+
+def cover_scene(song, idea: str = "") -> str:
+    """The direction for a song's single cover picture (director.plan_song follows it exactly): the character, one
+    object that says what the song is about, an expression that fits its mood and the idea's weather, on a flat
+    colour."""
+    colour = cover_colour(song.title, idea)
+    weather = ", ".join(ATMOSPHERE_LOOKS[a] for a in atmospheres(idea))
     return (f"COVER ART for the whole song, like a J-pop playlist cover: one anime character (the main character of "
             f"the creator's idea when it describes one, with their look, hair and outfit; otherwise one who fits the "
-            f"song's mood and lyrics), cowboy shot (head to thighs, with room above the head), centred, eye level, facing the viewer with a lively expressive "
-            f"pose (hands near the face or at the sides, never reaching at the camera), a stylish outfit with {colour} "
-            f"accents, on a plain flat {colour} background with nothing else in it. Keep the prompt under 30 words "
-            f"and end it with: simple background, {colour} background")
+            f"song's mood and lyrics), cowboy shot (head to thighs, with room above the head), centred, eye level. "
+            f"The picture must say what THIS song is about at a glance: give the character ONE key object from the "
+            f"song or idea, held or worn (e.g. a cassette tape for a song about replaying a memory, an old radio or a "
+            f"flip phone for a song about a lost signal, a clear umbrella for a rain song), saying exactly where it is "
+            f"(e.g. 'holding an old radio against her chest with both hands'): never in front of the face, never "
+            f"floating, and the whole face visible; and an expression and "
+            f"pose that match the song's mood ({song.mood}: no smile for a sad or lonely song; hands near the face, "
+            f"on the object or at the sides, never reaching at the camera)"
+            + (f", with {weather}" if weather else "")
+            + f". A stylish outfit with {colour} accents, on a plain flat {colour} background with nothing else in it. "
+            f"Keep the prompt under 35 words, name the object early, and end it with: simple background, {colour} "
+            f"background")
 
 
 def _repeats(song) -> dict[int, int]:
@@ -799,6 +908,8 @@ def _new_art_plan(song, slots: list[dict], style: str, pace: str, aspect: str, i
     from . import director
 
     bible = bible or (direction or {}).get("bible", "")  # the shot list's characters and world
+    if pace == "cover":  # the cover's colour can come from the idea, which song_slots doesn't know
+        slots = [{**s, "scene": cover_scene(song, idea)} for s in slots]
     log(f"      planning {len(slots)} pictures (Claude)")
     try:
         written, plans = director.plan_song(song.title, song.mood, song.genre, slots, style, aspect, idea, bible)
@@ -811,12 +922,12 @@ def _new_art_plan(song, slots: list[dict], style: str, pace: str, aspect: str, i
             plans.append(director.ShotPlan(s.get("scene") or sec.visual_query or f"{song.mood} {song.genre}",
                                            "push_in", []))
     if pace == "cover":  # held for the whole song: the breathing move and floating lights, on a flat background
-        tags = f"simple background, {cover_colour(song.title)} background"
+        tags = f"simple background, {cover_colour(song.title, idea)} background"
         if not bible:  # Claude couldn't plan it: a short tag prompt the model reads whole (the direction is too long)
             plans = [director.ShotPlan(f"1girl, solo, cowboy shot, looking at viewer, {song.mood.split(',')[0].strip().lower()} expression, "
                                        f"stylish casual outfit, dark hoodie", "breathe", [])]
         plans = [director.ShotPlan(p.prompt if tags in p.prompt else f"{p.prompt.rstrip(' ,.')}, {tags}", "breathe",
-                                   COVER_EFFECTS) for p in plans]
+                                   cover_effects(idea)) for p in plans]
     return {"style": style, "pictures": pace, "idea": idea, "aspect": aspect, "bible": bible,
             "direction": _direction_key(direction),
             "slots": [{**s, "prompt": p.prompt, "motion": p.motion, "effects": p.effects, "seed": k + 1}
@@ -1003,13 +1114,14 @@ def sync_lyrics(job: Path, log: Callable[[str], None] = print, step: str = "[2/2
     return lines
 
 
-COLD_OPEN_GAP = 1.8  # seconds of lightning and thunder between the chorus preview and the song's start
-COLD_OPEN_SECONDS = (3.5, 5.5, 8.0)  # the preview's shortest, ideal and longest length
+TITLE_INTRO = (0.6, 5.5)  # when the neon song title flickers on and fades (the "cold open" option)
+COLD_OPEN_SECONDS = (3.5, 5.5, 8.0)  # a chorus excerpt's shortest, ideal and longest length
 
 
 def cold_open_window(song, lines: list, spans: list[tuple[float, float]], total: float) -> tuple[float, float] | None:
-    """(start, end) in the song of a cold open's chorus preview: the first chorus (else the first section sung again),
-    from just before its first line to the end of the line that ends nearest ~5.5 s in. None without a chorus."""
+    """(start, end) in the song of a few seconds of its chorus (a cover picture's lyrics): the first chorus (else the
+    first section sung again), from just before its first line to the end of the line that ends nearest ~5.5 s in.
+    None without a chorus."""
     names = [s.name.lower() for s in song.sections]
     chorus = next((i for i, n in enumerate(names) if any(w in n for w in ("chorus", "hook", "refrain"))
                    and "pre" not in n), None)
@@ -1025,53 +1137,16 @@ def cold_open_window(song, lines: list, spans: list[tuple[float, float]], total:
     return (start, min(end, total)) if min(end, total) - start >= shortest else None
 
 
-def _cold_open_lines(lines: list, start: float, end: float) -> list:
-    """The lyrics for a cold open: the preview's lines moved to the very start, then every line after the gap."""
-    from dataclasses import replace
-
-    def moved(line, by: float, upto: float = float("inf")):
-        words = [replace(w, start=min(w.start + by, upto), end=min(w.end + by, upto)) for w in line.words]
-        return replace(line, start=min(line.start + by, upto), end=min(line.end + by, upto), words=words)
-
-    length = end - start
-    preview = [moved(l, -start, length) for l in lines if start - 0.05 <= l.start < end - 0.5]
-    # a blank line where the lightning strikes: the preview's last line ends there instead of lingering on the flash
-    cut = replace(lines[0], text="", start=length, end=length, words=[])
-    return preview + [cut] + [moved(l, length + COLD_OPEN_GAP) for l in lines]
+def _hex_brightness(colour: str) -> float:
+    """0..1: how light a #RRGGBB colour is (a white "neon" glows like nothing)."""
+    c = colour.lstrip("#")
+    return min(int(c[i:i + 2], 16) for i in (0, 2, 4)) / 255 if len(c) == 6 else 1.0
 
 
 def neon_title(title: str) -> str:
     """The song's name from a post title: "Signal Lost - Song About ... (Official Lyric Video)" -> "Signal Lost"."""
     name = re.split(r"\s[-–—|:]\s|\s*[(\[]", title, maxsplit=1)[0].strip()
     return name or title.strip()
-
-
-def _cold_open_media(work: Path, song_video: str, mix: Path, start: float, end: float, size: tuple[int, int]) -> Path:
-    """The cold open's pictures and sound: preview.mp4 (the chorus's shots), flash.mp4 (lightning: white flickering,
-    then fading to black) and the soundtrack cold_open.wav (the chorus, cut dead into thunder, then the whole song)."""
-    from .config import FPS
-
-    length, W, H = end - start, *size
-    clip = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS),
-            "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2"]
-    run(["ffmpeg", "-y", "-hide_banner", "-ss", f"{start:.3f}", "-i", song_video, "-t", f"{length:.3f}", *clip,
-         "preview.mp4"], cwd=work)
-    # on, a flicker off, on again, then the white dies to black before the intro
-    light = "if(lt(t,0.1),0,if(lt(t,0.18),-0.75,if(lt(t,0.34),0,-min(1,(t-0.34)/0.9))))"
-    run(["ffmpeg", "-y", "-hide_banner", "-f", "lavfi", "-i", f"color=c=white:s={W}x{H}:r={FPS}:d={COLD_OPEN_GAP}",
-         "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-vf", f"format=yuv420p,eq=brightness='{light}':eval=frame",
-         "-t", f"{COLD_OPEN_GAP}", *clip, "flash.mp4"], cwd=work)
-    stereo = "aresample=44100,aformat=channel_layouts=stereo"
-    ms = round(length * 1000)
-    run(["ffmpeg", "-y", "-hide_banner", "-i", str(mix.resolve()), "-i", str(sfx.sound("thunder").resolve()),
-         "-filter_complex",
-         f"[0:a]{stereo},asplit=2[x][y];"
-         f"[x]atrim={start:.3f}:{end:.3f},asetpts=PTS-STARTPTS,afade=t=out:st={max(length - 0.12, 0):.3f}:d=0.12[p];"
-         f"anullsrc=r=44100:cl=stereo:d={COLD_OPEN_GAP}[g];[y]asetpts=PTS-STARTPTS[s];"
-         f"[p][g][s]concat=n=3:v=0:a=1[c];[1:a]{stereo},adelay={ms}|{ms},volume=0.8[t];"
-         f"[c][t]amix=inputs=2:duration=first:normalize=0[a]",
-         "-map", "[a]", "-c:a", "pcm_s16le", "cold_open.wav"], cwd=work)
-    return work / "cold_open.wav"
 
 
 def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: str = "", look: str = "",
@@ -1085,9 +1160,8 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     version only, the song keeps its own searches). `look`: colour grade for the footage (styles.LOOKS);
     `lyric_style`: how the lyrics are drawn (styles.LyricStyle fields). `art_style`: "" = stock footage, else an
     imagegen.STYLES look drawn on this computer (None = the song's last choice). `pictures`: how many of them
-    (PICTURE_PACES: "fewer", "normal", "more"; None = the song's last choice). `cold_open`: open on a few seconds
-    of the chorus with the title in neon, then a lightning flash and thunder, then the song from the start (None =
-    the song's last choice). `now_playing`: a now-playing card in the top-left corner (title, progress bar, a
+    (PICTURE_PACES: "fewer", "normal", "more"; None = the song's last choice). `cold_open`: the song's name flickers on
+    in neon over its first seconds, until the singing starts (None = the song's last choice). `now_playing`: a now-playing card in the top-left corner (title, progress bar, a
     spinning record; None = the song's last choice). Idea, look and styles are remembered on the song for the next version. Returns the new
     video.mp4.
     """
@@ -1169,11 +1243,11 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     if held:  # one picture held for the whole song: no cuts, no beat punches
         picture, plan = shot_art[0]
         seed = (json.loads((work / "art.json").read_text(encoding="utf-8"))["slots"][0].get("seed") or 1)
-        picture = cover_canvas(picture, size, cover_colour(song.title), plan.prompt, seed, log)
+        picture = cover_canvas(picture, size, cover_colour(song.title, idea), plan.prompt, seed, log)
         shutil.copy(picture, work / COVER_FRAME)  # for the magazine thumbnail
         log(f"      holding one picture for the whole song ({total:.0f}s)")
         clip = work / "shot_00.mp4"
-        fx.render_shot(picture, total, clip, size=size, motion="breathe", effects=plan.effects or COVER_EFFECTS,
+        fx.render_shot(picture, total, clip, size=size, motion="breathe", effects=cover_effects(idea),
                        look=look, seed=7)
         clips.append(clip)
     for i, shot in enumerate([] if held else shots):
@@ -1232,41 +1306,35 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
         render_scene(footage, None, shot.length, clip, start=start, size=size, look=look, drift=drift)
         clips.append(clip)
     release_gpu()
-    opening = cold_open_window(song, lines, spans, total) if cold_open else None
-    soundtrack, sung, title = mix, lines, None
-    if opening:
-        # the chorus's own shots, then lightning, then the whole video; the song cut the same way
-        a, b = opening
-        log(f"      cold open: the chorus from {a:.1f}s to {b:.1f}s, then lightning and thunder")
-        concat(clips, work, "song_cut.mp4")
-        soundtrack = _cold_open_media(work, "song_cut.mp4", mix, a, b, size)
-        concat([work / "preview.mp4", work / "flash.mp4", work / "song_cut.mp4"], work, "joined.mp4")
-        sung = _cold_open_lines(lines, a, b)
-        title = (neon_title(song.title), min(1.0, (b - a) * 0.2), b - a)
-    else:
-        if cold_open:
-            log("      no chorus found for a cold open; the video starts with the song")
-        concat(clips, work, "joined.mp4")
+    concat(clips, work, "joined.mp4")
+    title = None
+    if cold_open:  # the song's name in neon over the opening, gone before the first sung line
+        first = min((l.start for l in lines), default=TITLE_INTRO[1])
+        end = min(TITLE_INTRO[1], max(TITLE_INTRO[0] + 2.0, first - 0.3))
+        # the lyrics' sung-word colour, unless that's white: then a neon that stands out on the cover's colour
+        cool = held and cover_colour(song.title, idea) in ("light blue", "blue", "aqua", "yellow", "orange")
+        neon = style.highlight if _hex_brightness(style.highlight) < 0.9 else ("#FF4FD8" if cool else "#5CF2FF")
+        title = (neon_title(song.title), TITLE_INTRO[0], end, neon)
+        log(f"      the title in neon until {end:.1f}s")
 
     # 3. Karaoke captions
     log("[3/4] Captions")
     card = None
-    if now_playing:  # from where the song itself starts (after a cold open), over the whole song
-        start = (opening[1] - opening[0] + COLD_OPEN_GAP) if opening else 0.0
-        accent = "#%02X%02X%02X" % COVER_COLOURS[cover_colour(song.title)] if held else style.highlight
+    if now_playing:  # over the whole song
+        start = 0.0
+        accent = "#%02X%02X%02X" % COVER_COLOURS[cover_colour(song.title, idea)] if held else style.highlight
         card = {"title": neon_title(song.title), "label": "Now playing", "start": start, "length": total,
                 "accent": accent}
-    (work / "captions.ass").write_text(build_karaoke_ass(sung, profile, size=size, style=style, title=title,
-                                                         now_playing=card),
+    hot = {w for w in (_bare_word(t) for t in neon_title(song.title).split()) if len(w) > 2}  # glitch hits these
+    (work / "captions.ass").write_text(build_karaoke_ass(lines, profile, size=size, style=style, title=title,
+                                                         now_playing=card, glitch_words=hot),
                                        encoding="utf-8")
     _install_font(profile, work / "fonts", FONTS.get(lang, FONTS["en"]).get(style.font, ""))
 
     # 4. Final render with the song as the soundtrack + cover + post text
     log("[4/4] Final render")
     final = job / "video.mp4"
-    finalize(work, "joined.mp4", "captions.ass", final, None, soundtrack=soundtrack, fade_out=2.0)
-    if opening:
-        total += opening[1] - opening[0] + COLD_OPEN_GAP
+    finalize(work, "joined.mp4", "captions.ass", final, None, soundtrack=mix, fade_out=2.0)
     try:
         cover_at = thumbs.best_frames(work / "joined.mp4", 1)[0]
     except Exception:
@@ -1280,7 +1348,7 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     credit = "" if own else "\nMusic and vocals are AI-generated.\n"
     (job / "post.txt").write_text(f"{song.title}\n\n{song.caption}\n\n{tags}\n{credit}", encoding="utf-8")
     _save_meta(job, {**_meta(job), "timing": timing, "beats": beat_method, "shots": len(shots), "hook": hook,
-                     "cold_open": bool(opening), "duration": round(total, 2)})
+                     "cold_open": bool(title), "duration": round(total, 2)})
     log(f"Done: {final}  ({total:.1f}s)")
     return final
 

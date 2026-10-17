@@ -70,7 +70,8 @@ def available_fonts(lang: str) -> list[str]:
     return [name for name, file in FONTS.get(lang, FONTS["en"]).items() if font_path(file)]
 
 
-EFFECTS = ("karaoke", "fill", "pop", "fade")  # word by word / smooth sweep / words appear / whole line fades
+EFFECTS = ("karaoke", "fill", "pop", "fade", "glitch")  # word by word / smooth sweep / words appear / whole line fades /
+# breaks in like a bad signal
 OUTLINES = ("outline", "shadow", "box", "glow")
 POSITIONS = ("low", "middle", "high")
 SIZES = ("s", "m", "l")
@@ -135,6 +136,10 @@ PRESETS: dict[str, dict] = {
     "playlist": {"label": "Playlist", "font": "Segoe UI Semibold", "font_km": "Khmer OS Battambang", "size": "m",
                  "position": "low", "color": "#FFFFFF", "highlight": "#FFFFFF", "effect": "fade", "outline": "shadow",
                  "case": "as_is"},
+    # lines that break in like a bad signal, the song title's words in cyan (static, lost connection, VHS, cyberpunk)
+    "glitch": {"label": "Glitch", "font": "Bahnschrift", "font_km": "Khmer OS Siemreap", "size": "m",
+               "position": "middle", "color": "#FFFFFF", "highlight": "#5CF2FF", "effect": "glitch",
+               "outline": "shadow", "case": "upper"},
 }
 
 

@@ -140,17 +140,19 @@ def _case(text: str, case: str, lang: str) -> str:
 
 def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: float = 0.8,
                       size: tuple[int, int] = (WIDTH, HEIGHT), style: "LyricStyle | None" = None,
-                      title: tuple[str, float, float] | None = None,
-                      now_playing: dict | None = None) -> str:
+                      title: tuple | None = None,
+                      now_playing: dict | None = None, glitch_words: set[str] | None = None) -> str:
     """Lyrics as karaoke, drawn in `style` (font, colours, size, position, effect; see styles.py).
 
     lines: align.LyricLine items (absolute word times). A line appears `lead_in` s before its first word and
     stays until the next line starts or `hold` s after its last word, so two lines never overlap. Effects:
     karaoke: the whole line shown, words change colour as they're sung.  fill: a smooth colour sweep through
     each word.  pop: words appear one by one with a little bounce.  fade: the whole line fades in and out.
+    glitch: the line breaks in like a bad signal (red and cyan copies splitting apart, a torn slice, a flicker),
+    and again on every sung word in `glitch_words` (the song title's words), which stay in the highlight colour.
     Landscape frames show the upcoming line dimmed underneath (karaoke and fill), like a lyric video.
-    title: (text, start, end) the song's title flickering on like a neon sign in the sung-word colour (a cold open),
-    away from the lyrics.
+    title: (text, start, end[, #RRGGBB]) the song's title flickering on like a neon sign, in that colour (else the
+    sung-word colour), away from the lyrics.
     now_playing: {"title", "label", "start", "length", "accent"} for a now-playing card (now_playing_events).
     """
     from .styles import LyricStyle, ass_color
@@ -223,6 +225,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             dialogue(show, line_end, pos + r"{\fad(120,200)}" + body)
         elif style.effect == "fade":
             dialogue(show, line_end, pos + r"{\fad(250,300)}" + " ".join(texts))
+        elif style.effect == "glitch":
+            events.extend(_glitch_line(words, texts, show, line_end, glitch_words or set(), W // 2, y, font, blur,
+                                       base, high))
         elif style.effect == "pop":
             for wi, w in enumerate(words):
                 end = words[wi + 1].start if wi + 1 < len(words) else line_end
@@ -247,13 +252,47 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             dialogue(show, line_end, next_pos + _esc(_case(lines[li + 1].text, style.case, profile.code)), "LyricNext")
         prev_end = line_end
     if title and _esc(title[0]):
-        events += _neon_title(_esc(_case(title[0], "upper", profile.code)), title[1], title[2], style, font, W,
+        glow = style.model_copy(update={"highlight": title[3]}) if len(title) > 3 and title[3] else style
+        events += _neon_title(_esc(_case(title[0], "upper", profile.code)), title[1], title[2], glow, font, W,
                               round(H * (0.72 if style.position == "high" else 0.3)))
     if now_playing:
         events += now_playing_events(now_playing["title"], now_playing.get("label") or "Now playing",
                                      now_playing["start"], now_playing["length"], size, style.font,
                                      now_playing.get("accent") or style.highlight)
     return header + "\n".join(events) + "\n"
+
+
+def _glitch_line(words: list, texts: list[str], show: float, end: float, hot: set[str], x: int, y: int, font: int,
+                 blur: str, base: str, high: str) -> list[str]:
+    """Dialogue lines for one lyric line in the glitch effect (build_karaoke_ass): the line itself, flickering at
+    each burst, over red and cyan copies that split apart and a torn slice that jumps sideways. Bursts: when the
+    line appears and on every sung word in `hot`, which is drawn in the highlight colour."""
+    marked = [_bare(w.text) in hot for w in words]
+    bursts: list[float] = [show]
+    for w, m in zip(words, marked):
+        if m and w.start - bursts[-1] > 0.35:
+            bursts.append(w.start)
+    body = " ".join(f"{{\\c{high if m else base}}}{t}" for t, m in zip(texts, marked))
+    plain = " ".join(texts)
+    # the line itself drops out while its split copies show, snaps back, then flickers once more
+    flicker = "".join(f"\\t({o},{o + 1},\\alpha&HFF&)\\t({o + 150},{o + 160},\\alpha&H00&)"
+                      f"\\t({o + 200},{o + 230},\\alpha&H80&)\\t({o + 230},{o + 260},\\alpha&H00&)"
+                      for o in (round((b - show) * 1000) for b in bursts))
+    d = max(5, font // 7)  # how far the colour copies split
+    out = [f"Dialogue: 2,{_ts(show)},{_ts(end)},Lyric,,0,0,0,,{{\\pos({x},{y}){blur}\\fad(40,160){flicker}}}{body}"]
+    for b in bursts:
+        stop = min(b + 0.28, end)
+        if stop <= b:
+            continue
+        copy = "\\bord0\\shad0\\blur1\\fad(0,120)"
+        out.append(f"Dialogue: 1,{_ts(b)},{_ts(stop)},Lyric,,0,0,0,,"
+                   f"{{\\move({x + d},{y},{x - d // 2},{y},0,280){copy}\\1c&H3C2DFF&\\alpha&H18&}}{plain}")
+        out.append(f"Dialogue: 1,{_ts(b)},{_ts(stop)},Lyric,,0,0,0,,"
+                   f"{{\\move({x - d},{y},{x + d // 2},{y},0,280){copy}\\1c&HFFF02D&\\alpha&H18&}}{plain}")
+        tear = min(b + 0.12, end)  # a slice of the line torn sideways for a few frames
+        out.append(f"Dialogue: 3,{_ts(b)},{_ts(tear)},Lyric,,0,0,0,,"
+                   f"{{\\pos({x + 2 * d},{y})\\clip(0,{y - font // 4},{x * 2},{y + font // 10}){blur}}}{body}")
+    return out
 
 
 def _rounded(w: float, h: float, r: float) -> str:

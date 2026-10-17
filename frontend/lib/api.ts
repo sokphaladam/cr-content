@@ -48,7 +48,7 @@ export const ART_STYLES: { value: ArtStyle; label: string; hint: string }[] = [
 ];
 /** Camera moves over a picture (crcontent/fx.py MOTIONS); the _3d ones split it into depth layers. */
 export type Motion = "push_in" | "pull_out" | "pan_left" | "pan_right" | "tilt_up" | "tilt_down" | "orbit_3d" | "dolly_3d" | "rise_3d" | "still" | "breathe";
-export type Effect = "glow" | "light_leak" | "dust" | "snow" | "embers" | "sparkles" | "petals" | "bokeh" | "speed_lines" | "chromatic" | "grain" | "vignette" | "flash";
+export type Effect = "glow" | "light_leak" | "dust" | "snow" | "embers" | "sparkles" | "petals" | "bokeh" | "rain" | "neon_glow" | "speed_lines" | "chromatic" | "grain" | "vignette" | "flash";
 /** Effects you pick per scene; bloom, grain and vignette come with the art style. */
 export const MOOD_EFFECTS: Effect[] = ["dust", "snow", "embers", "sparkles", "petals", "speed_lines", "light_leak", "flash"];
 
@@ -209,7 +209,7 @@ export interface SongScript {
 }
 
 export type Look = "natural" | "cinematic" | "film" | "moody" | "vibrant" | "dusk" | "mono";
-export type LyricPreset = "classic" | "neon" | "bold_pop" | "cinematic" | "minimal" | "retro" | "boxed" | "playlist";
+export type LyricPreset = "classic" | "neon" | "bold_pop" | "cinematic" | "minimal" | "retro" | "boxed" | "playlist" | "glitch";
 export type CutPace = "slow" | "normal" | "fast";
 /** Old-tape treatments for a section (crcontent/fx.py TAPES / FRAMES). */
 export type Tape = "" | "play" | "rewind" | "static_in" | "static";
@@ -246,7 +246,7 @@ export interface LyricStyle {
   position: "low" | "middle" | "high";
   color: string; // "#RRGGBB", words not sung yet
   highlight: string; // sung words
-  effect: "karaoke" | "fill" | "pop" | "fade";
+  effect: "karaoke" | "fill" | "pop" | "fade" | "glitch";
   outline: "outline" | "shadow" | "box" | "glow";
   case: "as_is" | "upper" | "lower";
 }
@@ -294,7 +294,7 @@ export interface MusicVideoSettings {
   art_style?: ArtStyle | ""; // "" = stock footage; undefined = the song's last choice
   pictures?: PicturePace; // undefined = the song's last choice
   direction?: SongDirection | null; // the shot list for the idea; undefined = the song's
-  cold_open?: boolean; // open on the chorus with the title in neon, then lightning; undefined = the song's last choice
+  cold_open?: boolean; // the song's name in neon over the opening seconds; undefined = the song's last choice
   now_playing?: boolean; // a now-playing card: title, progress bar, spinning record; undefined = the song's last choice
 }
 
@@ -572,7 +572,7 @@ export interface VideoDetail extends VideoSummary {
   art_style?: ArtStyle | ""; // same, for the AI scene art ("" = stock footage)
   pictures?: PicturePace; // same, for how many AI pictures
   direction?: SongDirection | null; // songs: the shot list made from the idea
-  cold_open?: boolean; // same, for the chorus cold open
+  cold_open?: boolean; // same, for the neon title intro
   now_playing?: boolean; // same, for the now-playing card
   lyric_style?: LyricStyle | null; // same, for the lyrics
   post: string;

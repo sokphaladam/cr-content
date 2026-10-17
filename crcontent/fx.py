@@ -45,6 +45,8 @@ EFFECTS: dict[str, str] = {
     "sparkles": "Sparkles",
     "petals": "Petals",
     "bokeh": "Bokeh lights",
+    "rain": "Rain",
+    "neon_glow": "Neon glow",
     "speed_lines": "Speed lines",
     "light_trails": "Light trails",
     "chromatic": "Chromatic aberration",
@@ -52,7 +54,7 @@ EFFECTS: dict[str, str] = {
     "vignette": "Vignette",
     "flash": "Beat flash",
 }
-PARTICLES = ("dust", "snow", "embers", "sparkles", "petals", "bokeh")
+PARTICLES = ("dust", "snow", "embers", "sparkles", "petals", "bokeh", "rain")
 # old-tape treatments for a whole section of a music video (render_shot's tape / wear / frame / stamp / fade)
 TAPES: dict[str, str] = {
     "": "None",
@@ -191,18 +193,19 @@ class _Particles:
         import torch
 
         g = torch.Generator().manual_seed(seed)
-        n = {"dust": 70, "snow": 140, "embers": 60, "sparkles": 50, "petals": 36, "bokeh": 22}[kind]
+        n = {"dust": 70, "snow": 140, "embers": 60, "sparkles": 50, "petals": 36, "bokeh": 22, "rain": 170}[kind]
         self.kind, self.w, self.h = kind, w, h
         self.pos = torch.rand(n, 2, generator=g)
         self.size = torch.rand(n, generator=g)
         self.phase = torch.rand(n, generator=g) * 6.28
         speed = {"dust": (0.004, -0.012), "snow": (0.01, 0.06), "embers": (0.012, -0.07), "sparkles": (0, 0),
-                 "petals": (0.03, 0.045), "bokeh": (0.003, -0.009)}[kind]
+                 "petals": (0.03, 0.045), "bokeh": (0.003, -0.009),
+                 "rain": (0.004, 0.75)}[kind]
         self.vel = torch.stack([(torch.rand(n, generator=g) - 0.5) * 2 * speed[0] + (speed[0] if kind == "petals" else 0),
                                 (0.5 + torch.rand(n, generator=g)) * speed[1]], 1)
         self.color = {"dust": (1.0, 0.94, 0.82), "snow": (1.0, 1.0, 1.0), "embers": (1.0, 0.55, 0.18),
                       "sparkles": (1.0, 0.97, 0.85), "petals": (1.0, 0.72, 0.82),
-                      "bokeh": (1.0, 0.97, 0.99)}[kind]
+                      "bokeh": (1.0, 0.97, 0.99), "rain": (0.86, 0.92, 1.0)}[kind]
         ys, xs = torch.meshgrid(torch.linspace(0, 1, h), torch.linspace(0, 1, w), indexing="ij")
         dev = _device()
         self.xs, self.ys = xs.to(dev), ys.to(dev)
@@ -216,11 +219,16 @@ class _Particles:
         sway = torch.stack([torch.sin(self.phase + t * 0.9) * 0.01, torch.zeros_like(self.phase)], 1)
         p = (self.pos + self.vel * t + sway) % 1.0
         radius = {"dust": 0.006, "snow": 0.0035, "embers": 0.0028, "sparkles": 0.0022, "petals": 0.006,
-                  "bokeh": 0.02}[self.kind]
+                  "bokeh": 0.02, "rain": 0.0011}[self.kind]
         r = radius * (0.5 + self.size)
         aspect = self.w / self.h
         dx = (self.xs[None] - p[:, 0, None, None]) * aspect
         dy = self.ys[None] - p[:, 1, None, None]
+        if self.kind == "rain":  # thin streaks falling fast at a slight slant
+            dx = dx - dy * 0.12
+            d2 = dx * dx + (dy / 30) ** 2
+            streaks = (torch.exp(-d2 / (r * r)[:, None, None] / 2) * (0.25 + 0.3 * self.size)[:, None, None]).sum(0)
+            return streaks.clamp(max=0.8)[None] * self.colorv
         if self.kind == "petals":  # small tumbling ovals
             ang = self.phase[:, None, None] + t * 2.0
             dx, dy = dx * torch.cos(ang) - dy * torch.sin(ang), (dx * torch.sin(ang) + dy * torch.cos(ang)) * 2.2
@@ -239,13 +247,15 @@ class _Particles:
 class _LightLeak:
     """Two or three big warm glows drifting slowly across the frame."""
 
-    def __init__(self, w: int, h: int, seed: int):
+    def __init__(self, w: int, h: int, seed: int, neon: bool = False):
         import random
 
         rnd = random.Random(seed)
+        # warm film light, or pink and blue city neon spilling in from the edges
+        colours = [(1.0, 0.2, 0.75), (0.25, 0.55, 1.0), (0.7, 0.25, 1.0)] if neon else             [(1.0, 0.45, 0.15), (1.0, 0.25, 0.35), (1.0, 0.7, 0.3), (0.5, 0.35, 1.0)]
         self.blobs = [(rnd.uniform(-0.3, 1.3), rnd.uniform(-0.2, 1.2), rnd.uniform(-0.05, 0.05), rnd.uniform(-0.03, 0.03),
-                       rnd.uniform(0.35, 0.6), rnd.choice([(1.0, 0.45, 0.15), (1.0, 0.25, 0.35), (1.0, 0.7, 0.3),
-                                                          (0.5, 0.35, 1.0)])) for _ in range(rnd.randint(2, 3))]
+                       rnd.uniform(0.35, 0.6), rnd.choice(colours)) for _ in range(rnd.randint(2, 3))]
+        self.gain = 0.62 if neon else 0.38  # neon has to read as coloured light, film light only warms
         import torch
 
         ys, xs = torch.meshgrid(torch.linspace(0, 1, h), torch.linspace(0, 1, w), indexing="ij")
@@ -259,7 +269,7 @@ class _LightLeak:
             d2 = ((self.xs - (x + vx * t)) * self.aspect) ** 2 + (self.ys - (y + vy * t)) ** 2
             glow = torch.exp(-d2 / (r * r)) * (0.75 + 0.25 * math.sin(t * 0.8 + x * 5))
             out += glow[None] * torch.tensor(c, device=out.device).view(3, 1, 1)
-        return out * 0.38
+        return out * self.gain
 
 
 class _LightTrails:
@@ -532,6 +542,7 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
     lw, lh = W // 4, H // 4
     particles = [_Particles(k, lw, lh, seed + i) for i, k in enumerate(PARTICLES) if k in effects]
     leak = _LightLeak(lw // 2, lh // 2, seed) if "light_leak" in effects else None
+    neon = _LightLeak(lw // 2, lh // 2, seed + 11, neon=True) if "neon_glow" in effects else None
     trails = _LightTrails(lw, lh, seed) if "light_trails" in effects else None
     vignette = None
     if "vignette" in effects:
@@ -640,6 +651,9 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                         frame = _screen(frame, bloom * 0.75)
                     if leak is not None:
                         frame = _screen(frame, F.interpolate(leak.layer(t)[None].to(half), size=(H, W), mode="bilinear",
+                                                             align_corners=False))
+                    if neon is not None:
+                        frame = _screen(frame, F.interpolate(neon.layer(t)[None].to(half), size=(H, W), mode="bilinear",
                                                              align_corners=False))
                     if trails is not None:
                         streaks = F.interpolate(trails.layer(t)[None].to(half), size=(H, W), mode="bilinear", align_corners=False)

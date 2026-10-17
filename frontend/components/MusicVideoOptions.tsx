@@ -66,6 +66,9 @@ export const SCENE_BG = "linear-gradient(180deg,#f2a65a 0%,#c9576b 38%,#3b4a8c 7
 
 export const SIZE_PX = { s: 0.8, m: 1, l: 1.25 };
 
+// grades that darken or desaturate: a flat pastel cover picture looks dirty under them
+const MUDDY_ON_COVER: Look[] = ["cinematic", "moody", "mono", "dusk"];
+
 // crcontent/pipeline.py PICTURE_PACES; minutes are for a 3-minute song at ~40 s a picture
 const PACES: Record<PicturePace, { label: string; hint: string }> = {
   fewer: { label: "Fewer", hint: "A new picture every ~8 s: about 20 pictures for a 3-minute song (~13 min to draw). Good for slow songs and quick drafts." },
@@ -73,7 +76,7 @@ const PACES: Record<PicturePace, { label: string; hint: string }> = {
   more: { label: "More", hint: "A new picture every ~3 s: about 50 pictures for a 3-minute song (~35 min to draw). For fast, high-energy songs." },
   cover: {
     label: "One cover",
-    hint: "One character picture on a flat pastel background for the whole song, held with a slow breathing move and floating lights, never cut. The playlist / lyric-video look. Draws in under a minute.",
+    hint: "One character picture on a flat pastel background for the whole song (the colour your idea names, like \"pink\" or \"cold blue\"), held with a slow breathing move and floating lights, never cut. The playlist / lyric-video look. Draws in under a minute.",
   },
 };
 
@@ -83,6 +86,8 @@ export function textCss(style: LyricStyle, font: string, sung: boolean): React.C
   if (style.outline === "outline") css.textShadow = "0 0 2px #000, 0 0 2px #000, 0 0 3px #000, 1px 2px 2px rgb(0 0 0 / 0.6)";
   if (style.outline === "shadow") css.textShadow = "0 2px 6px rgb(0 0 0 / 0.75)";
   if (style.outline === "glow") css.textShadow = `0 0 6px ${style.highlight}, 0 0 14px ${style.highlight}aa`;
+  // glitch: the red and cyan copies split either side of the line
+  if (style.effect === "glitch") css.textShadow = `-0.06em 0 rgb(255 45 60 / 0.7), 0.06em 0 rgb(45 240 255 / 0.7)${css.textShadow ? `, ${css.textShadow}` : ""}`;
   return css;
 }
 
@@ -112,7 +117,7 @@ function LyricPreview({ style, font, lang, aspect, look, sample }: { style: Lyri
           style={{ opacity: style.effect === "fade" ? (sung === 0 || sung > words.length ? 0.15 : 1) : 1, transition: "opacity 0.3s" }}
         >
           {words.map((w, i) => {
-            const isSung = style.effect !== "fade" && i < sung;
+            const isSung = style.effect !== "fade" && style.effect !== "glitch" && i < sung; // neither sweeps word by word
             const hidden = style.effect === "pop" && i >= sung;
             return (
               <span key={i} style={{ ...textCss(style, font, isSung), opacity: hidden ? 0 : 1, transition: style.effect === "fill" ? "color 0.35s" : undefined }}>
@@ -315,7 +320,8 @@ export function MusicVideoOptions({
                   onChange({
                     ...value,
                     pictures,
-                    ...(pictures === "cover" ? { now_playing: true } : {}),
+                    // a flat pastel cover turns muddy under the dark grades: start it on Natural (still changeable below)
+                    ...(pictures === "cover" ? { now_playing: true, ...(MUDDY_ON_COVER.includes(look) ? { look: "natural" as Look } : {}) } : {}),
                     ...(pictures === "cover" && catalog?.presets.playlist ? { lyric_style: fromPreset(catalog, "playlist") } : {}),
                   })
                 }
@@ -346,11 +352,11 @@ export function MusicVideoOptions({
             checked={value.cold_open ?? false}
             onChange={(e) => onChange({ ...value, cold_open: e.target.checked })}
           />
-          Cold open
+          Neon title intro
         </label>
         <p className="m-0 text-sm text-ink-soft">
-          Start on about 5 seconds of the chorus with the song title in neon, then a lightning flash and thunder, then the song from the beginning. Viewers
-          hear the hook before they decide to stay. Adds about 7 seconds.
+          The song's name flickers on in neon over the first seconds, like a sign switching on, and fades before the singing starts. The video still
+          starts with the song.
         </p>
         <label className="mt-1 flex cursor-pointer items-center gap-2 text-base font-semibold">
           <input
@@ -456,6 +462,7 @@ export function MusicVideoOptions({
                     { value: "fill", label: "Fill" },
                     { value: "pop", label: "Pop" },
                     { value: "fade", label: "Fade" },
+                    { value: "glitch", label: "Glitch" },
                   ]}
                 />
                 <Pick

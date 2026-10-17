@@ -958,7 +958,7 @@ class MusicVideoRequest(BaseModel):
     art_style: str | None = None  # "" = stock footage, else an AI art look (imagegen.STYLES); None = the song's last
     pictures: str | None = None  # how many AI pictures (pipeline.PICTURE_PACES); None = the song's last choice
     direction: dict | None = None  # the shot list for the idea (POST .../direct); None = the song's, if it fits
-    cold_open: bool | None = None  # open on the chorus + neon title, then lightning; None = the song's last choice
+    cold_open: bool | None = None  # the song's name in neon over the opening; None = the song's last choice
     now_playing: bool | None = None  # a now-playing card (title, progress, spinning record); None = the song's last
 
 
