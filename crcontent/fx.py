@@ -659,9 +659,11 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                         continue
                     if tape == "rewind":  # the move plays backwards, fast, over and over
                         p = 1 - (t * 1.6 / max(length, 0.5) + hit * 0.04) % 1.0
-                    if motion == "breathe":  # by the clock, not the shot's progress: as slow in a 3-minute shot
-                        zoom, cx, cy, par = (1.035 + 0.02 * math.sin(2 * math.pi * t / 18),
-                                             0.015 * math.sin(2 * math.pi * t / 27), 0.01 * math.sin(2 * math.pi * t / 22), 0.0)
+                    if motion == "breathe":  # by the clock, not the shot's progress: as slow in a 3-minute shot.
+                        # prime periods (17 / 29 / 23 s): the zoom and the two drifts only line up again after
+                        # ~3 hours, so the loop never visibly repeats. The zoom swings 1.015..1.055 (_zoom_reach)
+                        zoom, cx, cy, par = (1.035 + 0.02 * math.sin(2 * math.pi * t / 17),
+                                             0.015 * math.sin(2 * math.pi * t / 29), 0.01 * math.sin(2 * math.pi * t / 23), 0.0)
                     else:
                         zoom, cx, cy, par = _camera(motion, p, room_x, room_y)
                     zoom *= 1 + 0.025 * hit

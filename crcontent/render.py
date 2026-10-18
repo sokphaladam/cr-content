@@ -333,13 +333,20 @@ def thumbnail(video: Path, at: float, out: Path, workdir: Path, ass_name: str | 
 
     Runs inside workdir with relative names, like finalize(), so the ass filter avoids drive-letter escaping.
     """
-    # punchier than the video itself: covers are seen tiny in a feed, so lift contrast/colour and sharpen
+    # a little punchier than the video itself (covers are seen tiny in a feed): +6% contrast, +15% colour (more turns
+    # drawn art garish), a light contrast-adaptive sharpen (crisp without unsharp's halos), all on the picture only,
+    # before the headline, so the letters' edges stay clean. The headline's own feathered gradient (captions.
+    # build_thumbnail_ass) darkens behind the words, so the picture isn't dimmed all over; a faint vignette frames it
     W, H = size
-    vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,"
-          f"eq=contrast=1.08:saturation=1.3,cas=0.5")  # contrast-adaptive: crisp without unsharp's halos
+    vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H},setsar=1,"
+          f"eq=contrast=1.06:saturation=1.15,cas=0.4")
     if ass_name:
-        # darker edges pull the eye to the headline and keep it readable on busy frames
-        vf += f",eq=brightness=-0.05,vignette=angle=PI/4.5,ass={_with_emoji(workdir, ass_name)}:fontsdir=fonts:shaping=complex"
+        vf += f",vignette=angle=PI/6,ass={_with_emoji(workdir, ass_name)}:fontsdir=fonts:shaping=complex"
     source = ["-i", str(image.resolve())] if image else ["-ss", f"{at:.2f}", "-i", str(video.resolve())]
-    run(["ffmpeg", "-y", "-hide_banner", *source,
-         "-frames:v", "1", "-vf", vf, "-q:v", "2", str(out.resolve())], cwd=workdir)
+    # full-colour JPEG (4:4:4: no chroma smear on the red/yellow letters' edges) at high quality; YouTube takes
+    # covers up to 2 MB, so a busy picture steps the quality down until it fits
+    for q in (2, 3, 5, 8):
+        run(["ffmpeg", "-y", "-hide_banner", *source, "-frames:v", "1", "-vf", vf, "-pix_fmt", "yuvj444p",
+             "-q:v", str(q), str(out.resolve())], cwd=workdir)
+        if out.stat().st_size < 1_950_000:
+            break

@@ -147,8 +147,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 parts = []
                 for wj, w in enumerate(group):
                     color = high if wj == wi else key_c if keyword(w.text) in keywords else base
-                    parts.append(f"{{\\c{color}}}{_esc(_case(w.text, style.case, profile.code))}")
-                pop = r"{\fscx85\fscy85\t(0,90,\fscx100\fscy100)}" if wi == 0 else ""
+                    # the word being spoken gets a quick 106% bump as it lights up (the group's first word rides the
+                    # group's pop instead); the word after it is set back to 100% so the bump stays on that word
+                    scale = (r"\fscx100\fscy100\t(0,60,\fscx106\fscy106)\t(60,160,0.6,\fscx100\fscy100)"
+                             if wj == wi and wi > 0 else r"\fscx100\fscy100" if wj == wi + 1 and wi > 0 else "")
+                    parts.append(f"{{\\c{color}{scale}}}{_esc(_case(w.text, style.case, profile.code))}")
+                # each group pops in: 80% -> 108% -> 100% over 130 ms
+                pop = (r"{\fscx80\fscy80\t(0,80,0.7,\fscx108\fscy108)\t(80,130,\fscx100\fscy100)}"
+                       if wi == 0 else "")
                 text = f"{{\\pos({WIDTH // 2},{cap_y}){blur}}}{pop}" + " ".join(parts)
                 lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Caption,,0,0,0,,{text}")
     return header + "\n".join(lines + (extra or [])) + "\n"
@@ -161,7 +167,7 @@ HOOK_TOP = 130  # the box never starts above this: the platforms' top bar
 def _hook_events(text: str, start: float, end: float, top: int, family: str, px: int, lang: str) -> list[str]:
     """The hook: dark words on one tidy white rounded card (instead of the ragged per-line boxes BorderStyle 3
     draws), the same padding on every side, at most 2 lines (3 only when even a smaller size can't fit 2), a soft
-    shadow under the card. Top edge at `top`; pops in from 80% on the first frames."""
+    shadow under the card. Top edge at `top`; fades in over its first 0.15 s."""
     words = text.split()
     pad_x, pad_y = round(px * 0.42), round(px * 0.26)
     room = WIDTH - 2 * HOOK_SIDE - 2 * pad_x  # widest a line of text may be
@@ -183,10 +189,12 @@ def _hook_events(text: str, start: float, end: float, top: int, family: str, px:
     top = max(top, HOOK_TOP)
     cx, cy = WIDTH // 2, round(top + h / 2)
     t0, t1 = _ts(start), _ts(end)
-    pop = r"\fscx80\fscy80\t(0,120,\fscx100\fscy100)"
+    # a quick fade in (all three layers together), but never on the video's first frame: that's what the feed shows,
+    # and the hook has to be readable on it
+    pop = r"\fad(150,0)" if start > 0.05 else ""
     card = _rounded(w, h, size * 0.2)
     q = r"\q2" if fits else ""  # no wrapping: the rows are already measured to fit
-    # every part centred on the same point (\an5), so the pop scales them together
+    # every part centred on the same point (\an5)
     return [f"Dialogue: 2,{t0},{t1},Hook,,0,0,0,,{{\\an5\\pos({cx},{cy + round(size * 0.07)}){pop}\\bord0\\shad0"
             f"\\blur{round(size * 0.18)}\\1c&H000000&\\1a&H90&\\p1}}{card}",
             f"Dialogue: 3,{t0},{t1},Hook,,0,0,0,,{{\\an5\\pos({cx},{cy}){pop}\\bord0\\shad0\\blur0.6"
@@ -213,7 +221,7 @@ def overlay_lines(texts: list, scene_start: float, scene_end: float, profile: La
         fs = round(profile.font_size * OVERLAY_SIZES.get(t.size, OVERLAY_SIZES["m"]))
         color = ass_color(_hex(t.color, "#FFFFFF"))
         lines.append(f"Dialogue: 2,{_ts(start)},{_ts(end)},{'OverlayBox' if t.box else 'Overlay'},,0,0,0,,"
-                     f"{{\\an5\\pos({x},{y})\\fs{fs}\\c{color}\\fad(120,120)}}{text}")
+                     f"{{\\an5\\pos({x},{y})\\fs{fs}\\c{color}\\fad(150,120)}}{text}")
     return lines
 
 
@@ -231,7 +239,9 @@ def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: 
     """Lyrics as karaoke, drawn in `style` (font, colours, size, position, effect; see styles.py).
 
     lines: align.LyricLine items (absolute word times). A line appears `lead_in` s before its first word and
-    stays until the next line starts or `hold` s after its last word, so two lines never overlap. Effects:
+    stays until the next line starts or `hold` s after its last word. karaoke, fill and fade lines enter rising
+    ~16 px, fading in and coming into focus (0.25 s, easing out) and fade out over 0.2 s; when the next line follows
+    straight on, the fade starts 0.12 s before it, so the two cross-fade (the only time two lines overlap). Effects:
     karaoke: the whole line shown, words change colour as they're sung (words still to come a little see-through).
     fill: a smooth colour sweep through each word.  pop: words appear one by one with a little bounce.  fade: the
     whole line fades in and out.  glitch: the line breaks in like a bad signal (red and cyan copies splitting apart,
@@ -313,15 +323,61 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         y = min(y, round(H * 0.965 - small * 0.6) - next_off)
     pos = f"{{\\pos({W // 2},{y}){blur}}}"
     next_pos = f"{{\\pos({W // 2},{y + next_off})\\blur0.8}}"
+    # karaoke / fill / fade entrance and exit (seconds), how far a line rises as it enters, the line's own blur
+    fade_in, fade_out, cross = 0.25, 0.2, 0.12
+    rise = round(16 * min(W, H) / 1080)
+    sharp = float(blur[5:]) if blur else 0.0
+
+    def enter(s: float, e: float, show: float, gone: float) -> str:
+        """The override block that places one event [s, e] of a line on screen from `show` until `gone`: over its
+        first 0.25 s the line fades in, slides up `rise` px and comes into focus (blur 6 -> its own, easing out);
+        over its last 0.2 s it fades out. Times are per event (a karaoke line is one event per word), so each
+        picks the motion up where the previous one left it; its shadow copy (_backing) keeps these tags, so it
+        moves and fades with it."""
+        x0, d = W // 2, max(e - s, 0.001)
+        tin = min(fade_in, max((gone - show) / 2, 0.04))
+        tout = min(fade_out, max((gone - show) / 2, 0.04))
+
+        def alpha(t: float) -> int:  # 0 opaque .. 255 gone
+            k = min(max((t - show) / tin, 0.0), 1.0, max((gone - t) / tout, 0.0))
+            return round(255 * (1 - k))
+
+        o = s - show
+        if o < tin - 0.005:
+            ms = round((tin - o) * 1000)
+            k = o / tin
+            tags = (f"\\move({x0},{y + rise * (1 - k):.1f},{x0},{y},0,{ms})"
+                    f"\\blur{6 + (sharp - 6) * k ** 0.4:.2f}\\t(0,{ms},0.4,\\blur{sharp:g})")
+        else:
+            tags = f"\\pos({x0},{y}){blur}"
+        t2 = min(max(show + tin - s, 0.0), d)
+        t3 = min(max(gone - tout - s, t2), d)
+        a1, a2, a3 = alpha(s), alpha(s + t2), alpha(e)
+        if a1 or a2 or a3:
+            tags += f"\\fade({a1},{a2},{a3},0,{round(t2 * 1000)},{round(t3 * 1000)},{round(d * 1000)})"
+        return "{" + tags + "}"
+
+    # when each line shows and ends (a line shows no earlier than the one before it ends)
+    spans: dict[int, tuple[float, float]] = {}
     prev_end = 0.0
+    for li, line in enumerate(lines):
+        words = [w for w in line.words if _esc(w.text)]
+        if words:
+            next_start = lines[li + 1].start if li + 1 < len(lines) else float("inf")
+            spans[li] = (max(prev_end, words[0].start - lead_in), min(next_start, words[-1].end + hold))
+            prev_end = spans[li][1]
+    order = sorted(spans)
     for li, line in enumerate(lines):
         words = [w for w in line.words if _esc(w.text)]
         if not words:
             continue
         texts = [_esc(_case(w.text, style.case, profile.code)) for w in words]
         next_start = lines[li + 1].start if li + 1 < len(lines) else float("inf")
-        line_end = min(next_start, words[-1].end + hold)
-        show = max(prev_end, words[0].start - lead_in)
+        show, line_end = spans[li]
+        later = [spans[k][0] for k in order if k > li]
+        # straight into the next line: fade out from `cross` s before it shows, cross-fading with its entrance;
+        # else fade out over the line's last 0.2 s
+        gone = line_end + fade_out - cross if later and later[0] - line_end < 0.05 else line_end
 
         def dialogue(start: float, end: float, text: str, name: str = "Lyric", layer: int = 1) -> None:
             if end > start:
@@ -336,9 +392,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             mark = [round((w.start - show) * 100) for w in words] + [round((words[-1].end - show) * 100)]
             body = f"{{\\k{max(0, mark[0])}}}" + " ".join(
                 f"{{\\kf{max(1, mark[i + 1] - mark[i])}}}{t}" for i, t in enumerate(texts))
-            dialogue(show, line_end, pos + r"{\fad(120,200)}" + body)
+            dialogue(show, gone, enter(show, gone, show, gone) + body)
         elif style.effect == "fade":
-            dialogue(show, line_end, pos + r"{\fad(250,300)}" + " ".join(texts))
+            dialogue(show, gone, enter(show, gone, show, gone) + " ".join(texts))
         elif style.effect == "glitch":
             main, bursts = _glitch_line(words, texts, show, line_end, glitch_words or set(), W // 2, y, font, blur,
                                         base, high)
@@ -357,18 +413,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         parts.append(f"{{\\alpha&HFF&\\fscx100\\fscy100}}{t}")
                 dialogue(w.start, end, pos + " ".join(parts))
         else:
-            def text(sung: int) -> str:
-                return pos + " ".join(f"{{\\c{high}\\1a&H00&}}{t}" if j < sung else f"{{\\c{base}\\1a&H{unsung:02X}&}}{t}"
-                                      for j, t in enumerate(texts))
+            def karaoke(s: float, e: float, sung: int) -> None:
+                dialogue(s, e, enter(s, e, show, gone) + " ".join(
+                    f"{{\\c{high}\\1a&H00&}}{t}" if j < sung else f"{{\\c{base}\\1a&H{unsung:02X}&}}{t}"
+                    for j, t in enumerate(texts)))
 
-            dialogue(show, words[0].start, r"{\fscx90\fscy90\t(0,120,\fscx100\fscy100)}" + text(0))
+            karaoke(show, words[0].start, 0)
             for wi, w in enumerate(words):
-                dialogue(w.start, words[wi + 1].start if wi + 1 < len(words) else line_end, text(wi + 1))
+                karaoke(w.start, words[wi + 1].start if wi + 1 < len(words) else gone, wi + 1)
         if (landscape and style.effect in ("karaoke", "fill") and li + 1 < len(lines)
                 and next_start - line_end < 2.5 and _esc(lines[li + 1].text)):
-            dialogue(show, line_end, next_pos + r"{\fad(150,150)}"
+            # fades in with the line above it and out with it (as that next line rises into its place)
+            dialogue(show, gone, next_pos + f"{{\\fad({round(fade_in * 1000)},{round(fade_out * 1000)})}}"
                      + _esc(_case(lines[li + 1].text, style.case, profile.code)), "LyricNext")
-        prev_end = line_end
     if title and _esc(title[0]):
         glow = style.model_copy(update={"highlight": title[3]}) if len(title) > 3 and title[3] else style
         at = title_at or (W // 2, round(H * (0.72 if style.position == "high" else 0.3)))
@@ -463,7 +520,8 @@ def now_playing_events(title: str, label: str, start: float, length: float, size
                        accent: str) -> list[str]:
     """A "now playing" card in the top-left corner, the way playlist channels show the song: a dark rounded card
     with `label` (the channel or "NOW PLAYING"), the song `title`, a progress bar that fills over `length` seconds
-    from `start`, and a vinyl record spinning at its right edge. `accent`: the record label's colour (#RRGGBB)."""
+    from `start`, and a vinyl record spinning at its right edge. `accent`: the record label's colour (#RRGGBB).
+    Fully opaque for its first 10 s, then dimmed to ~65% for the rest of the song."""
     from .styles import ass_color
 
     W, H = size
@@ -513,6 +571,18 @@ def now_playing_events(title: str, label: str, start: float, length: float, size
     out.append(f"Dialogue: 10,{t0},{t1},Lyric,,0,0,0,,{{\\an7\\pos({bx:.0f},{by:.0f}){fade}\\bord0\\shad0\\blur0"
                f"\\1c&HFFFFFF&\\clip({bx:.0f},{by - 4:.0f},{bx:.0f},{by + bh + 4:.0f})"
                f"\\t(0,{round(length * 1000)},\\clip({bx:.0f},{by - 4:.0f},{bx + bw:.0f},{by + bh + 4:.0f}))\\p1}}{bar}")
+    # after 10 s the whole card settles back to ~65% opacity over 1 s (out of the way, still there): each layer's
+    # fill and edge alphas go to themselves seen through 35% transparency, so the parts keep their relative looks
+    if length > 11:
+        def settle(m: re.Match) -> str:
+            tags = m.group(1)
+            a1 = re.search(r"\\1a&H([0-9A-Fa-f]{2})&", tags)
+            a3 = re.search(r"\\3a&H([0-9A-Fa-f]{2})&", tags)
+            a1, a3 = (int(a.group(1), 16) if a else 0 for a in (a1, a3))
+            return (f"{{{tags}\\t(10000,11000,\\1a&H{_alpha_over(a1, 0x59):02X}&"
+                    f"\\3a&H{_alpha_over(a3, 0x59):02X}&)}}")
+
+        out = [re.sub(r"\{([^}]*)\}", settle, e, count=1) for e in out]
     return out
 
 
@@ -589,50 +659,236 @@ def auto_emphasis(text: str) -> str:
     return max(content, key=lambda w: len(_bare(w)))
 
 
-def _wrap(words: list[str], max_chars: int) -> list[list[str]]:
-    lines: list[list[str]] = [[]]
-    for w in words:
-        if lines[-1] and len(" ".join(lines[-1] + [w])) > max_chars:
-            lines.append([])
-        lines[-1].append(w)
-    return lines
+THUMB_YELLOW = "&H0000D4FF&"  # #FFD400: the cover's key word (warmer than the karaoke yellow, reads on sky and snow)
+# the heavy display faces a cover headline is set in, best first: (family libass looks up, font file). Segoe UI Black
+# keeps its counters open at feed size, where Impact's close up into blobs; Arial Black next, Arial Bold last
+THUMB_FACES = (("Segoe UI Black", "seguibl.ttf"), ("Arial Black", "ariblk.ttf"), ("Arial", "arialbd.ttf"))
+
+
+def thumb_font(profile: LangProfile) -> tuple[str, str]:
+    """(family, file) a cover headline is set in: the heaviest installed face for Latin text; the language's own
+    font for Khmer (no Latin black face has Khmer letters)."""
+    from .styles import font_path
+
+    if profile.code != "km":
+        for family, file in THUMB_FACES:
+            if font_path(file):
+                return family, file
+    return profile.font_name, profile.font_file
+
+
+def _cap_metrics(file: str) -> tuple[float, float]:
+    """(cap height, how far the caps' middle sits below the middle of the line) of a font, both as fractions of the
+    ASS font size (ascent+descent), so a headline can be spaced and placed by its letters rather than by the font's
+    tall line box. Arial-like values without the file."""
+    from .styles import font_path
+
+    try:
+        from PIL import ImageFont
+
+        path = font_path(file)
+        if path:
+            f = ImageFont.truetype(str(path), 200)
+            asc, desc = f.getmetrics()
+            top, bottom = f.getbbox("H", anchor="ls")[1::2]  # top is above the baseline: negative
+            cap = (bottom - top) / (asc + desc)
+            return cap, (asc - (bottom - top) / 2 - (asc + desc) / 2) / (asc + desc)
+    except Exception:
+        pass
+    return 0.64, 0.12
+
+
+def _thumb_width(text: str, family: str, file: str, px: float, lang: str) -> float:
+    """How wide libass draws headline `text` at size `px`: measured in its font (_text_width, or the file itself for
+    a face styles.FONTS doesn't list, e.g. Arial Black); an emoji (drawn in colour by emoji.py) is about a square."""
+    from .emoji import EMOJI
+    from .styles import FONTS, font_path
+
+    emoji = len(EMOJI.findall(text))
+    text = EMOJI.sub("", text)
+    if lang == "km":
+        # PIL here has no shaping: a subscript (coeng + consonant) or a vowel sign above/below would be counted as a
+        # letter of its own, when shaped it stacks under/over the one before; measure what takes room on the line
+        text = re.sub("[ិ-ួំ-៑៝​]", "", re.sub("្.", "", text))
+        return _text_width(text, family, px, lang) * 1.06 + emoji * px * 0.85
+    if family in FONTS.get(lang, FONTS["en"]) or family in FONTS["en"]:
+        return _text_width(text, family, px, lang) + emoji * px * 0.85
+    try:
+        from PIL import ImageFont
+
+        f = ImageFont.truetype(str(font_path(file)), 200)
+        asc, desc = f.getmetrics()
+        return f.getlength(text) * px / (asc + desc) + emoji * px * 0.85
+    except Exception:
+        return px * 0.62 * len(text) + emoji * px * 0.85
+
+
+def _split_even(words: list[str], lines: int, width) -> list[str]:
+    """`words` in `lines` lines (in order) whose widest line is as narrow as possible (`width(str)`); any number of
+    lines (_balance stops at three)."""
+    from itertools import combinations
+
+    n = len(words)
+    lines = max(1, min(lines, n))
+    best, best_w = [" ".join(words)], float("inf")
+    for cut in combinations(range(1, n), lines - 1):
+        bounds = (0, *cut, n)
+        parts = [" ".join(words[a:b]) for a, b in zip(bounds, bounds[1:])]
+        w = max(width(p) for p in parts)
+        if w < best_w - 1e-6:
+            best, best_w = parts, w
+    return best
+
+
+def _overlap(a: tuple, b: tuple | None) -> float:
+    """Area shared by two (x0, y0, x1, y1) boxes."""
+    if not b:
+        return 0.0
+    return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
 
 
 def build_thumbnail_ass(text: str, profile: LangProfile, style: str = "bold", emphasis: str = "",
-                        size: tuple[int, int] = (WIDTH, HEIGHT)) -> str:
-    """Cover headline sized to fill the width, with the key word(s) in `emphasis` picked out.
+                        size: tuple[int, int] = (WIDTH, HEIGHT), subject: tuple | None = None,
+                        head: tuple | None = None) -> str:
+    """Cover headline as big as it can be in two lines (three or four only when two would be too small), with the
+    key word(s) in `emphasis` picked out, placed clear of the picture's subject.
 
-    bold: white, heavy outline, key word yellow.  box: black on yellow boxes, key word red.
-    stacked: a word or two per line, key word yellow and bigger.
+    bold: white, thick black outline and a soft drop shadow, key word yellow.  box: black on yellow boxes, key word
+    red.  stacked: a word or two per line, key word yellow and bigger.
+    `subject` / `head`: where the picture's subject and its head (face) are, as (x0, y0, x1, y1) fractions of the
+    frame (pipeline finds them from a depth map). The headline then goes where it covers the face least: on a 9:16
+    cover inside the centre square (the 1:1 and 3:4 grid crops), normally above the face, else below it; on a 16:9
+    cover beside the subject or in a band above/below it, never on YouTube's duration badge. Without them, the old
+    fixed places (upper-middle on 9:16, the middle on 16:9). A dark feathered gradient sits behind the words so they
+    read on any picture without a box over the subject.
     """
     W, H = size
     style = style if style in THUMB_STYLES else "bold"
+    km = profile.code == "km"
+    lang = "km" if km else "en"
     words = _esc(text).split()
-    if profile.code != "km":
+    if not km:
         words = [w.upper() for w in words]
+    if not words:
+        words = [""]
     keys = {_bare(w) for w in _esc(emphasis or auto_emphasis(text)).split()} - {""}
-    accent = RED if style == "box" else HIGHLIGHT
-    base = BLACK if style == "box" else WHITE
+    family, file = thumb_font(profile)
+    # Khmer: stacked subscripts below and vowel signs above fill most of the line box, so it's spaced by the box
+    cap, drop = (0.78, 0.0) if km else _cap_metrics(file)
+    unit = min(W, H) / 1080  # sizes below are for a 1080-wide 9:16 frame / a 1080-high 16:9 one
+    margin = round(60 * unit)
+    least = round(140 * unit)  # caps ~70 px on 1080: what still reads at feed size (~170 px wide)
+    most = round((260 if style == "stacked" else 230) * unit)
+    grow = 1.15 if style == "stacked" else 1.0
 
-    if profile.code == "km":
-        # Khmer phrases can't be measured by letter count; one phrase per line keeps clusters intact
-        lines = [[w] for w in words] if style == "stacked" else _wrap(words, 12)
-        longest = max((sum(len(w) for w in line) for line in lines), default=1)
-        # code points include stacked subscripts and vowel signs, so a "letter" is narrower than it counts
-        size = round(max(110, min(profile.font_size * 2.6, W * 0.86 / max(longest * 0.34, 1))))
+    def edge(px: float) -> float:  # outline (bold/stacked) or box padding (box), each side
+        return px * (0.13 if style == "box" else 0.07)
+
+    def width(line: str, px: float) -> float:
+        w = _thumb_width(line, family, file, px, lang) + 2 * edge(px)
+        if grow > 1:  # the key word is drawn bigger
+            w += sum(_thumb_width(x, family, file, px, lang) for x in line.split() if _bare(x) in keys) * (grow - 1)
+        return w
+
+    def step(px: float) -> float:  # baseline to baseline: tight caps, outlines/boxes just clear of each other
+        if km:
+            return px * 1.0
+        # (boxes: each 0.15 of the size above and below the caps, so neighbouring lines' boxes just meet)
+        return px * (cap + (0.30 if style == "box" else 0.22)) * (1.06 if grow > 1 else 1.0)
+
+    def ink(lines: list[str], px: float) -> tuple[float, float]:  # (width, height) of the drawn block
+        return (max(width(r, px) for r in lines),
+                (len(lines) - 1) * step(px) + px * cap * (grow if grow > 1 else 1) + 2 * edge(px))
+
+    def fit(avail: float, tall: float) -> tuple[list[str], int]:
+        """The lines and size: two lines unless they'd be smaller than `least`, then three, then four (stacked: a
+        word or two per line); as big as fits `avail` wide and `tall` high, at most `most`."""
+        n = len(words)
+        if style == "stacked":  # never one line: stacking is the look
+            counts = list(range(max(min(n, 2), min((n + 1) // 2, 4)), min(n, 5) + 1))
+        else:
+            counts = [1] if n == 1 else [c for c in (2, 3, 4, 5) if c <= n]
+        options = []
+        # a headline too long for the band at the least size may take a taller block before it gets smaller
+        for room in (tall, tall * 1.4):
+            for c in counts:
+                rows = _split_even(words, c, lambda t: width(t, 100))
+                w100, h100 = ink(rows, 100)
+                px = min(most, 100 * avail / w100, 100 * room / h100)
+                options.append((rows, px))
+                if px >= least:
+                    return rows, int(px)
+        rows, px = max(options, key=lambda o: o[1])  # never fits at the least size: the biggest it can be
+        return rows, int(px)
+
+    # where it goes: candidate layouts, each scored by how much of the face (and, less, the subject) it covers
+    pad_y, pad_x = 0.035 * H, 0.03 * W
+    face = (head[0] * W - pad_x, head[1] * H - pad_y, head[2] * W + pad_x, head[3] * H + pad_y) if head else None
+    body = (subject[0] * W, subject[1] * H, subject[2] * W, subject[3] * H) if subject else None
+    # YouTube draws the video's length over the bottom-right corner (~140x80 of a 1280x720 thumbnail)
+    badge = (W - 150 * W / 1280, H - 90 * H / 720, W, H) if W > H else None
+    layouts = []  # (cost, lines, px, x, y, align): y = middle of the block's ink, x per align
+    if H > W:
+        lo, hi = (H - W) / 2, (H + W) / 2  # the centre square: what the 1:1 and 3:4 grid crops keep
+        rows, px = fit(W - 2 * margin, 0.26 * H)
+        bw, bh = ink(rows, px)
+        if not face and not body:
+            ys = [H * (0.40 if style == "stacked" else 0.36)]  # upper-middle: clear of the Shorts/TikTok buttons
+        else:
+            first, last = lo + 10 + bh / 2, hi - 10 - bh / 2
+            ys = [first + k * 8 for k in range(int(max(last - first, 0) // 8) + 1)] if last > first else [H / 2]
+        for y in ys:
+            box = (W / 2 - bw / 2, y - bh / 2, W / 2 + bw / 2, y + bh / 2)
+            area = bw * bh
+            # two homes: the upper band (y ~430-820 of 1920, the face below it: the usual cover, the eye reads down
+            # into the picture) or, when the head's up there, the lower band (~1100-1450), not wedged under the chin
+            home = min(abs(y - 0.33 * H), abs(y - 0.665 * H) + 0.03 * H) / H
+            cost = 10 * _overlap(box, face) / area + _overlap(box, body) / area + 0.4 * home
+            layouts.append((cost, rows, px, W / 2, y, 5))
     else:
-        lines = _wrap(words, 8 if style == "stacked" else 10)
-        longest = max((len(" ".join(line)) for line in lines), default=1)
-        # Arial Bold caps average ~0.64 em wide
-        size = round(max(100, min(240, W * 0.88 / (longest * 0.64))))
+        bands = [("band", W - 2 * margin, 0.42 * H)]
+        if face or body:
+            bands += [("left", W * 0.56 - 1.5 * margin, 0.8 * H), ("right", W * 0.56 - 1.5 * margin, 0.8 * H)]
+        for kind, avail, tall in bands:
+            rows, px = fit(avail, tall)
+            bw, bh = ink(rows, px)
+            if not face and not body:
+                ys = [H / 2]
+            else:
+                first, last = 0.07 * H + bh / 2, 0.93 * H - bh / 2
+                ys = [first + k * 8 for k in range(int(max(last - first, 0) // 8) + 1)] if last > first else [H / 2]
+            x, align = {"band": (W / 2, 5), "left": (margin, 4), "right": (W - margin, 6)}[kind]
+            x0 = {"band": W / 2 - bw / 2, "left": margin, "right": W - margin - bw}[kind]
+            for y in ys:
+                box = (x0, y - bh / 2, x0 + bw, y + bh / 2)
+                area = bw * bh
+                cost = (10 * _overlap(box, face) / area + _overlap(box, body) / area + 10 * _overlap(box, badge) / area
+                        + 0.2 * abs(y - H / 2) / H - 0.5 * px / most)  # bigger letters win a close call
+                layouts.append((cost, rows, px, x, y, align))
+    _, rows, px, x, y, align = min(layouts, key=lambda o: o[0])
+    bw, bh = ink(rows, px)
+    x0 = {5: x - bw / 2, 4: x, 6: x - bw}[align]
+    top = y - bh / 2
 
-    grow = r"\fscx115\fscy115" if style == "stacked" else ""
-    on, off = f"{{\\c{accent}{grow}}}", f"{{\\c{base}\\fscx100\\fscy100}}"
+    out = round(edge(px))
+    accent = RED if style == "box" else THUMB_YELLOW
+    base = BLACK if style == "box" else WHITE
+    big = r"\fscx115\fscy115" if grow > 1 else ""
 
-    def word(w: str) -> str:
-        if _bare(w) in keys:
+    def word(w: str, shade: str = "") -> str:
+        """`w` with the key word picked out; `shade` (an alpha) draws it as the drop shadow instead: all black, its
+        emoji hidden (emoji.py would draw them in colour) but still taking their room."""
+        if shade:
+            from .emoji import EMOJI
+
+            back = f"{{\\1a{shade}\\3a{shade}}}"
+            w = EMOJI.sub(lambda m: "{\\alpha&HFF&}" + m.group() + back, w)
+            on, off = f"{{{big}}}", "{\\fscx100\\fscy100}"
+        else:
+            on, off = f"{{\\c{accent}{big}}}", f"{{\\c{base}\\fscx100\\fscy100}}"
+        if _bare(w) in keys and not km:
             return on + w + off
-        if profile.code == "km":
+        if km:
             # Khmer writes words without spaces, so the key word may sit inside a longer phrase
             # (match the raw text: _bare() would drop Khmer vowel signs)
             for key in sorted(_esc(emphasis or auto_emphasis(text)).split(), key=len, reverse=True):
@@ -640,15 +896,58 @@ def build_thumbnail_ass(text: str, profile: LangProfile, style: str = "bold", em
                     return w.replace(key, on + key + off, 1)
         return w
 
-    body = r"\N".join(" ".join(word(w) for w in line) for line in lines)
-    if style == "box":
-        # BorderStyle 3 draws an opaque box per line in the outline colour
-        thumb_style = f"Thumb,{profile.font_name},{size},{BLACK},{BLACK},{BOX_YELLOW},&H66000000&,-1,0,0,0,100,100,0,0,3,18,6,5,60,60,0,1"
+    events = []
+    # the gradient: black, ~38% at its heart (25% behind boxes, which carry themselves), feathered over ~6% of the
+    # frame, from the headline's side of the picture to just past the words, so the subject stays bright
+    feather = round(0.065 * min(W, H))
+    reach = round(0.05 * min(W, H))
+    if align == 4:
+        band = (-feather, -feather, x0 + bw + reach, H + feather)
+    elif align == 6:
+        band = (x0 - reach, -feather, W + feather, H + feather)
+    elif y < H / 2:
+        band = (-feather, -feather, W + feather, top + bh + reach)
     else:
-        outline = max(8, size // 11)
-        thumb_style = f"Thumb,{profile.font_name},{size},{WHITE},{WHITE},{BLACK},&H80000000&,-1,0,0,0,100,100,0,0,1,{outline},{outline - 2},5,60,60,0,1"
-    # upper-middle: clear of the like/comment buttons and caption bar that cover the bottom of Shorts/TikTok
-    y = round(H * (0.40 if style == "stacked" else 0.36)) if H > W else H // 2
+        band = (-feather, top - reach, W + feather, H + feather)
+    shade = "&HC0&" if style == "box" else "&H9E&"
+    a, b, c, d = (round(v) for v in band)
+    events.append(f"Dialogue: 0,0:00:00.00,9:00:00.00,Plain,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\bord0\\shad0"
+                  f"\\1c&H000000&\\1a{shade}\\blur{feather}}}m {a} {b} l {c} {b} {c} {d} {a} {d}{{\\p0}}")
+    for i, row in enumerate(rows):
+        # each line on its own, so the leading is set by the letters (libass would space them by the tall line box)
+        mid = top + edge(px) + px * cap * (grow if grow > 1 else 1) / 2 + i * step(px)
+        line_y = round(mid - drop * px)
+        pos = f"\\an{align}\\pos({round(x)},{line_y})"
+        if style == "box":
+            # the yellow box, drawn to the letters (libass's BorderStyle 3 box spans the font's whole tall line box,
+            # so stacked lines' boxes overlapped the words above): the line's measured width plus padding, 0.15 of
+            # the size above and below the caps, over a crisp 45% black drop shadow
+            w = width(row, px)
+            bx = {5: x - w / 2, 4: x, 6: x - w}[align]
+            half = px * (cap / 2 + 0.15)
+            r = [round(v) for v in (bx, mid - half, bx + w, mid + half)]
+            off = max(4, round(px * 0.06))
+            for colour, alpha, o in (("&H000000&", "&H73&", off), (BOX_YELLOW, "&H00&", 0)):
+                events.append(f"Dialogue: 1,0:00:00.00,9:00:00.00,Plain,,0,0,0,,{{\\an7\\pos({o},{o})\\p1\\bord0"
+                              f"\\shad0\\1c{colour}\\1a{alpha}}}m {r[0]} {r[1]} l {r[2]} {r[1]} {r[2]} {r[3]} "
+                              f"{r[0]} {r[3]}{{\\p0}}")
+        else:
+            # the soft drop shadow: 60% black, ~6% of the size down, blurred; its own layer under the crisp letters
+            dx, dy = round(px * 0.035), round(px * 0.06)
+            ghost = " ".join(word(w, "&H66&") for w in row.split())
+            events.append(f"Dialogue: 1,0:00:00.00,9:00:00.00,Plain,,0,0,0,,{{\\an{align}\\pos({round(x) + dx},"
+                          f"{line_y + dy})\\1c&H000000&\\3c&H000000&\\1a&H66&\\3a&H66&\\blur{max(3, round(px * 0.05))}}}"
+                          f"{ghost}")
+        events.append(f"Dialogue: 2,0:00:00.00,9:00:00.00,Thumb,,0,0,0,,{{{pos}}}"
+                      + " ".join(word(w) for w in row.split()))
+    if style == "box":
+        # black letters straight on their boxes (drawn above)
+        thumb_style = f"Thumb,{family},{px},{BLACK},{BLACK},{BLACK},&H00000000&,-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1"
+    else:
+        thumb_style = f"Thumb,{family},{px},{WHITE},{WHITE},{BLACK},&H00000000&,-1,0,0,0,100,100,0,0,1,{out},0,5,0,0,0,1"
+    # the gradient, boxes and drop shadow
+    plain = f"Plain,{family},{px},{WHITE},{WHITE},{BLACK},&H00000000&,-1,0,0,0,100,100,0,0,1,{out},0,5,0,0,0,1"
+    nl = "\n"
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
@@ -659,8 +958,9 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: {thumb_style}
+Style: {plain}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,9:00:00.00,Thumb,,0,0,0,,{{\\pos({W // 2},{y})}}{body}
+{nl.join(events)}
 """

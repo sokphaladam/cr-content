@@ -97,13 +97,67 @@ def thumbnail_source(job: Path) -> Path:
     return joined if joined.exists() else job / "video.mp4"
 
 
+def _cover_subject(job: Path, source: Path, at: float, image: Path | None) -> tuple[tuple | None, tuple | None]:
+    """(subject, head) of a cover's picture as (x0, y0, x1, y1) fractions of the cover frame, so the headline can
+    keep off the face; (None, None) when it can't be told (no torch / depth model: the headline takes its usual
+    place). The picture is cropped the way the cover is (render.thumbnail) at half size, its depth map (fx) split
+    into near and far (Otsu), and the head is the top of what's near: the subject's top, as wide as it is there."""
+    import numpy as np
+
+    if not fx.available():
+        return None, None
+    W, H = job_size(job)
+    try:
+        src = image or source
+        key = hashlib.sha1(f"{src.resolve()}|{src.stat().st_mtime_ns}|{0 if image else round(at, 2)}|{W}x{H}"
+                           .encode()).hexdigest()[:12]
+        probe = job / "work" / f"cover_probe_{key}.png"  # same picture, same file: the depth map stays cached
+        if not probe.exists():
+            pick = ["-i", str(src.resolve())] if image else ["-ss", f"{at:.2f}", "-i", str(src.resolve())]
+            run(["ffmpeg", "-y", "-hide_banner", "-v", "error", *pick, "-frames:v", "1", "-vf",
+                 f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},scale={W // 2}:-2",
+                 str(probe.resolve())])
+        d = fx.depth_map(probe)[0, 0].float().cpu().numpy()
+        # Otsu: the depth that best splits the picture into a near and a far group
+        hist, edges = np.histogram(d, bins=64, range=(0.0, 1.0))
+        p = hist / max(hist.sum(), 1)
+        mids = (edges[:-1] + edges[1:]) / 2
+        w0 = np.cumsum(p)
+        m0 = np.cumsum(p * mids)
+        between = (m0[-1] * w0 - m0) ** 2 / np.maximum(w0 * (1 - w0), 1e-9)
+        near = d > mids[int(np.argmax(between))]
+        if not 0.03 <= near.mean() <= 0.7:  # no clear figure (a landscape, a wall): the nearest 15%
+            near = d >= np.quantile(d, 0.85)
+        h, w = near.shape
+        rows = near.mean(1)
+        solid = np.nonzero(rows >= max(0.04, 0.2 * rows.max()))[0]  # not a stray beak, hair or branch tip
+        if not len(solid):
+            return None, None
+        ys, xs = np.nonzero(near)
+        subject = (np.percentile(xs, 2) / w, solid[0] / h, np.percentile(xs, 98) / w, np.percentile(ys, 98) / h)
+        # a head is about a third of a figure (less of a full body, all of a close-up), within sensible limits
+        tall = subject[3] - subject[1]
+        hh = min(max(0.3 * tall, 0.12), 0.25) if H > W else min(max(0.35 * tall, 0.2), 0.45)
+        top = near[solid[0]: solid[0] + max(1, round(hh * h))]
+        hx = np.nonzero(top.any(0))[0]
+        cols = np.nonzero(top.mean(0) > 0.15)[0] if top.size else hx
+        cols = cols if len(cols) else hx
+        head = (cols[0] / w, solid[0] / h, (cols[-1] + 1) / w, solid[0] / h + hh)
+        return tuple(float(v) for v in subject), tuple(float(v) for v in head)
+    except Exception as e:  # no model download, a broken frame: the headline takes its usual place
+        print(f"  ! cover subject: {type(e).__name__}: {e}")
+        return None, None
+
+
 def draw_thumbnail(job: Path, text: str, at: float, lang: str, out: Path,
                    style: str = "bold", emphasis: str = "", image: Path | None = None) -> float:
     """Draw the frame at `at` seconds (or the photo `image` instead) with `text` as a big headline (no text = plain
-    picture) into `out`.
+    picture) into `out`, placed clear of the picture's subject (_cover_subject).
 
     Returns the frame time actually used (clamped to the video).
     """
+    from .captions import thumb_font
+
     profile = LANGS.get(lang, LANGS["en"])
     work = job / "work"
     work.mkdir(exist_ok=True)
@@ -112,10 +166,12 @@ def draw_thumbnail(job: Path, text: str, at: float, lang: str, out: Path,
     ass_name = None
     if text.strip():
         ass_name = f"{out.stem}.ass"
-        (work / ass_name).write_text(build_thumbnail_ass(text, profile, style, emphasis, size=job_size(job)),
-                                     encoding="utf-8")
-        if not (work / "fonts" / profile.font_file).exists():
-            _install_font(profile, work / "fonts")
+        subject, head = _cover_subject(job, source, at, image)
+        (work / ass_name).write_text(build_thumbnail_ass(text, profile, style, emphasis, size=job_size(job),
+                                                         subject=subject, head=head), encoding="utf-8")
+        _, font_file = thumb_font(profile)  # the heavy headline face (Segoe UI Black...), or the Khmer font
+        if not (work / "fonts" / font_file).exists():
+            _install_font(profile, work / "fonts", font_file)
     out.parent.mkdir(exist_ok=True)
     thumbnail(source, at, out, work, ass_name, size=job_size(job), image=image)
     return at
@@ -131,8 +187,8 @@ def _photo_for_cover(job: Path, at: float, image: Path | None, out: Path) -> Pat
         return image
     W, H = job_size(job)
     run(["ffmpeg", "-y", "-hide_banner", "-ss", f"{at:.2f}", "-i", str(thumbnail_source(job).resolve()),
-         "-frames:v", "1", "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,"
-         f"eq=contrast=1.08:saturation=1.3,unsharp=5:5:0.8", "-q:v", "2", str(out.resolve())])
+         "-frames:v", "1", "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H},"
+         f"setsar=1,eq=contrast=1.06:saturation=1.15,cas=0.4", "-q:v", "2", str(out.resolve())])
     return out
 
 
@@ -170,28 +226,125 @@ def draw_designed(job: Path, text: str, at: float, lang: str, out: Path, emphasi
 COVER_FRAME = "cover.png"  # a one-cover music video keeps its frame in work/ for the magazine thumbnail
 
 
-def _fit_font(draw, text: str, file: str, width: float, most: int, least: int):
-    """The biggest font (at most `most` px) at which `text` fits `width`; None below `least`."""
-    from PIL import ImageFont
+def _mag_sprite(text: str, px: int, file: str, cache: dict, family: str = "", track: float = 0.0) -> dict:
+    """One line of `text` at `px` (a 1x font size) as white ink on black, drawn at 2x and cropped to the ink:
+    {"img2": 2x PIL "L", "img1": the same at 1x, "w": 1x width, "asc"/"desc": 1x ink above / below the baseline}.
+    `family` (Khmer): drawn by resvg, which shapes the script; Pillow here has no raqm, so its subscripts and vowels
+    fall apart into dotted circles. `track`: extra space after each letter, in ems (spaced small caps)."""
+    import html
+    import io
+
+    from PIL import Image, ImageDraw, ImageFont
 
     from .styles import font_path
 
-    found = font_path(file)
-    px = most
-    while px >= least:
-        font = ImageFont.truetype(str(found), px) if found else ImageFont.load_default(px)
-        if draw.textlength(text, font=font) <= width:
-            return font
-        px = int(px * 0.92)
-    return None
+    key = (text, px, file, family, track)
+    if key in cache:
+        return cache[key]
+    p2 = px * 2
+    img = None
+    if family and px < 360:  # resvg is slow at big sizes: smaller ones are taken down from one big drawing
+        big = _mag_sprite(text, 360, file, cache, family)
+        k = px / 360
+        img2 = big["img2"].resize((max(1, round(big["img2"].width * k)), max(1, round(big["img2"].height * k))),
+                                  Image.LANCZOS)
+        img1 = img2.resize((max(1, round(img2.width / 2)), max(1, round(img2.height / 2))), Image.LANCZOS)
+        cache[key] = out = {"img2": img2, "img1": img1, "w": img2.width / 2, "asc": big["asc"] * k,
+                            "desc": big["desc"] * k}
+        return out
+    if family:
+        import resvg_py
+
+        from .art import _font_dirs
+
+        w, h = round(p2 * (len(text) * 0.75 + 1.5)), round(p2 * 2.6)  # Khmer: several code points per letter
+        base = round(p2 * 1.6)
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}"><text x="{p2 // 2}" y="{base}" '
+               f'font-family="{family}" font-size="{p2}" fill="white">{html.escape(text)}</text></svg>')
+        try:
+            png = bytes(resvg_py.svg_to_bytes(svg_string=svg, width=w, height=h, font_dirs=_font_dirs()))
+            img = Image.open(io.BytesIO(png)).getchannel("A")
+            img = img if img.getbbox() else None  # font not found: Pillow's unshaped letters beat nothing
+        except Exception:
+            img = None
+    if img is None:
+        found = font_path(file)
+        font = ImageFont.truetype(str(found), p2) if found else ImageFont.load_default(p2)
+        steps = [font.getlength(ch) + track * p2 for ch in text] if track else [font.getlength(text)]
+        w, h, base = round(sum(steps) + p2), round(p2 * 2.4), round(p2 * 1.6)
+        img = Image.new("L", (w, h), 0)
+        draw = ImageDraw.Draw(img)
+        x = p2 / 2
+        for part, step in zip(text if track else [text], steps):
+            draw.text((x, base), part, font=font, fill=255, anchor="ls")
+            x += step
+    box = img.getbbox() or (0, 0, 2, 2)
+    img2 = img.crop(box)
+    img1 = img2.resize((max(1, round(img2.width / 2)), max(1, round(img2.height / 2))), Image.LANCZOS)
+    cache[key] = out = {"img2": img2, "img1": img1, "w": img2.width / 2, "asc": (base - box[1]) / 2,
+                        "desc": (box[3] - base) / 2}
+    return out
+
+
+def _mag_accent(art, person, bg) -> tuple[int, int, int]:
+    """The title colour: the darkest saturated hue the character wears (hair, eyes, a ribbon), found as the
+    heaviest bin of a hue histogram that weighs each pixel by how saturated and how dark it is, then set deep
+    (~42% value) and darkened until it stands 4.5:1 against the background (comfortably over the 3:1 floor). Pale
+    pixels and warm ones (skin; orange or blonde hair, which only darken into brown) don't vote. A character with no
+    colour to give gets deep plum on pink/violet, else navy."""
+    import colorsys
+
+    import numpy as np
+
+    def lum(c):  # WCAG relative luminance
+        c = np.asarray(c, dtype=np.float64) / 255
+        c = np.where(c <= 0.03928, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+        return float(c @ [0.2126, 0.7152, 0.0722])
+
+    pix = art[person > 0.9][::7].astype(np.float64) / 255
+    hue, sat = None, 0.7
+    if len(pix) > 500:
+        mx, mn = pix.max(1), pix.min(1)
+        s = (mx - mn) / np.maximum(mx, 1e-6)
+        r, g, b = pix.T
+        d = np.maximum(mx - mn, 1e-6)
+        h = np.where(mx == r, (g - b) / d % 6, np.where(mx == g, (b - r) / d + 2, (r - g) / d + 4)) * 60
+        # orange, gold and olive go brown and muddy when darkened enough to read: they don't vote either
+        ok = (s > 0.25) & (mx > 0.1) & (mx < 0.85) & ~((h > 12) & (h < 70))
+        weight = s * (1.2 - mx)
+        if weight[ok].sum() > 0.004 * len(pix):
+            hist = np.bincount((h[ok] // 15).astype(int) % 24, weights=weight[ok], minlength=24)
+            hist = hist + 0.5 * (np.roll(hist, 1) + np.roll(hist, -1))  # a hue on a bin edge isn't split in two
+            centre = np.argmax(hist) * 15 + 7.5
+            near = ok & (np.abs((h - centre + 180) % 360 - 180) < 22)
+            ang = np.deg2rad(h[near])
+            hue = np.rad2deg(np.arctan2((np.sin(ang) * weight[near]).sum(), (np.cos(ang) * weight[near]).sum())) % 360
+            sat = float(np.clip(np.median(s[near]), 0.55, 0.9))
+    if hue is None:
+        bh = colorsys.rgb_to_hsv(*(np.asarray(bg) / 255))[0] * 360
+        hue, sat = (290, 0.6) if bh > 270 or bh < 20 else (228, 0.68)
+    v = 0.42
+    while True:
+        rgb = tuple(round(c * 255) for c in colorsys.hsv_to_rgb(hue / 360, sat, v))
+        if (lum(bg) + 0.05) / (lum(rgb) + 0.05) >= 4.5 or v < 0.12:
+            return rgb
+        v *= 0.92
 
 
 def draw_magazine(job: Path, text: str, lang: str, out: Path) -> bool:
-    """A magazine-cover thumbnail from a one-cover music video's frame: `text` in huge heavy letters across the
-    top with the character standing in front of it, two small lines of info at the sides. False when the video has
-    no cover frame (made before one-cover mode, or with several pictures)."""
+    """A magazine / playlist-cover thumbnail from a one-cover music video's frame: `text` in huge heavy letters in
+    a deep colour taken from the character, set behind her, and one short spaced line of info in a left corner.
+    False when the video has no cover frame (made before one-cover mode, or with several pictures).
+
+    The title must stay readable with her in front of it, so each layout is tried in turn and checked by laying the
+    character's mask (plus the halo kept clear round her) over the letters: a placement fails when any letter is over
+    15% hidden or the hidden letters add up to over 8%. In order: (a) the words either side of her head across the
+    top, (b) one line across the top that clears the head (or lets it fall in a word gap), (c) the same lower down,
+    either side of / behind the shoulders, (d) a panel: one word per line, left-aligned in the emptier side of the
+    frame (above her in a 9:16 frame), which is always taken (drawn in front of her when even that is covered)."""
     import numpy as np
-    from PIL import Image, ImageDraw, ImageFilter, ImageOps
+    from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+    from scipy import ndimage
 
     from .lyrics import SongScript
     from .styles import FONTS, font_path
@@ -201,62 +354,246 @@ def draw_magazine(job: Path, text: str, lang: str, out: Path) -> bool:
         return False
     cover = Image.open(frame).convert("RGB")
     W, H = cover.size
+    base_px = min(W, H)  # sizes are set against the short side: 1080 in both 16:9 and 9:16
     target = np.median(np.concatenate([np.asarray(cover)[0], np.asarray(cover)[:, 0]]), axis=0).astype(np.float32)
     _, bg = _flatten(cover, target, with_mask=True)
-    person = ImageOps.invert(bg).filter(ImageFilter.GaussianBlur(1.2))  # the character, in front of the words
-    ink = (22, 22, 26)
-    words = Image.new("RGB", (W, H), tuple(int(c) for c in target))
-    draw = ImageDraw.Draw(words)
-    heavy = FONTS["km"]["Khmer OS Muol Light"] if lang == "km" else (
+    person = np.asarray(ImageOps.invert(bg).filter(ImageFilter.GaussianBlur(1.2)), dtype=np.float32) / 255
+    # the art only, before any lettering: a light unsharp mask, +10% colour and +6% contrast, the way covers are
+    # finished; the background colour is read again after, so halos and grain match it exactly
+    art = ImageEnhance.Contrast(ImageEnhance.Color(cover.filter(ImageFilter.UnsharpMask(0.8, 60, 2))).enhance(1.10))
+    art = np.asarray(art.enhance(1.06), dtype=np.float32)
+    paper = np.median(np.concatenate([art[0], art[:, 0]]), axis=0)
+    accent = np.array(_mag_accent(art, person, paper), dtype=np.float32)
+    away = ndimage.distance_transform_edt(person < 0.5)  # how far each pixel is from the character
+
+    km = lang == "km"
+    heavy = FONTS["km"]["Khmer OS Muol Light"] if km else (
         "seguibl.ttf" if font_path("seguibl.ttf") else FONTS["en"]["Impact"])
-    big = (text if lang == "km" else text.upper()).strip()
-    # where the character's head and shoulders are: two or more words go either side of them ("CHILL" | "J-POP")
-    top = np.asarray(person, dtype=np.float32)[: round(H * 0.35)] > 128
-    cols = np.where(top.mean(0) > 0.3)[0]  # solid head and shoulders, not wisps of flowing hair
-    x_left, x_right = (int(cols[0]), int(cols[-1])) if len(cols) else (W // 2, W // 2)
-    words_ = big.split()
-    y = round(H * 0.03)
-    if len(words_) >= 2:
-        half = len(big) // 2
-        cut = min((i for i, ch in enumerate(big) if ch == " "), key=lambda i: abs(i - half))
-        pair = [big[:cut], big[cut + 1:]]
-        overlap = W * 0.07  # the words tuck a little behind the character
-        left_end, right_start = x_left + overlap, x_right - overlap
-        gap = W * 0.07  # a narrow head would let them touch ("SIGNALLOST"): always a word space or more between
-        if right_start - left_end < gap:
-            mid = (x_left + x_right) / 2
-            left_end, right_start = mid - gap / 2, mid + gap / 2
-        room = [left_end - W * 0.04, W * 0.96 - right_start]
-        sizes = [_fit_font(draw, t, heavy, r, round(H * 0.3), round(H * 0.08)) for t, r in zip(pair, room)]
-        if all(sizes):
-            font = min(sizes, key=lambda f: f.size)
-            lbox, rbox = (draw.textbbox((0, 0), t, font=font) for t in pair)
-            draw.text((left_end - (lbox[2] - lbox[0]) - lbox[0], y - lbox[1]), pair[0], font=font, fill=ink)
-            draw.text((right_start - rbox[0], y - rbox[1]), pair[1], font=font, fill=ink)
-            words_ = []
-    if words_:  # one word (or the sides are too narrow): across the top, behind the head
-        font = (_fit_font(draw, big, heavy, W * 0.94, round(H * 0.42), round(H * 0.12))
-                or _fit_font(draw, big, heavy, W * 0.94, round(H * 0.12), 8))
-        box = draw.textbbox((0, 0), big, font=font)
-        draw.text(((W - (box[2] - box[0])) / 2 - box[0], y - box[1]), big, font=font, fill=ink)
-    # the small print at the sides, the way playlist covers carry their mood and use
+    family = "Khmer OS Muol Light" if km else ""
+    cache: dict = {}
+
+    def sprite(t, px):
+        return _mag_sprite(t, px, heavy, cache, family)
+
+    # emoji have no glyph in the heavy title fonts (they'd draw as empty boxes): left out of the cover's title
+    text = re.sub("[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]", "", text)
+    big = re.sub(r"\s+", " ", text if km else text.upper()).strip()
+    if not big:  # nothing but emoji: the classic cover instead
+        return False
+    toks = [t for t in re.split(r"[ ​]+", big) if t]
+    join = "" if km else " "
+    # font size from a wanted cap height (Latin: the H; Khmer: the line's ink above the baseline)
+    ratio = sprite("H" if not km else join.join(toks), 200)["asc"] / 200
+    m, mt = W * 0.045, H * 0.045
+
+    def sizes(most, least):  # font sizes, biggest first, for cap heights from `most` down to `least` px
+        cap, out_ = most, []
+        while cap >= least:
+            out_.append(max(8, round(cap / ratio)))
+            cap *= 0.93
+        return list(dict.fromkeys(out_))
+
+    def render(items, scale):  # items: (text, px, ink left x, baseline y) at 1x -> the title's alpha at 1x
+        canvas = Image.new("L", (W * scale, H * scale), 0)
+        for t, px, x, y in items:
+            s = sprite(t, px)
+            canvas.paste(255, (round(x * scale), round((y - s["asc"]) * scale)), s[f"img{scale}"])
+        return canvas if scale == 1 else canvas.resize((W, H), Image.LANCZOS)
+
+    def bounds(items):
+        boxes = [(x, y - sprite(t, px)["asc"], x + sprite(t, px)["w"], y + sprite(t, px)["desc"])
+                 for t, px, x, y in items]
+        return (max(0, int(min(b[0] for b in boxes)) - 2), max(0, int(min(b[1] for b in boxes)) - 2),
+                min(W, int(max(b[2] for b in boxes)) + 3), min(H, int(max(b[3] for b in boxes)) + 3))
+
+    def hidden(px, box):  # what covers the letters: the character plus the halo kept clear round her
+        x0, y0, x1, y1 = box
+        halo = max(1.5, px * 0.035)
+        return np.maximum(person[y0:y1, x0:x1], np.clip(halo + 0.5 - away[y0:y1, x0:x1], 0, 1))
+
+    def legible(items) -> bool:
+        box = bounds(items)
+        if box[0] < 0 or box[2] > W or box[3] > H or box[2] <= box[0] or box[3] <= box[1]:
+            return False
+        x0, y0, x1, y1 = box
+        ink = np.asarray(render(items, 1))[y0:y1, x0:x1] > 127
+        letters, n = ndimage.label(ink, np.ones((3, 3)))
+        if not n:
+            return False
+        idx = np.arange(1, n + 1)
+        area = ndimage.sum(ink, letters, idx)
+        lost = ndimage.sum(hidden(items[0][1], box), letters, idx)
+        whole = area >= 0.15 * np.median(area)  # an apostrophe or a Khmer mark isn't a letter of its own
+        # stricter than "over a third hidden": at 20% an F already loses the ends of its arms and reads as an E or I
+        return (lost[whole] / area[whole]).max() <= 0.15 and lost.sum() / area.sum() <= 0.08
+
+    def cols_in(y0, y1, share):  # the character's columns across rows y0..y1 (those she fills `share` of)
+        rows = person[max(0, int(y0)): max(int(y0) + 1, int(y1))]
+        return np.where(rows.mean(0) > share)[0]
+
+    def split(top, pxs):  # (a)/(c): two halves of the title either side of her, tucked a little behind
+        cuts = sorted(range(1, len(toks)), key=lambda i: abs(len(join.join(toks[:i])) - len(join.join(toks[i:]))))
+        for px in pxs:
+            for i in cuts[:2]:
+                left, right = join.join(toks[:i]), join.join(toks[i:])
+                sl, sr = sprite(left, px), sprite(right, px)
+                y = top + max(sl["asc"], sr["asc"])
+                cols = cols_in(top, y + max(sl["desc"], sr["desc"]), 0.15)
+                if not len(cols):
+                    continue  # she isn't at this height: that's a straight line's job
+                for tuck in (0.05, 0.03, 0.015, 0):
+                    end, start = cols[0] + tuck * W, cols[-1] - tuck * W
+                    if start - end < px * 0.3:  # always at least a word space between the halves
+                        mid = (cols[0] + cols[-1]) / 2
+                        end, start = mid - px * 0.15, mid + px * 0.15
+                    if sl["w"] <= end - m and sr["w"] <= W - m - start:
+                        yield [(left, px, end - sl["w"], y), (right, px, start, y)]
+
+    def line(top, pxs):  # (b)/(c): one line, centred, or shifted so her head falls in a gap between words
+        whole = join.join(toks)
+        for px in pxs:
+            s = sprite(whole, px)
+            if s["w"] > W - 2 * m:
+                continue
+            y = top + s["asc"]
+            xs = [(W - s["w"]) / 2]
+            cols = cols_in(top, y + s["desc"], 0.15)
+            if len(cols) and not km:
+                centre = (cols[0] + cols[-1]) / 2
+                for i in range(1, len(toks)):
+                    gap = (sprite(join.join(toks[:i]), px)["w"] + s["w"] - sprite(join.join(toks[i:]), px)["w"]) / 2
+                    xs.append(min(max(centre - gap, m), W - m - s["w"]))
+            for x in xs:
+                yield [(whole, px, x, y)]
+
+    def panel_lines():  # one word per line; past four lines the shortest neighbours share one
+        rows = list(toks)
+        while len(rows) > 4:
+            i = min(range(len(rows) - 1), key=lambda k: len(rows[k]) + len(rows[k + 1]))
+            rows[i:i + 2] = [join.join(rows[i:i + 2])]
+        return rows
+
+    def panel(px, x_at, centre_y, align="left"):
+        rows = panel_lines()
+        ss = [sprite(r, px) for r in rows]
+        pitch = (ratio * px * 1.2) if not km else max(s["asc"] + s["desc"] for s in ss) * 1.05
+        y = centre_y - ((len(rows) - 1) * pitch + ss[-1]["asc"]) / 2 + ss[0]["asc"]
+        return [(r, px, x_at if align == "left" else x_at - s["w"] / 2, y + k * pitch)
+                for k, (r, s) in enumerate(zip(rows, ss))]
+
+    def panel_tall(items):
+        b = bounds(items)
+        return b[1] < mt * 0.8 or b[3] > H * 0.84  # keep the bottom for the info line
+
+    top_px = sizes(base_px * 0.22, base_px * 0.11)
+    tries = []
+    if len(toks) >= 2:
+        tries.append(("split", split(mt, top_px)))
+    tries.append(("line", line(mt, top_px)))
+    for k in (0.22, 0.32, 0.42) if W >= H else (0.2, 0.3):  # (c) lower down: behind / either side of the shoulders
+        if len(toks) >= 2:
+            tries.append(("split", split(H * k, top_px)))
+        tries.append(("line", line(H * k, top_px)))
+    chosen, layout, front, x_at = None, "", False, m
+    for name, gen in tries:
+        chosen = next((items for items in gen if legible(items)), None)
+        if chosen:
+            layout = name
+            break
+    if not chosen:  # (d) the side panel
+        layout, rows = "panel", panel_lines()
+        widest = lambda px: max(sprite(r, px)["w"] for r in rows)  # noqa: E731
+        if W >= H:
+            occupied = np.where((person > 0.5).mean(0) > 0.02)[0]
+            lfree = occupied[0] if len(occupied) else W
+            rfree = W - 1 - occupied[-1] if len(occupied) else W
+            on_left = lfree >= rfree or rfree < W * 0.3  # a sliver on the right is no panel: left, over her hair
+            x_at = W * 0.065 if on_left else occupied[-1] + W * 0.04
+            # the letters may run on behind her shoulder or hair a little, as long as they still read
+            room = max(lfree - W * 0.02, W * 0.47) - x_at if on_left else W * 0.95 - x_at
+            fits = [px for px in sizes(base_px * 0.157, base_px * 0.06) if widest(px) <= room]
+            fits = [px for px in fits if not panel_tall(panel(px, x_at, H * 0.44))] or fits[-1:] or [12]
+            # behind her, as big as still reads (a little higher or lower clears a shoulder or a fall of hair);
+            # below ~70 px caps it's no cover title any more, and it goes in front of her instead
+            chosen = next((items for items in (panel(px, x_at, H * cy) for px in fits if px * ratio >= base_px * 0.065
+                                               for cy in (0.44, 0.36, 0.52)) if not panel_tall(items)
+                           and legible(items)), None)
+            if not chosen:  # her hair fills both sides: the biggest that fits, in front of her
+                chosen, front = panel(fits[0], x_at, H * 0.44), True
+        else:  # 9:16: stacked and centred in the space above her head
+            head = np.where((person > 0.5).mean(1) > 0.02)[0]
+            free = head[0] if len(head) else H * 0.3
+            for px in sizes(base_px * 0.157, base_px * 0.06):
+                if widest(px) > W - 2 * m:
+                    continue
+                items = panel(px, W / 2, max(free / 2, 0), align="centre")
+                shift = mt - bounds(items)[1]
+                items = [(t, p, x, y + max(shift, 0)) for t, p, x, y in items]
+                if legible(items):
+                    chosen = items
+                    break
+            if not chosen:  # her head is at the very top: the title goes in front of her, low over her clothes
+                px = next((px for px in sizes(base_px * 0.24, 8) if widest(px) <= W - 2 * m), 8)
+                chosen, front = panel(px, W / 2, H * 0.76, align="centre"), True
+                lift = max(bounds(chosen)[3] - H * 0.93, 0)  # a tall Khmer block stays off the bottom edge
+                chosen = [(t, p, x, y - lift) for t, p, x, y in chosen]
+
+    # composing: the art (with a whisper of paper grain on the plain background), then the title through the
+    # character's mask, kept clear of her by a halo of background colour ~3.5% of the font size wide, so dark hair
+    # never melts into dark letters
+    px = chosen[0][1]
+    title = np.asarray(render(chosen, 2), dtype=np.float32) / 255
+    grain = np.random.default_rng(7).normal(0, 2.2, (H, W)).astype(np.float32)
+    canvas = art + (grain * (1 - person))[..., None]
+    halo = max(1.5, px * 0.035)
+    if front:  # over her: a background-coloured outline round the letters keeps them off the picture
+        near = ndimage.distance_transform_edt(title < 0.5)
+        rim = np.clip(halo * 1.6 + 0.5 - near, 0, 1)[..., None]
+        canvas = canvas * (1 - rim) + paper * rim
+        alpha = title
+    else:
+        alpha = title * (1 - np.maximum(person, np.clip(halo + 0.5 - away, 0, 1)))
+    canvas = canvas * (1 - alpha[..., None]) + accent * alpha[..., None]
+
+    # the one line of info: all caps, spaced +10%, accent at 70%, in a left corner (never bottom-right, where
+    # YouTube puts the duration); the genre leads when it's short enough to sit clear of her
     try:
         song = SongScript.load(job / "song.json")
-        # the first word of each: "Indie rock / synth-pop with ..." -> "INDIE ROCK"
-        mood = re.split(r"[,/(]| and | with ", song.mood)[0].strip().upper()[:18]
-        genre = re.split(r"[,/(]| and | with ", song.genre)[0].strip().upper()[:20]
+        genre = re.split(r"[,/(]| and | with ", song.genre)[0].strip().upper()
     except Exception:
-        mood, genre = "", ""
-    small = _fit_font(draw, "LYRIC VIDEO", heavy if lang != "km" else FONTS["en"]["Impact"], W, round(H * 0.034), 8)
-    left = [f"{datetime.now().year} {mood} MOOD".replace("  ", " "), f"{genre} SONG" if genre else ""]
-    right = ["LYRIC VIDEO", "CHILL / WORK / STUDY"]
-    for k, (l_txt, r_txt) in enumerate(zip(left, right)):
-        ly = round(H * 0.8) + k * round(H * 0.045)  # low, beside the clothes rather than the hair
-        if l_txt:
-            draw.text((round(W * 0.05), ly), l_txt, font=small, fill=ink)
-        rw = draw.textlength(r_txt, font=small)
-        draw.text((round(W * 0.95 - rw), ly), r_txt, font=small, fill=ink)
-    Image.composite(cover, words, person).save(out, quality=92)
+        genre = ""
+    info_file = "segoeuib.ttf" if font_path("segoeuib.ttf") else FONTS["en"]["Arial"]
+    info_px = round(base_px * 0.034 / (_mag_sprite("H", 200, info_file, cache)["asc"] / 200))
+    tbox = bounds(chosen)
+    pad = H * 0.03
+    x_info = x_at if layout == "panel" and not front and x_at < W / 2 else m  # under a left panel: its margin
+    spots = [H - H * 0.065, mt + _mag_sprite("H", info_px, info_file, cache)["asc"]]  # bottom-left, top-left
+    best = None
+    for label in ([f"{genre} · LYRIC VIDEO"] if genre and len(genre) <= 18 else []) + ["LYRIC VIDEO"]:
+        s = _mag_sprite(label, info_px, info_file, cache, track=0.1)
+        if x_info + s["w"] > W * 0.86:  # the bottom-right ~11% stays clear for the duration badge
+            continue
+        for y in spots:
+            box = (int(x_info), int(y - s["asc"]), int(x_info + s["w"]), int(y + s["desc"]) + 1)
+            if box[0] < tbox[2] + pad and tbox[0] - pad < box[2] and box[1] < tbox[3] + pad and tbox[1] - pad < box[3]:
+                continue  # on (or crowding) the title
+            near = float((away[box[1]:box[3], box[0]:box[2]] < W * 0.012).mean())  # on her, or touching her
+            if best is None or near < best[0] - 1e-3:
+                best = (near, label, y)
+        if best and best[0] < 0.005:
+            break
+    if best:
+        _, label, y = best
+        s = _mag_sprite(label, info_px, info_file, cache, track=0.1)
+        layer = Image.new("L", (W * 2, H * 2), 0)
+        layer.paste(255, (round(x_info * 2), round((y - s["asc"]) * 2)), s["img2"])
+        a = np.asarray(layer.resize((W, H), Image.LANCZOS), dtype=np.float32)[..., None] / 255 * 0.7
+        canvas = canvas * (1 - a) + accent * a
+    picture = Image.fromarray(np.clip(canvas + 0.5, 0, 255).astype(np.uint8))
+    for quality in (92, 88, 84, 80):  # 4:4:4 keeps the coloured letters' edges clean; YouTube takes < 2 MB
+        picture.save(out, quality=quality, subsampling=0, optimize=True)
+        if out.stat().st_size < 2_000_000:
+            break
     return True
 
 
@@ -1769,7 +2106,22 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
             cover_at = thumbs.best_frames(work / "joined.mp4", 1)[0]
     except Exception:
         cover_at = min(1.0, t / 2)
-    make_thumbnail(job, script.title, cover_at, lang)
+    # a scene drawn from a still picture (AI art, a photo): the cover uses that picture itself, sharper than any
+    # frame of the video (no punch-in, no particles, flashes or motion blur); the editor can still switch it back to
+    # a frame (image ""). Footage keeps the frame
+    cover_image, start = "", 0.0
+    for scene, picture, (_, _, length) in zip(script.scenes, picked, timed):
+        if start <= cover_at < start + length:
+            if picture and picture.is_file() and picture.suffix.lower() in IMAGE_EXTS and scene.layout == "fill":
+                from .visuals import project_path
+
+                try:
+                    cover_image = project_path(picture)
+                except Exception:  # outside the project folder: make_thumbnail only takes project paths
+                    cover_image = ""
+            break
+        start += length
+    make_thumbnail(job, script.title, cover_at, lang, image=cover_image)
 
     meta = _meta(job)
     meta["music"] = track.name if track else ""  # its credit goes into the description (music.credit)
