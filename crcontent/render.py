@@ -64,7 +64,10 @@ def _media_input(media: Path | None, length: float, start: float, size: tuple[in
     return ["-f", "lavfi", "-i", f"gradients=s={W}x{H}:r={FPS}:c0={c0}:c1={c1}:c2={c2}:n=3:speed=0.015"]
 
 
-CUT_ZOOMS = [1.0, 1.28, 1.12, 1.4, 1.18]  # the framings a clip punches between at its cuts (like fx.FRAMINGS)
+CUT_ZOOMS = [1.0, 1.18, 1.08, 1.25, 1.12]  # the framings a clip punches between at its cuts (like fx.FRAMINGS)
+# the scenes' grade without a look (like fx.CLEAN_GRADE): no darkening, a little contrast and colour (eq works in YUV:
+# no round trip to RGB for video clips)
+CLEAN_GRADE = "eq=contrast=1.04:saturation=1.08"
 
 
 def _pace_filter(W: int, H: int, impacts: list[float], cuts: list[float]) -> str:
@@ -84,9 +87,9 @@ def _pace_filter(W: int, H: int, impacts: list[float], cuts: list[float]) -> str
     framing = "1"
     for k in range(len(CUT_ZOOMS) - 1, 0, -1):
         framing = f"if(eq(mod({n},{len(CUT_ZOOMS)}),{k}),{CUT_ZOOMS[k]},{framing})"
-    z = f"({framing})*(1+0.11*({strike}))"
-    x = f"iw/2-iw/zoom/2+iw/zoom*0.025*({strike})*sin({T}*91)"
-    y = f"ih/2-ih/zoom/2+ih/zoom*0.02*({strike})*sin({T}*73)"
+    z = f"({framing})*(1+0.07*({strike}))"  # firm, not wild (like fx.render_shot's impacts)
+    x = f"iw/2-iw/zoom/2+iw/zoom*0.015*({strike})*sin({T}*91)"
+    y = f"ih/2-ih/zoom/2+ih/zoom*0.012*({strike})*sin({T}*73)"
     flash = f"0.85*pow({hits('t')},4)" if impacts else "0"
     return (f"zoompan=z='{z}':x='{x}':y='{y}':d=1:s={W}x{H}:fps={FPS},"
             f"eq=brightness='{flash}':eval=frame,setsar=1,format=yuv420p")
@@ -125,7 +128,9 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
         # (the hook and captions have their own box and outline, so they stay readable)
         grade = "eq=brightness=0.03:contrast=1.06:saturation=1.25"
     else:
-        grade = "eq=brightness=-0.06:saturation=1.1"  # slight darken so white captions always stay readable
+        # clean: no darkening (it lifted nothing but haze and crushed nothing either); captions carry their own
+        # outline and box, so they read on bright frames anyway
+        grade = CLEAN_GRADE
     photo = bool(footage and footage.suffix.lower() in IMAGE_EXTS)
     inputs = _media_input(footage, length, start, size)
     if layout == "split":
@@ -137,13 +142,14 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
               f"[b]scale={W}:{H}:force_original_aspect_ratio=decrease,setsar=1[fg];"
               f"[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p,{grade}[base]")
     elif photo:
-        # still photo: slow "Ken Burns" push-in so the scene doesn't look frozen
+        # still photo: slow, gentle "Ken Burns" push-in so the scene doesn't look frozen (8%: a camera move, not a
+        # zoom effect). Lanczos up to 2x first, so zoompan's crop window always shrinks rather than magnifies
         frames = round(length * FPS)
-        vf = (f"[0:v]scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase,"
+        vf = (f"[0:v]scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase:flags=lanczos,"
               f"crop={W * 2}:{H * 2},"
-              f"zoompan=z='min(1+{0.18 / max(frames, 1):.6f}*on,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-              f":d=1:s={W}x{H}:fps={FPS},setsar=1,format=yuv420p,"
-              + (f"{grade}[base]" if look or bright else "eq=brightness=-0.06[base]"))
+              f"zoompan=z='min(1+{0.08 / max(frames, 1):.6f}*on,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+              # RGB to YUV with the BT.709 matrix (FFmpeg's default is BT.601; finalize tags the video BT.709)
+              f":d=1:s={W}x{H}:fps={FPS},setsar=1,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,{grade}[base]")
     elif footage:
         vf = f"[0:v]{fit},{grade}[base]"
     else:
@@ -164,7 +170,9 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
     run(["ffmpeg", "-y", "-hide_banner", *inputs, *audio_in,
          "-filter_complex", f"{vf};[{audio_index}:a]aresample=44100,apad[a]",
          "-map", "[v]", "-map", "[a]", "-t", f"{length:.3f}",
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+         # near-lossless: an intermediate, encoded once more in finalize(); crf 20 here + the final encode was two
+         # generations of loss
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "10",
          "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
          str(out)])
 
@@ -177,7 +185,10 @@ def concat(clips: list[Path], workdir: Path, out_name: str) -> Path:
     return workdir / out_name
 
 
-MAX_RATE, BUF_SIZE = "12M", "24M"  # the final video's bitrate ceiling
+# the final video's bitrate ceiling: only there to stop a pathological frame (static, confetti) from ballooning the
+# file. Without film grain a clean picture sits far below it at crf 16; the platforms re-encode the upload anyway,
+# and the better the upload, the better what they make of it (YouTube's VP9 at 1440p from a 2560x1440 upload)
+MAX_RATE, BUF_SIZE = "30M", "60M"
 
 # Loudness. Shorts and Reels play back to back at about -14 LUFS; a quieter video sounds weak next to them (the
 # platforms turn loud videos down, but never quiet ones up). The voice is set to VOICE_LUFS first and the music
@@ -265,30 +276,50 @@ def _with_emoji(workdir: Path, ass_name: str) -> str:
     return name
 
 
+def _size(path: Path) -> tuple[int, int]:
+    """(width, height) of a video's picture."""
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                          "-of", "json", str(path)], stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True).stdout
+    stream = json.loads(out)["streams"][0]
+    return int(stream["width"]), int(stream["height"])
+
+
 def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
              music: Path | None, music_volume: float = 0.25, soundtrack: Path | None = None,
-             fade_out: float = 0.0, effects: list[tuple[Path, float, float]] = (), progress=None) -> None:
+             fade_out: float = 0.0, effects: list[tuple[Path, float, float]] = (), progress=None,
+             animation: bool = False, out_size: tuple[int, int] | None = None) -> None:
     """Burn captions, mix the audio (voice, ducked music, sound effects) at -14 LUFS, and write a web-optimized mp4.
 
     soundtrack replaces the video's own audio entirely (a music video's song); music is then ignored.
     fade_out: seconds the picture fades to black at the end (a music video's outro).
     effects: (sound file, start second, volume) sound effects (sfx.impact_track).
     progress: called with 0..1 during the final encode (minutes for a full song).
+    animation: tune the encoder for drawn pictures (flat colour, hard lines: anime, cartoons).
+    out_size: (width, height) to upload at, when it differs from the video's: the picture is scaled first (Lanczos)
+    and the captions drawn after, at the output size, so the text stays sharp (16:9 music videos go up at 2560x1440,
+    which gets YouTube's better VP9 encode even for a 1080p source).
     Runs inside workdir with relative names so the subtitles filter avoids Windows drive-letter escaping.
     """
     # complex (HarfBuzz) shaping is required for Khmer subscripts/vowel reordering; "auto" picks simple
     vf = f"ass={_with_emoji(workdir, ass_name)}:fontsdir=fonts:shaping=complex"
+    if out_size and tuple(out_size) != _size(workdir / video_name):
+        vf = f"scale={out_size[0]}:{out_size[1]}:flags=lanczos,setsar=1,{vf}"
     if fade_out > 0:
         length = duration(workdir / video_name)
         vf += f",fade=t=out:st={max(length - fade_out, 0):.3f}:d={fade_out:.3f}"
+    # tag the frames BT.709 (the encoder's -colorspace options alone don't reach frames that went through filters)
+    vf += ",setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv"
     mix = _mix_audio(workdir, video_name, music, music_volume, soundtrack, list(effects))
     cmd = ["ffmpeg", "-y", "-hide_banner", "-i", video_name, "-i", mix,
            "-filter_complex", f"[0:v]{vf}[v]", "-map", "[v]", "-map", "1:a"]
-    # quality-based, but capped: film grain and particles otherwise push 1080p to ~37 Mbps (1.3 GB for a song), and
-    # YouTube/TikTok re-encode to far less anyway (YouTube recommends 8-12 Mbps for 1080p uploads)
-    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-maxrate", MAX_RATE, "-bufsize", BUF_SIZE,
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", str(out.resolve())]
+    # the one encode that matters (the shots are near-lossless intermediates): quality-based at crf 16, slow preset,
+    # aq-mode 3 (keeps dark gradients from banding), keyframes every 2 s, BT.709 tags (what the shots are converted
+    # to, and how players show HD). Capped only against pathological frames (MAX_RATE)
+    cmd += ["-c:v", "libx264", "-preset", "slow", "-crf", "16", *(["-tune", "animation"] if animation else []),
+            "-aq-mode", "3", "-g", str(FPS * 2), "-bf", "2", "-maxrate", MAX_RATE, "-bufsize", BUF_SIZE,
+            "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+            "-color_range", "tv",
+            "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", "-shortest", str(out.resolve())]
     if progress:
         run_progress(cmd, duration(workdir / video_name), progress, cwd=workdir)
     else:
@@ -305,7 +336,7 @@ def thumbnail(video: Path, at: float, out: Path, workdir: Path, ass_name: str | 
     # punchier than the video itself: covers are seen tiny in a feed, so lift contrast/colour and sharpen
     W, H = size
     vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,"
-          f"eq=contrast=1.08:saturation=1.3,unsharp=5:5:0.8")
+          f"eq=contrast=1.08:saturation=1.3,cas=0.5")  # contrast-adaptive: crisp without unsharp's halos
     if ass_name:
         # darker edges pull the eye to the headline and keep it readable on busy frames
         vf += f",eq=brightness=-0.05,vignette=angle=PI/4.5,ass={_with_emoji(workdir, ass_name)}:fontsdir=fonts:shaping=complex"

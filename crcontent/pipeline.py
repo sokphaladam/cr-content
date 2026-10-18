@@ -536,7 +536,7 @@ PICTURE_PACES = {"fewer": (8.0, 24), "normal": (4.5, 40), "more": (3.0, 60), "co
 COVER_COLOURS = {"purple": (201, 182, 238), "light blue": (178, 214, 245), "orange": (250, 203, 168),
                  "aqua": (170, 228, 216), "pink": (246, 188, 212), "yellow": (250, 230, 160), "red": (240, 150, 152),
                  "blue": (160, 186, 240)}
-COVER_EFFECTS = ["bokeh", "sparkles", "glow", "grain"]
+COVER_EFFECTS = ["bokeh", "sparkles", "glow"]  # no film grain: on flat pastel it reads as noise, and costs bitrate
 COVER_SHAPE = "9:16"  # a cover character is drawn portrait (head to thighs with room above), then set on a flat frame
 
 
@@ -641,19 +641,19 @@ def cover_canvas(picture: Path, size: tuple[int, int], colour: str, prompt: str 
     or a sleeve running off a side or the top continues past it); a character the portrait shows whole is simply
     placed, untouched (painting next to it invents ghost limbs and smears its outline). Made once next to it."""
     import numpy as np
-    from PIL import Image, ImageDraw, ImageOps
+    from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
     from . import imagegen
 
     W, H = size
-    out = picture.with_name(f"{picture.stem}-cover17-{W}x{H}-{colour.replace(' ', '_')}.png")
+    out = picture.with_name(f"{picture.stem}-cover18-{W}x{H}-{colour.replace(' ', '_')}.png")
     if out.exists():
         return out
     target = np.array(COVER_COLOURS.get(colour, (246, 188, 212)), dtype=np.float32)
     flat, bg = _flatten(Image.open(picture).convert("RGB"), target, with_mask=True)
     fill = tuple(int(c) for c in target)
     if abs(flat.width / flat.height - W / H) < 0.05:  # a portrait frame: the picture's own shape, edge to edge
-        flat.resize((W, H), Image.LANCZOS).save(out)
+        _crisp(flat.resize((W, H), Image.LANCZOS)).save(out)
         return out
     person = np.asarray(ImageOps.invert(bg)) > 128
     cut = {"left": person[:, :4].mean() > 0.02, "right": person[:, -4:].mean() > 0.02, "top": person[:4].mean() > 0.02}
@@ -679,15 +679,95 @@ def cover_canvas(picture: Path, size: tuple[int, int], colour: str, prompt: str 
         # tidied before the detail pass too: a faint seam between old and new background would become a drawn line
         wide = imagegen.outpaint(canvas, mask, prompt, "anime", seed, log=log,
                                  tidy=lambda im: _drop_strays(im, whole, target, tolerance=34))
-        _drop_strays(wide, whole, target, tolerance=34).resize((W, H), Image.LANCZOS).save(out)
+        wide = _drop_strays(wide, whole, target, tolerance=34)
+        # The painted picture is only ~1344 wide (x the hi-res pass): blown up to the frame, the character went soft.
+        # So only the painted extension (past the portrait's cut edges) and the flat colour come from it; the
+        # character itself is the original portrait, resized once from its own resolution to its place in the frame.
+        # Scaled evenly by W/CW (1344x768 is 1.75:1, not 16:9) and cut to H, so the two line up and nothing stretches.
+        s = W / CW
+        tall = round(wide.height * W / wide.width)
+        dy = (tall - H) // 2
+        frame = wide.resize((W, tall), Image.LANCZOS).crop((0, dy, W, dy + H))
+        cw, ch = round(w * s), round(h * s)
+        cx, cy = round(x0 * s), round(y0 * s) - dy
+        sharp = _crisp(flat.resize((cw, ch), Image.LANCZOS))
+        # where the portrait's character is: a hair inside its outline (the painted continuation, drawn over the
+        # outline too, meets it there rather than a light rim), then feathered so no hard edge shows
+        alpha = ImageOps.invert(bg).resize((cw, ch), Image.BILINEAR).filter(ImageFilter.MinFilter(5)) \
+            .filter(ImageFilter.GaussianBlur(2.5))
+        # and faded out towards the cut edges over the band the painting redrew, so hair or a sleeve running off the
+        # portrait's side melts into its painted continuation instead of stopping at a seam
+        ramp = np.ones((ch, cw), dtype=np.float32)
+        fade = max(round(band * s), 2)
+        edge = np.linspace(0, 1, fade, dtype=np.float32)
+        if cut["left"]:
+            ramp[:, :fade] *= edge[None, :]
+        if cut["right"]:
+            ramp[:, -fade:] *= edge[::-1][None, :]
+        if cut["top"]:
+            ramp[:fade] *= edge[:, None]
+        alpha = Image.fromarray((np.asarray(alpha, dtype=np.float32) * ramp).astype(np.uint8))
+        frame.paste(sharp, (cx, cy), alpha)
+        frame.save(out)
         return out
     # nothing cut off (or nothing to paint with): the picture on the flat colour
     h = round(H * 0.92)
     w = round(flat.width * h / flat.height)
     frame = Image.new("RGB", (W, H), fill)
-    frame.paste(flat.resize((w, h), Image.LANCZOS), ((W - w) // 2, H - h))
+    frame.paste(_crisp(flat.resize((w, h), Image.LANCZOS)), ((W - w) // 2, H - h))
     frame.save(out)
     return out
+
+
+def _crisp(img):
+    """`img` (just resized) with a light unsharp mask: resizing softens the line art a little, and the video's
+    encoder softens it again, so the art is given back its edge once, gently (no halos on flat colour)."""
+    from PIL import ImageFilter
+
+    return img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=2))
+
+
+def title_spot(cover_png: Path, size: tuple[int, int], colour: str) -> tuple[int, int]:
+    """Where the neon title's centre goes on a one-cover video (pixels in a `size` frame): in the biggest empty
+    stretch of flat colour beside the character, not over its face. Landscape: the left or right third with fewer
+    character pixels in the upper 60% of the frame, at ~38% of the height; the left third's top is the now-playing
+    card's (~40..640 x 40..190 at 1920x1080), so a free left side gets the title below the card unless the right is
+    about as free. Portrait: the empty space above the head, centred."""
+    import numpy as np
+    from PIL import Image
+
+    W, H = size
+    target = np.array(COVER_COLOURS.get(colour, (246, 188, 212)), dtype=np.float32)
+    img = Image.open(cover_png).convert("RGB")
+    small = np.asarray(img.resize((max(img.width * 270 // img.height, 1), 270)), dtype=np.float32)
+    bg, _ = _background(small, target)
+    person = ~bg
+    h, w = person.shape
+    if H > W:  # above the head: the title sits midway between the top and the head (never higher than 12%)
+        rows = np.where(person[:, w // 6: w - w // 6].mean(1) > 0.02)[0]
+        head = rows[0] / h if len(rows) else 0.3
+        if head < 0.2:  # no room above the head (the card is up there too): low over the body, under the face;
+            return W // 2, round(H * 0.8)  # the title is gone before the first sung line, so the lyrics never meet it
+        return W // 2, round(H * min(max(head / 2, 0.12), 0.16))
+    upper = person[: round(h * 0.6)]
+    third = w // 3
+    left, right = upper[:, :third].mean(), upper[:, -third:].mean()
+
+    def centre(cols: np.ndarray, offset: int) -> int:
+        """The middle of the widest run of empty columns in a third (in frame pixels)."""
+        best, start, at = 0, 0, (0, len(cols) - 1)
+        for i, empty in enumerate(cols < 0.03):
+            if not empty:
+                start = i + 1
+            elif i - start + 1 > best:
+                best, at = i - start + 1, (start, i)
+        return round(((at[0] + at[1] + 1) / 2 + offset) * W / w)
+
+    y = round(H * 0.38)
+    if right <= left * 1.5 + 0.01:  # the right is (about) as free: it has no card in the way
+        return centre(upper[:, -third:].mean(0), w - third), y
+    # the left is clearly freer: below the card (it ends at ~18% of the height), clear of it
+    return centre(upper[:, :third].mean(0), 0), max(y, round(H * 0.42))
 
 
 # words in an idea -> the cover colour they ask for (longer phrases are matched first: "light blue" before "blue")
@@ -1427,6 +1507,8 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
         neon = style.highlight if _hex_brightness(style.highlight) < 0.9 else ("#FF4FD8" if cool else "#5CF2FF")
         title = (neon_title(song.title), TITLE_INTRO[0], end, neon)
         log(f"      the title in neon until {end:.1f}s")
+    # on a held cover, the title goes in the empty colour beside the character (not across its face)
+    title_at = title_spot(work / COVER_FRAME, size, cover_colour(song.title, idea)) if title and held else None
 
     # 3. Karaoke captions
     log("[3/4] Captions")
@@ -1438,7 +1520,7 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
                 "accent": accent}
     hot = {w for w in (_bare_word(t) for t in neon_title(song.title).split()) if len(w) > 2}  # glitch hits these
     (work / "captions.ass").write_text(build_karaoke_ass(lines, profile, size=size, style=style, title=title,
-                                                         now_playing=card, glitch_words=hot),
+                                                         now_playing=card, glitch_words=hot, title_at=title_at),
                                        encoding="utf-8")
     _install_font(profile, work / "fonts", FONTS.get(lang, FONTS["en"]).get(style.font, ""))
 
@@ -1446,8 +1528,11 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     log("[4/4] Final render")
     final = job / "video.mp4"
     report(0.0, "Mixing the sound")
+    # drawn pictures: x264 tuned for flat colour and line art; a 1080p landscape video goes up as 1440p (lanczos,
+    # before the lyrics are burnt in so they stay sharp), which YouTube serves in VP9 at a far higher bitrate
     finalize(work, "joined.mp4", "captions.ass", final, None, soundtrack=mix, fade_out=2.0,
-             progress=lambda f: report(f, f"Encoding the video {_clock(f * total)} / {_clock(total)}"))
+             progress=lambda f: report(f, f"Encoding the video {_clock(f * total)} / {_clock(total)}"),
+             animation=bool(drawn), out_size=(2560, 1440) if size == (1920, 1080) else None)
     try:
         cover_at = thumbs.best_frames(work / "joined.mp4", 1)[0]
     except Exception:
@@ -1640,8 +1725,9 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
             effects = [*(e for e in base_fx if not (i == 0 and e == "vignette")), *scene.effects]
             if art_style and picked[i].parent.name != "gen":
                 # a real photo (in place of a drawing that got the subject wrong): the drawing's anime effects
-                # (sparkles, speed lines, glow) look fake on it; keep only film grain and the flash
-                effects = ["grain", *(e for e in scene.effects if e == "flash")]
+                # (sparkles, speed lines, glow) look fake on it; keep only the flash (no film grain: it muddies the
+                # picture and eats the encoder's bitrate)
+                effects = [e for e in scene.effects if e == "flash"]
             fx.render_shot(picked[i], length, clip, motion=scene.motion or MOTION_CYCLE[i % len(MOTION_CYCLE)],
                            effects=effects,
                            voice=mp3, seed=i, impacts=impacts, cuts=cuts, focus=subject_focus(picked[i]),
@@ -1673,7 +1759,8 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
     log("[5/5] Final render")
     final = job / "video.mp4"
     track = pick_music(music, script.mood)
-    finalize(work, "joined.mp4", "captions.ass", final, track, effects=sfx.impact_track(pacing.sound_times(hits)))
+    finalize(work, "joined.mp4", "captions.ass", final, track, effects=sfx.impact_track(pacing.sound_times(hits)),
+             animation=bool(art_style))  # drawn scenes: x264 tuned for flat colour and line art
     try:
         if 1 <= script.key_scene <= len(clips):  # the cover shows the key visual
             k = script.key_scene - 1

@@ -134,8 +134,9 @@ def release_depth() -> None:
 # ---------- camera ----------
 
 # the framings a held picture cuts between (render_shot's `cuts`): (extra zoom, how far the frame moves toward the
-# subject: 1 = centred on it); always on the subject, at different sizes. The first is the shot as planned
-FRAMINGS = [(1.0, 0.0), (1.3, 1.0), (1.14, 0.6), (1.45, 1.0), (1.2, 0.8)]
+# subject: 1 = centred on it); always on the subject, at different sizes. The first is the shot as planned. Kept
+# moderate: a 1.45x punch-in on a 1-megapixel picture shows its pixels, and big jumps read as amateur
+FRAMINGS = [(1.0, 0.0), (1.18, 1.0), (1.08, 0.6), (1.25, 1.0), (1.12, 0.8)]
 
 
 def _subject(depth) -> tuple[float, float]:
@@ -161,17 +162,18 @@ def _camera(motion: str, p: float, room_x: float, room_y: float) -> tuple[float,
 
     room_x/room_y: how far the centre can move at zoom 1 before the frame shows past the picture's edge."""
     e = _ease(p)
+    # gentle on purpose: a slow 8% push reads as a camera move, 16% as a zoom effect (and magnifies the picture)
     if motion == "push_in":
-        return 1.0 + 0.16 * e, 0.0, 0.0, 0.0
+        return 1.0 + 0.08 * e, 0.0, 0.0, 0.0
     if motion == "pull_out":
-        return 1.16 - 0.16 * e, 0.0, 0.0, 0.0
+        return 1.08 - 0.08 * e, 0.0, 0.0, 0.0
     if motion in ("pan_left", "pan_right"):
-        z = 1.14
+        z = 1.08
         reach = min(room_x + (1 - 1 / z), 0.6) * 0.9
         x = reach * (1 - 2 * e) * (1 if motion == "pan_left" else -1)
         return z, x, 0.0, 0.0
     if motion in ("tilt_up", "tilt_down"):
-        z = 1.14
+        z = 1.08
         reach = min(room_y + (1 - 1 / z), 0.6) * 0.9
         y = reach * (1 - 2 * e) * (1 if motion == "tilt_up" else -1)
         return z, 0.0, y, 0.0
@@ -187,13 +189,21 @@ def _camera(motion: str, p: float, room_x: float, room_y: float) -> tuple[float,
 # ---------- effects ----------
 
 class _Particles:
-    """Particles drifting through the frame, drawn as soft dots on a quarter-size canvas."""
+    """Particles drifting through the frame: small, crisp, faint dots. The round ones (a gaussian is separable) are
+    drawn as one matrix product of per-particle row and column profiles, so they're cheap at full resolution; rain
+    streaks and tumbling petals aren't separable and are drawn per pixel, on the smaller canvas render_shot gives
+    them (still sharp: the old quarter-size canvas blew every flake up into a blurry blob). `aspect`: the frame's
+    width / height, when the canvas pixels aren't square."""
 
-    def __init__(self, kind: str, w: int, h: int, seed: int):
+    ROUND = ("dust", "snow", "embers", "sparkles", "bokeh")
+
+    def __init__(self, kind: str, w: int, h: int, seed: int, aspect: float | None = None):
         import torch
 
         g = torch.Generator().manual_seed(seed)
-        n = {"dust": 70, "snow": 140, "embers": 60, "sparkles": 50, "petals": 36, "bokeh": 22, "rain": 170}[kind]
+        self.aspect = aspect or w / h
+        # few: a frame full of flakes is noise (and x264 spends the bitrate on them instead of the picture)
+        n = {"dust": 40, "snow": 70, "embers": 45, "sparkles": 36, "petals": 26, "bokeh": 12, "rain": 170}[kind]
         self.kind, self.w, self.h = kind, w, h
         self.pos = torch.rand(n, 2, generator=g)
         self.size = torch.rand(n, generator=g)
@@ -206,9 +216,11 @@ class _Particles:
         self.color = {"dust": (1.0, 0.94, 0.82), "snow": (1.0, 1.0, 1.0), "embers": (1.0, 0.55, 0.18),
                       "sparkles": (1.0, 0.97, 0.85), "petals": (1.0, 0.72, 0.82),
                       "bokeh": (1.0, 0.97, 0.99), "rain": (0.86, 0.92, 1.0)}[kind]
-        ys, xs = torch.meshgrid(torch.linspace(0, 1, h), torch.linspace(0, 1, w), indexing="ij")
         dev = _device()
-        self.xs, self.ys = xs.to(dev), ys.to(dev)
+        self.x1, self.y1 = torch.linspace(0, 1, w, device=dev), torch.linspace(0, 1, h, device=dev)
+        if kind not in self.ROUND:  # the per-pixel kinds need the whole grid
+            ys, xs = torch.meshgrid(self.y1, self.x1, indexing="ij")
+            self.xs, self.ys = xs, ys
         self.pos, self.size, self.phase, self.vel = (t.to(dev) for t in (self.pos, self.size, self.phase, self.vel))
         self.colorv = torch.tensor(self.color, device=dev).view(3, 1, 1)
 
@@ -218,30 +230,38 @@ class _Particles:
 
         sway = torch.stack([torch.sin(self.phase + t * 0.9) * 0.01, torch.zeros_like(self.phase)], 1)
         p = (self.pos + self.vel * t + sway) % 1.0
-        radius = {"dust": 0.006, "snow": 0.0035, "embers": 0.0028, "sparkles": 0.0022, "petals": 0.006,
-                  "bokeh": 0.02, "rain": 0.0011}[self.kind]
-        r = radius * (0.5 + self.size)
-        aspect = self.w / self.h
-        dx = (self.xs[None] - p[:, 0, None, None]) * aspect
-        dy = self.ys[None] - p[:, 1, None, None]
+        # radius in frame heights: snow is a fleck, not a blob over the subject's face
+        radius = {"dust": 0.0032, "snow": 0.0018, "embers": 0.0018, "sparkles": 0.0014, "petals": 0.0045,
+                  "bokeh": 0.014, "rain": 0.0008}[self.kind]
+        # never thinner than ~0.6 px: a sub-pixel gaussian flickers in brightness as it crosses the pixel grid
+        aspect = self.aspect
+        r = (radius * (0.5 + self.size)).clamp(min=0.6 * aspect / self.w)
         if self.kind == "rain":  # thin streaks falling fast at a slight slant
+            dx = (self.xs[None] - p[:, 0, None, None]) * aspect
+            dy = self.ys[None] - p[:, 1, None, None]
             dx = dx - dy * 0.12
             d2 = dx * dx + (dy / 30) ** 2
             streaks = (torch.exp(-d2 / (r * r)[:, None, None] / 2) * (0.25 + 0.3 * self.size)[:, None, None]).sum(0)
-            return streaks.clamp(max=0.8)[None] * self.colorv
-        if self.kind == "petals":  # small tumbling ovals
-            ang = self.phase[:, None, None] + t * 2.0
-            dx, dy = dx * torch.cos(ang) - dy * torch.sin(ang), (dx * torch.sin(ang) + dy * torch.cos(ang)) * 2.2
-        d2 = dx * dx + dy * dy
-        bright = 0.45 + 0.55 * self.size
+            return (streaks.clamp(max=0.8) * 0.6)[None] * self.colorv
+        bright = (0.45 + 0.55 * self.size) * 0.6  # faint: they sit over the picture, they aren't the picture
         if self.kind == "sparkles":
             bright = bright * (0.5 + 0.5 * torch.sin(self.phase + t * 5.0)).clamp(min=0) ** 3 * 2.0
         if self.kind == "embers":
             bright = bright * (0.75 + 0.25 * torch.sin(self.phase + t * 7.0))
         if self.kind == "bokeh":  # big, faint, slowly breathing discs of out-of-focus light
-            bright = bright * 0.3 * (0.7 + 0.3 * torch.sin(self.phase + t * 0.7))
-        blobs = (torch.exp(-d2 / (r * r)[:, None, None] / 2) * bright[:, None, None]).sum(0).clamp(max=1.2)
-        return blobs[None] * self.colorv
+            bright = bright * 0.2 * (0.7 + 0.3 * torch.sin(self.phase + t * 0.7))
+        if self.kind == "petals":  # small tumbling ovals
+            dx = (self.xs[None] - p[:, 0, None, None]) * aspect
+            dy = self.ys[None] - p[:, 1, None, None]
+            ang = self.phase[:, None, None] + t * 2.0
+            dx, dy = dx * torch.cos(ang) - dy * torch.sin(ang), (dx * torch.sin(ang) + dy * torch.cos(ang)) * 2.2
+            blobs = (torch.exp(-(dx * dx + dy * dy) / (r * r)[:, None, None] / 2) * bright[:, None, None]).sum(0)
+        else:  # exp(-(dx^2 + dy^2)) = exp(-dx^2) * exp(-dy^2): sum over particles of a row profile times a column one
+            inv = 1 / (2 * r * r)[:, None]
+            gx = torch.exp(-((self.x1[None] - p[:, 0, None]) * aspect) ** 2 * inv)  # (n, w)
+            gy = torch.exp(-(self.y1[None] - p[:, 1, None]) ** 2 * inv) * bright[:, None]  # (n, h)
+            blobs = gy.T @ gx
+        return blobs.clamp(max=1.2)[None] * self.colorv
 
 
 class _LightLeak:
@@ -255,7 +275,7 @@ class _LightLeak:
         colours = [(1.0, 0.2, 0.75), (0.25, 0.55, 1.0), (0.7, 0.25, 1.0)] if neon else             [(1.0, 0.45, 0.15), (1.0, 0.25, 0.35), (1.0, 0.7, 0.3), (0.5, 0.35, 1.0)]
         self.blobs = [(rnd.uniform(-0.3, 1.3), rnd.uniform(-0.2, 1.2), rnd.uniform(-0.05, 0.05), rnd.uniform(-0.03, 0.03),
                        rnd.uniform(0.35, 0.6), rnd.choice(colours)) for _ in range(rnd.randint(2, 3))]
-        self.gain = 0.62 if neon else 0.38  # neon has to read as coloured light, film light only warms
+        self.gain = 0.45 if neon else 0.22  # neon has to read as coloured light, film light only warms (a hint, not a haze)
         import torch
 
         ys, xs = torch.meshgrid(torch.linspace(0, 1, h), torch.linspace(0, 1, w), indexing="ij")
@@ -489,6 +509,28 @@ def _rounded_mask(w: int, h: int, radius: float, dev, half):
 
 # ---------- the shot ----------
 
+BLOOM_FROM, BLOOM_KNEE = 0.82, 0.08  # luma where bloom starts, and how softly it fades in around that
+# the shot's grade without a look: no darkening, a true black point and a little contrast and colour (eq pivots
+# contrast at mid grey, so whites lift as blacks drop), then a light sharpen. The colour matrix is set on purpose:
+# FFmpeg converts RGB to YUV with BT.601 by default, while players show HD video as BT.709 (a slight colour shift)
+CLEAN_GRADE = "colorlevels=rimin=0.02:gimin=0.02:bimin=0.02,eq=contrast=1.05:saturation=1.06"
+# contrast-adaptive: crisper lines without the halos of unsharp. On the luma plane of the YUV picture only: no
+# colour fringes, and ~3x faster than on packed RGB (a 5-minute held shot is 9000 frames)
+SHARPEN = "cas=0.35:planes=1"
+TO_BT709 = ("scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,"
+            "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv")  # tags the frames too
+BT709_TAGS = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
+
+
+def _zoom_reach(motion: str, parallax: float, beats: bool, cuts: bool, impacts: bool) -> float:
+    """The most a shot magnifies its picture (relative to cover-fit at zoom 1): the camera move's peak, times the
+    beat punch, the tightest cut framing and an impact punch, and the 3D dolly's push on its near layer."""
+    z = 1.055 if motion == "breathe" else max(_camera(motion, i / 20, 0.0, 0.0)[0] for i in range(21))
+    if motion == "dolly_3d":
+        z *= 1 + 0.09 * max(parallax, 0) * 1.2
+    return z * (1.025 if beats else 1) * (max(f for f, _ in FRAMINGS) if cuts else 1) * (1.07 if impacts else 1)
+
+
 def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] = (WIDTH, HEIGHT),
                 motion: str = "push_in", effects: tuple[str, ...] | list[str] = (), beats: list[float] = (),
                 voice: Path | None = None, look: str = "", seed: int = 0, parallax: float = 1.0,
@@ -523,16 +565,24 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
     dev = _device()
     half = torch.float16 if dev.type == "cuda" else torch.float32
     pic = Image.open(image).convert("RGB")
-    src = torch.from_numpy(np.array(pic)).to(dev).permute(2, 0, 1)[None].to(half) / 255.0
-    sh, sw = src.shape[-2:]
+    sw, sh = pic.size
 
     # cover-fit: the part of the picture (in its -1..1 grid units) the frame shows at zoom 1
     frame_aspect, pic_aspect = W / H, sw / sh
     fx, fy = (frame_aspect / pic_aspect, 1.0) if pic_aspect > frame_aspect else (1.0, pic_aspect / frame_aspect)
     room_x, room_y = 1 - fx, 1 - fy
+    motion = motion if motion in MOTIONS else "push_in"
+    # resample the picture ONCE with Lanczos to what the closest framing needs: grid_sample's bicubic is fine for the
+    # small per-frame moves, but blurry when it has to magnify a 1-megapixel picture onto a 1080p frame, and it
+    # aliases (shimmers) when it has to shrink a much bigger one. The grid is in normalized -1..1 units, so the move,
+    # the depth map and every effect stay aligned whatever size the picture ends up
+    zmax = _zoom_reach(motion, parallax, bool(beats), bool(cuts), bool(impacts))
+    scale = W * min(zmax, 1.6) / fx / sw  # 1:1 sampling at the tightest framing (capped at 1.6x the frame)
+    if scale > 1.02 or scale < 1 / 1.3:
+        pic = pic.resize((max(round(sw * scale), 2), max(round(sh * scale), 2)), Image.LANCZOS)
+    src = torch.from_numpy(np.array(pic)).to(dev).permute(2, 0, 1)[None].to(half) / 255.0
     ys, xs = torch.meshgrid(torch.linspace(-1, 1, H, device=dev, dtype=half),
                             torch.linspace(-1, 1, W, device=dev, dtype=half), indexing="ij")
-    motion = motion if motion in MOTIONS else "push_in"
     depth = None
     tape = tape if tape in TAPES else ""
     if (motion.endswith("_3d") and parallax > 0) or fade:
@@ -542,14 +592,19 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
             print(f"  ! depth map unavailable ({type(e).__name__}); flat camera move")
     effects = set(effects)
     lw, lh = W // 4, H // 4
-    particles = [_Particles(k, lw, lh, seed + i) for i, k in enumerate(PARTICLES) if k in effects]
+    # round particles are cheap at full size (_Particles), petals are drawn at half size and rain at half width (its
+    # streaks are 30x longer than wide: height resolution is wasted on them): crisp either way
+    canvas = {"rain": (W // 2, H // 4), "petals": (W // 2, H // 2)}
+    particles = [_Particles(k, *canvas.get(k, (W, H)), seed + i, aspect=W / H)
+                 for i, k in enumerate(PARTICLES) if k in effects]
     leak = _LightLeak(lw // 2, lh // 2, seed) if "light_leak" in effects else None
     neon = _LightLeak(lw // 2, lh // 2, seed + 11, neon=True) if "neon_glow" in effects else None
     trails = _LightTrails(lw, lh, seed) if "light_trails" in effects else None
     vignette = None
     if "vignette" in effects:
         r = torch.sqrt((xs.float() * (W / max(W, H))) ** 2 + (ys.float() * (H / max(W, H))) ** 2)
-        vignette = (1 - 0.42 * ((r - 0.35) / 0.75).clamp(0, 1) ** 1.6).to(half)[None, None]
+        # a light touch: it should guide the eye to the subject, not read as a dark ring
+        vignette = (1 - 0.18 * ((r - 0.35) / 0.75).clamp(0, 1) ** 1.6).to(half)[None, None]
     angle = torch.atan2(ys.float() * H, xs.float() * W) if "speed_lines" in effects else None
     # distance from the centre in pixels, 1 at the corners: the lines only cover the edges of the frame
     radius = (torch.sqrt((xs.float() * W) ** 2 + (ys.float() * H) ** 2) / math.hypot(W, H)) if angle is not None else None
@@ -568,10 +623,11 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
         screen = _rounded_mask(W, H, min(W, H) * 0.035, dev, half)
         x0, y0 = (OW - W) // 2, (OH - H) // 2
     skip = 0.3 * deck.wear ** 1.5 if deck and tape == "play" else 0.0  # worn tapes skip frames
+    luma_w = torch.tensor([0.2126, 0.7152, 0.0722], device=dev, dtype=half).view(1, 3, 1, 1)  # BT.709 luma
     prev = None
 
     frames = max(round(length * FPS), 1)
-    grade = "eq=brightness=-0.03:saturation=1.04,"  # a touch darker, so white captions always read
+    grade = CLEAN_GRADE + ","  # no darkening (captions have their own outline/box): true blacks
     if look:
         from .styles import look_filter
 
@@ -581,8 +637,12 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
     with open(log, "w", encoding="utf-8", errors="replace") as err:
         proc = subprocess.Popen(
             ["ffmpeg", "-y", "-hide_banner", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{OW}x{OH}", "-r", str(FPS),
-             "-i", "-", *audio_in, "-filter_complex", f"[0:v]{grade}setsar=1,format=yuv420p[v];[1:a]aresample=44100,apad[a]",
-             "-map", "[v]", "-map", "[a]", "-t", f"{length:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+             "-i", "-", *audio_in, "-filter_complex",
+             f"[0:v]{grade}setsar=1,{TO_BT709},{SHARPEN}[v];[1:a]aresample=44100,apad[a]",
+             # near-lossless: this is an intermediate (render.finalize encodes the video once more for upload), so
+             # it must not throw detail away twice; without grain a held picture is cheap even at crf 10
+             "-map", "[v]", "-map", "[a]", "-t", f"{length:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "10",
+             *BT709_TAGS,
              "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", str(out)],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=err)
         try:
@@ -604,7 +664,7 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                                              0.015 * math.sin(2 * math.pi * t / 27), 0.01 * math.sin(2 * math.pi * t / 22), 0.0)
                     else:
                         zoom, cx, cy, par = _camera(motion, p, room_x, room_y)
-                    zoom *= 1 + 0.035 * hit
+                    zoom *= 1 + 0.025 * hit
                     # cut to the next framing of the picture (each holds until the next cut)
                     if cuts:
                         fz, pull = FRAMINGS[sum(1 for c in cuts if t >= c) % len(FRAMINGS)]
@@ -614,9 +674,9 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                     since_hit = [t - b for b in impacts if t >= b]
                     strike = math.exp(-min(since_hit) * 7) if since_hit else 0.0  # 1 on the hit, gone in ~0.4 s
                     if strike > 0.01:
-                        zoom *= 1 + 0.11 * strike
-                        cx += 0.035 * strike * math.sin(t * 91 + 1.3) / zoom  # shake
-                        cy += 0.03 * strike * math.sin(t * 73) / zoom
+                        zoom *= 1 + 0.07 * strike
+                        cx += 0.021 * strike * math.sin(t * 91 + 1.3) / zoom  # shake
+                        cy += 0.018 * strike * math.sin(t * 73) / zoom
                     # keep the frame inside the picture (punch-ins and shakes can push it past an edge)
                     cx = min(max(cx, -1 + fx / zoom), 1 - fx / zoom)
                     cy = min(max(cy, -1 + fy / zoom), 1 - fy / zoom)
@@ -649,10 +709,14 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                         frame = torch.cat([r_ch, frame[:, 1:2], b_ch], 1)
                     frame = frame.clamp(0, 1)
                     if "glow" in effects:
+                        # only real highlights glow: by luma, from 0.82 with a soft knee. Per channel from 0.62 a
+                        # pastel sky (178,214,245) bloomed whole and the frame went hazy
                         small = F.avg_pool2d(frame, 4)
-                        bright = ((small - 0.62).clamp(min=0) * 2.2)
+                        luma = (small * luma_w).sum(1, keepdim=True)
+                        knee = (luma - (BLOOM_FROM - BLOOM_KNEE)).clamp(0, 2 * BLOOM_KNEE) ** 2 / (4 * BLOOM_KNEE)
+                        bright = small * (torch.maximum(knee, luma - BLOOM_FROM) / luma.clamp(min=1e-3))
                         bloom = F.interpolate(_blur(bright, 6), size=(H, W), mode="bilinear", align_corners=False)
-                        frame = _screen(frame, bloom * 0.75)
+                        frame = _screen(frame, (bloom * 1.3).clamp(0, 1))
                     if leak is not None:
                         frame = _screen(frame, F.interpolate(leak.layer(t)[None].to(half), size=(H, W), mode="bilinear",
                                                              align_corners=False))
@@ -662,9 +726,15 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                     if trails is not None:
                         streaks = F.interpolate(trails.layer(t)[None].to(half), size=(H, W), mode="bilinear", align_corners=False)
                         frame = _screen(frame, streaks + _blur(streaks, 6) * 0.6)  # a soft glow around each streak
+                    # flakes pass behind the subject (where the depth map is loaded anyway), not over their face
+                    shield = None
+                    if particles and d is not None:
+                        shield = 1 - 0.7 * ((d - 0.55) / 0.2).clamp(0, 1)[None, None].to(half)
                     for pt in particles:
-                        frame = _screen(frame, F.interpolate(pt.layer(t)[None].to(half), size=(H, W), mode="bilinear",
-                                                             align_corners=False))
+                        dots = pt.layer(t)[None].to(half)
+                        if dots.shape[-1] != W:
+                            dots = F.interpolate(dots, size=(H, W), mode="bilinear", align_corners=False)
+                        frame = _screen(frame, dots if shield is None else dots * shield)
                     if angle is not None:
                         g = torch.Generator(device=dev).manual_seed(seed * 1000 + n // 2)  # lines change every 2 frames
                         spokes = torch.rand(420, generator=g, device=dev)
@@ -696,9 +766,8 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
                             ring = torch.exp(-((dist - (0.12 + age * 3.2)) / 0.07) ** 2) * (0.7 * strike)
                             frame = _screen(frame, ring[None, None].expand(1, 3, H, W))
                         frame = frame + (1 - frame) * (0.92 * strike ** 4)  # white flash: 2-3 frames
-                    if "grain" in effects:
-                        frame = frame + torch.randn(1, 1, H // 2, W // 2, device=dev, dtype=half).repeat_interleave(
-                            2, -1).repeat_interleave(2, -2) * 0.028
+                    if "grain" in effects:  # fine, faint, luma only and per pixel (2x2 blocks turned to mush in x264)
+                        frame = frame + torch.randn(1, 1, H, W, device=dev, dtype=half) * 0.010
                     frame = frame.clamp(0, 1)
                     if screen is not None:  # the picture on a dark screen, its light spilling around it
                         spill = F.interpolate(frame, size=(max(H // 16, 1), max(W // 16, 1)), mode="area")
@@ -721,6 +790,8 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
 
 def default_effects(style: str, music: bool) -> list[str]:
     """A sensible effect set for an art style when the director didn't pick one."""
-    base = {"anime": ["glow", "light_leak", "grain", "vignette"], "cinematic": ["grain", "vignette", "light_leak"],
-            "flat": ["grain"]}.get(style, ["vignette"])
+    # no grain by default: it reads as noise on phone screens and x264 smears it (clean beats "filmic" for shorts);
+    # it's still there when a director picks it
+    base = {"anime": ["glow", "light_leak", "vignette"], "cinematic": ["vignette", "light_leak"],
+            "flat": []}.get(style, ["vignette"])
     return base + (["chromatic"] if music and style != "flat" else [])

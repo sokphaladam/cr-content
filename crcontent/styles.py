@@ -150,23 +150,25 @@ def preset_style(name: str) -> LyricStyle:
                       **{k: v for k, v in p.items() if k not in ("label", "font", "font_km")})
 
 
-# Colour grades for the footage: applied to every shot so clips from different sources look like one film.
+# Colour grades for the footage: applied to every shot so clips from different sources look like one film. Kept
+# light: no grade darkens by more than 0.03 (pastel pictures turn muddy), vignettes are gentle, and film grain is
+# faint (animated noise at any strength eats the encoder's bitrate and turns to blocks after upload).
 LOOKS: dict[str, dict[str, str]] = {
-    "natural": {"label": "Natural", "vf": "eq=brightness=-0.04:saturation=1.08"},
+    "natural": {"label": "Natural", "vf": "eq=saturation=1.08"},
     "cinematic": {"label": "Cinematic", "vf": (
         "colorbalance=rs=-0.06:gs=-0.01:bs=0.08:rh=0.07:gh=0.02:bh=-0.07,"
-        "eq=contrast=1.1:saturation=1.05:brightness=-0.05,vignette=angle=PI/5")},
+        "eq=contrast=1.1:saturation=1.05:brightness=-0.03,vignette=angle=PI/6")},
     "film": {"label": "Warm film", "vf": (
         "colorbalance=rs=0.04:bs=-0.04:rm=0.05:bm=-0.03,eq=contrast=1.05:saturation=0.88:brightness=-0.03,"
-        "noise=alls=7:allf=t,vignette=angle=PI/5")},
+        "noise=alls=2:allf=t,vignette=angle=PI/6")},
     "moody": {"label": "Moody", "vf": (
-        "eq=contrast=1.12:saturation=0.72:brightness=-0.09:gamma=0.95,colorbalance=bs=0.05:bm=0.03,"
-        "vignette=angle=PI/4")},
+        "eq=contrast=1.12:saturation=0.72:brightness=-0.03:gamma=0.95,colorbalance=bs=0.05:bm=0.03,"
+        "vignette=angle=PI/5")},
     "vibrant": {"label": "Vibrant", "vf": "eq=contrast=1.06:saturation=1.35:brightness=-0.03,unsharp=5:5:0.4"},
     "dusk": {"label": "Neon dusk", "vf": (  # pink shadows, orange highlights: synthwave sunsets and city nights
         "colorbalance=rs=0.09:gs=-0.07:bs=0.07:rm=0.05:gm=-0.04:bm=0.02:rh=0.10:gh=0.03:bh=-0.09,"
-        "eq=contrast=1.08:saturation=1.25:brightness=-0.04,vignette=angle=PI/5")},
-    "mono": {"label": "Black & white", "vf": "hue=s=0,eq=contrast=1.15:brightness=-0.04,noise=alls=5:allf=t,vignette=angle=PI/5"},
+        "eq=contrast=1.08:saturation=1.25:brightness=-0.03,vignette=angle=PI/6")},
+    "mono": {"label": "Black & white", "vf": "hue=s=0,eq=contrast=1.15:brightness=-0.03,noise=alls=2:allf=t,vignette=angle=PI/6"},
 }
 
 
@@ -248,7 +250,7 @@ class CaptionStyle(BaseModel):
     font: str = ""  # "" = the language's caption font
     size: str = "m"
     y: float = 0.62  # middle of the caption
-    headline_y: float = 0.12  # top of the scene headline
+    headline_y: float = 0.13  # top of the scene headline (~250 px: clear of the platforms' top bar)
     color: str = "#FFFFFF"  # words not being spoken
     highlight: str = "#FFE500"  # the word being spoken
     keyword: str = "#4ADE80"  # words marked as keywords in the transcript

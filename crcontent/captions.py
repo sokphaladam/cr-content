@@ -25,6 +25,44 @@ def _esc(text: str) -> str:
     return text.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
+def _text_width(text: str, family: str, px: float, lang: str = "en", spacing: float = 0.0) -> float:
+    """About how wide libass draws `text` in `family` at font size `px` (ASS sizes are the font's ascent+descent,
+    not its em, so PIL's width is scaled by em/(ascent+descent)). Falls back to an average glyph width when the font
+    file isn't found. Khmer is measured without shaping (subscripts counted as glyphs): a little wide, never short."""
+    from .styles import FONTS, font_path
+
+    n = len(text)
+    try:
+        from PIL import ImageFont
+
+        file = FONTS.get(lang, FONTS["en"]).get(family) or FONTS["en"].get(family, "")
+        path = font_path(file) if file else None
+        if path:
+            f = ImageFont.truetype(str(path), 200)
+            asc, desc = f.getmetrics()
+            return f.getlength(text) * px / (asc + desc) + spacing * n
+    except Exception:
+        pass
+    return px * 0.56 * n + spacing * n
+
+
+def _balance(words: list[str], lines: int, width) -> list[str]:
+    """`words` split into `lines` lines (in order) so the widest line is as narrow as possible; `width(str)`."""
+    if lines <= 1 or len(words) <= 1:
+        return [" ".join(words)]
+    best, best_w = [" ".join(words)], float("inf")
+    n = len(words)
+    cuts = [(i,) for i in range(1, n)] if lines == 2 or n < 3 else \
+        [(i, j) for i in range(1, n - 1) for j in range(i + 1, n)]
+    for cut in cuts:
+        bounds = (0, *cut, n)
+        parts = [" ".join(words[a:b]) for a, b in zip(bounds, bounds[1:])]
+        w = max(width(p) for p in parts)
+        if w < best_w:
+            best, best_w = parts, w
+    return best
+
+
 def caption_styles(profile: LangProfile, style: "CaptionStyle", size: tuple[int, int] = (WIDTH, HEIGHT)) -> str:
     """The Caption and Headline style lines for `style` (see styles.CaptionStyle)."""
     from .styles import ass_color
@@ -33,17 +71,21 @@ def caption_styles(profile: LangProfile, style: "CaptionStyle", size: tuple[int,
     font = style.font or profile.font_name
     px = round(profile.font_size * {"s": 0.8, "m": 1.0, "l": 1.25}[style.size] * W / WIDTH)
     base = ass_color(style.color)
-    # how the letters stand off the footage (same choices as the lyric videos)
+    # how the letters stand off the footage (same choices as the lyric videos). The default is the top Shorts look:
+    # a thick, clean black outline (~8 px at 92 px / 1080 wide) and a soft drop shadow (60% black, softened by the
+    # \blur build_ass adds), so white words read on snow as well as on night footage
     if style.outline == "box":
         border, outline, shadow, out_c, back_c = 3, max(10, px // 7), 0, "&H55000000&", "&H55000000&"
     elif style.outline == "shadow":
-        border, outline, shadow, out_c, back_c = 1, 1, max(3, px // 22), "&H60000000&", "&H70000000&"
+        # a dark halo (blurred by build_ass) rather than a hairline, plus a drop shadow
+        border, outline, shadow, out_c, back_c = 1, max(5, px // 12), max(3, px // 24), "&H50000000&", "&H66000000&"
     elif style.outline == "glow":
         border, outline, shadow, out_c, back_c = 1, max(4, px // 18), 2, ass_color(style.highlight, 0x40), "&H70000000&"
     else:
-        border, outline, shadow, out_c, back_c = 1, round(px * 7 / 92), 3, "&H00000000&", "&H80000000&"
+        border, outline, shadow, out_c, back_c = 1, round(px * 8.5 / 92), 4, "&H00000000&", "&H66000000&"
     head = round(px * 0.8)
-    return (f"Style: Caption,{font},{px},{base},{base},{out_c},{back_c},-1,0,0,0,100,100,0,0,{border},{outline},{shadow},5,90,90,0,1\n"
+    # margins: the wrap width; the right one keeps clear of the platforms' like / comment buttons (~120 px)
+    return (f"Style: Caption,{font},{px},{base},{base},{out_c},{back_c},-1,0,0,0,100,100,0,0,{border},{outline},{shadow},5,110,120,0,1\n"
             f"Style: Headline,{font},{head},&H00FFFFFF&,&H00FFFFFF&,&HFF000000&,&H1A000000&,-1,0,0,0,100,100,0,0,4,{round(head * 0.35)},0,8,80,80,0,1")
 
 
@@ -57,7 +99,10 @@ def build_ass(scenes: list[tuple], profile: LangProfile, style: "CaptionStyle | 
 
     style = (style or CaptionStyle()).clean(profile.code)
     high, key_c, base = ass_color(style.highlight), ass_color(style.keyword), ass_color(style.color)
-    blur = r"\blur3" if style.outline == "shadow" else r"\blur10" if style.outline == "glow" else ""
+    # \blur on a bordered line softens only the outline and shadow (the letters stay sharp): a touch takes the
+    # jaggies off the thick black outline and makes its drop shadow soft
+    blur = (r"\blur4" if style.outline == "shadow" else r"\blur10" if style.outline == "glow"
+            else "" if style.outline == "box" else r"\blur1.2")
     # the opening scene's headline is the hook: bigger than other headlines, dark on a white box, so it reads in the
     # feed at a glance on any footage
     hook_px = round(profile.font_size * {"s": 0.8, "m": 1.0, "l": 1.25}[style.size] * 0.8 * 1.3)
@@ -85,9 +130,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for si, (scene_start, scene_end, words, headline, *rest) in enumerate(scenes):
         keywords = rest[0] if rest else set()
         if headline and si == 0:  # the hook pops in on the very first frame
-            lines.append(f"Dialogue: 2,{_ts(scene_start)},{_ts(scene_end)},Hook,,0,0,0,,"
-                         f"{{\\an8\\pos({WIDTH // 2},{head_y})\\fscx80\\fscy80\\t(0,120,\\fscx100\\fscy100)}}"
-                         f"{_esc(headline.upper())}")
+            lines += _hook_events(_esc(_case(headline, "upper", profile.code)), scene_start, scene_end, head_y,
+                                  style.font or profile.font_name, hook_px, profile.code)
             continue  # one strong line of text in the hook: its spoken words aren't captioned too
         elif headline:
             lines.append(f"Dialogue: 1,{_ts(scene_start)},{_ts(scene_end)},Headline,,0,0,0,,"
@@ -108,6 +152,47 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 text = f"{{\\pos({WIDTH // 2},{cap_y}){blur}}}{pop}" + " ".join(parts)
                 lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Caption,,0,0,0,,{text}")
     return header + "\n".join(lines + (extra or [])) + "\n"
+
+
+HOOK_SIDE = 64  # px kept clear on each side of the hook's box (1080 wide)
+HOOK_TOP = 130  # the box never starts above this: the platforms' top bar
+
+
+def _hook_events(text: str, start: float, end: float, top: int, family: str, px: int, lang: str) -> list[str]:
+    """The hook: dark words on one tidy white rounded card (instead of the ragged per-line boxes BorderStyle 3
+    draws), the same padding on every side, at most 2 lines (3 only when even a smaller size can't fit 2), a soft
+    shadow under the card. Top edge at `top`; pops in from 80% on the first frames."""
+    words = text.split()
+    pad_x, pad_y = round(px * 0.42), round(px * 0.26)
+    room = WIDTH - 2 * HOOK_SIDE - 2 * pad_x  # widest a line of text may be
+    size, rows, fits = px, [text], True
+    for n in (1, 2, 3):
+        for s in [px] + ([round(px * f) for f in (0.92, 0.84, 0.76, 0.68)] if n > 1 else []):
+            rows = _balance(words, n, lambda t, s=s: _text_width(t, family, s, lang))
+            if max(_text_width(r, family, s, lang) for r in rows) <= room:
+                size = s
+                break
+        else:
+            continue
+        break
+    else:  # very long: 3 lines at the smallest size, libass wraps whatever is left
+        size, fits = round(px * 0.68), False
+    pad_x, pad_y = round(size * 0.42), round(size * 0.26)
+    w = min(max(_text_width(r, family, size, lang) for r in rows), room) + 2 * pad_x
+    h = len(rows) * size + 2 * pad_y
+    top = max(top, HOOK_TOP)
+    cx, cy = WIDTH // 2, round(top + h / 2)
+    t0, t1 = _ts(start), _ts(end)
+    pop = r"\fscx80\fscy80\t(0,120,\fscx100\fscy100)"
+    card = _rounded(w, h, size * 0.2)
+    q = r"\q2" if fits else ""  # no wrapping: the rows are already measured to fit
+    # every part centred on the same point (\an5), so the pop scales them together
+    return [f"Dialogue: 2,{t0},{t1},Hook,,0,0,0,,{{\\an5\\pos({cx},{cy + round(size * 0.07)}){pop}\\bord0\\shad0"
+            f"\\blur{round(size * 0.18)}\\1c&H000000&\\1a&H90&\\p1}}{card}",
+            f"Dialogue: 3,{t0},{t1},Hook,,0,0,0,,{{\\an5\\pos({cx},{cy}){pop}\\bord0\\shad0\\blur0.6"
+            f"\\1c&HFFFFFF&\\p1}}{card}",
+            f"Dialogue: 4,{t0},{t1},Hook,,0,0,0,,{{\\an5\\pos({cx},{cy}){pop}\\fs{size}\\bord0\\shad0{q}}}"
+            + r"\N".join(rows)]
 
 
 OVERLAY_SIZES = {"s": 0.6, "m": 0.85, "l": 1.2}  # of the language's caption size
@@ -141,18 +226,22 @@ def _case(text: str, case: str, lang: str) -> str:
 def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: float = 0.8,
                       size: tuple[int, int] = (WIDTH, HEIGHT), style: "LyricStyle | None" = None,
                       title: tuple | None = None,
-                      now_playing: dict | None = None, glitch_words: set[str] | None = None) -> str:
+                      now_playing: dict | None = None, glitch_words: set[str] | None = None,
+                      title_at: tuple[int, int] | None = None) -> str:
     """Lyrics as karaoke, drawn in `style` (font, colours, size, position, effect; see styles.py).
 
     lines: align.LyricLine items (absolute word times). A line appears `lead_in` s before its first word and
     stays until the next line starts or `hold` s after its last word, so two lines never overlap. Effects:
-    karaoke: the whole line shown, words change colour as they're sung.  fill: a smooth colour sweep through
-    each word.  pop: words appear one by one with a little bounce.  fade: the whole line fades in and out.
-    glitch: the line breaks in like a bad signal (red and cyan copies splitting apart, a torn slice, a flicker),
-    and again on every sung word in `glitch_words` (the song title's words), which stay in the highlight colour.
+    karaoke: the whole line shown, words change colour as they're sung (words still to come a little see-through).
+    fill: a smooth colour sweep through each word.  pop: words appear one by one with a little bounce.  fade: the
+    whole line fades in and out.  glitch: the line breaks in like a bad signal (red and cyan copies splitting apart,
+    a torn slice, a flicker) for a quarter of a second, and for a few frames on every sung word in `glitch_words`
+    (the song title's words), which stay in the highlight colour; between those hits the line is solid.
     Landscape frames show the upcoming line dimmed underneath (karaoke and fill), like a lyric video.
     title: (text, start, end[, #RRGGBB]) the song's title flickering on like a neon sign, in that colour (else the
-    sung-word colour), away from the lyrics.
+    sung-word colour), away from the lyrics. title_at: (x, y) pixel centre for it (an empty area beside the
+    character); there it's sized to fit ~38% of the frame's width, on 2 lines if long. None: centred, above or below
+    the lyrics.
     now_playing: {"title", "label", "start", "length", "accent"} for a now-playing card (now_playing_events).
     """
     from .styles import LyricStyle, ass_color
@@ -160,28 +249,42 @@ def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: 
     style = (style or LyricStyle()).clean(profile.code)
     W, H = size
     landscape = W > H
+    # ~68 px at 1080p landscape, ~74-80 px on a 1080x1920 frame (Khmer a little bigger: its stacked vowels)
     font = round(profile.font_size * (0.85 if profile.code == "km" else 0.8))
-    if landscape:
-        font = round(font * 0.82)
+    font = round(font * (0.92 if landscape else 1.04) * min(W, H) / 1080)
     font = round(font * {"s": 0.8, "m": 1.0, "l": 1.25}[style.size])
     small = round(font * 0.72)
     base, high = ass_color(style.color), ass_color(style.highlight)
+    unsung = 0x38  # words not sung yet: ~78% opaque, so the sung ones stand out even when both are white
 
-    # how the letters stand off the footage
-    blur = ""
+    # how the letters stand off the footage. Each lyric event can get a copy under it (`back`): a soft drop shadow
+    # for outline / shadow, a coloured glow for glow, so the line itself keeps a crisp dark edge on a pale picture
+    sa = 0x70  # the soft shadow's alpha
+    back = ""
     if style.outline == "box":
         border, outline, shadow, out_c, back_c = 3, max(10, font // 7), 0, "&H55000000&", "&H55000000&"
+        blur = ""
     elif style.outline == "shadow":
-        # a soft dark halo as well as the drop shadow, so white lines read on light pictures too
-        border, outline, shadow, out_c, back_c = 1, max(2, font // 28), max(3, font // 22), "&H70000000&", "&H70000000&"
-        blur = r"\blur3"
+        # a strong dark halo hugging the letters (a wide outline, blurred: the letters stay sharp) and a soft drop
+        # shadow underneath: white reads on light pastel pictures too
+        border, outline, shadow, out_c, back_c = 1, max(4, font // 9), 0, "&H40000000&", "&H70000000&"
+        blur = f"\\blur{max(3, font // 12)}"
+        back = f"\\bord{max(3, font // 14)}\\shad{max(3, font // 18)}\\blur{max(5, font // 7)}\\4c&H000000&"
     elif style.outline == "glow":
-        border, outline, shadow, out_c, back_c = 1, max(4, font // 18), 2, ass_color(style.highlight, 0x40), "&H70000000&"
-        blur = r"\blur10"
+        # a thin dark edge for legibility on the line; the accent glow is the copy under it
+        border, outline, shadow, out_c, back_c = 1, max(2, font // 30), 0, "&H40000000&", "&H70000000&"
+        blur = r"\blur0.8"
+        back = (f"\\bord{max(5, font // 11)}\\shad0\\blur{max(8, font // 6)}\\3c{high}\\3a&H30&"
+                f"\\1c{high}")
     else:
-        border, outline, shadow, out_c, back_c = 1, max(4, font // 14), 3, "&H00000000&", "&H80000000&"
+        # a clean 3-4 px dark outline, softened a hair, and a soft drop shadow (the copy) under it
+        border, outline, shadow, out_c, back_c = 1, max(3, round(font / 17)), 0, "&H10000000&", "&H70000000&"
+        blur = r"\blur0.9"
+        back = f"\\bord{max(3, round(font / 17))}\\shad{max(3, font // 20)}\\blur{max(4, font // 10)}\\4c&H000000&"
+    glow_back = style.outline == "glow"
     # fill sweeps from SecondaryColour (not sung yet) to PrimaryColour (sung)
-    primary, secondary = (high, base) if style.effect == "fill" else (base, base)
+    primary = high if style.effect == "fill" else base
+    secondary = ass_color(style.color, unsung) if style.effect == "fill" else base
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
@@ -192,16 +295,24 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Lyric,{style.font},{font},{primary},{secondary},{out_c},{back_c},-1,0,0,0,100,100,0,0,{border},{outline},{shadow},5,80,80,0,1
-Style: LyricNext,{style.font},{small},&H60FFFFFF&,&H60FFFFFF&,&H60000000&,&HA0000000&,-1,0,0,0,100,100,0,0,1,{max(2, outline - 2)},2,5,80,80,0,1
+Style: LyricNext,{style.font},{small},&H48FFFFFF&,&H48FFFFFF&,&H50000000&,&H90000000&,-1,0,0,0,100,100,0,0,1,{max(2, round(small / 18))},2,5,80,80,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events: list[str] = []
-    ys = {"low": 0.80, "middle": 0.5, "high": 0.2} if landscape else {"low": 0.64, "middle": 0.5, "high": 0.24}
+    # landscape "low": the line's baseline ~85% down, like a lyric video; the dimmed next line under it is kept
+    # clear of the frame's bottom edge (the whole pair moves up if it would touch)
+    if landscape:
+        ys = {"low": 0.85 - 0.3 * font / H, "middle": 0.5, "high": 0.2}
+    else:
+        ys = {"low": 0.64, "middle": 0.5, "high": 0.24}
     y = round(H * ys[style.position])
+    next_off = round(font * 0.62 + small * 0.6)  # centre to centre
+    if landscape and style.effect in ("karaoke", "fill"):
+        y = min(y, round(H * 0.965 - small * 0.6) - next_off)
     pos = f"{{\\pos({W // 2},{y}){blur}}}"
-    next_pos = f"{{\\pos({W // 2},{y + round(font * 1.35)})}}"
+    next_pos = f"{{\\pos({W // 2},{y + next_off})\\blur0.8}}"
     prev_end = 0.0
     for li, line in enumerate(lines):
         words = [w for w in line.words if _esc(w.text)]
@@ -212,9 +323,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         line_end = min(next_start, words[-1].end + hold)
         show = max(prev_end, words[0].start - lead_in)
 
-        def dialogue(start: float, end: float, text: str, name: str = "Lyric") -> None:
+        def dialogue(start: float, end: float, text: str, name: str = "Lyric", layer: int = 1) -> None:
             if end > start:
-                events.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},{name},,0,0,0,,{text}")
+                if name == "Lyric" and back:
+                    events.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},{name},,0,0,0,,"
+                                  f"{_backing(text, back, None if glow_back else sa)}")
+                events.append(f"Dialogue: {layer},{_ts(start)},{_ts(end)},{name},,0,0,0,,{text}")
 
         if style.effect == "fill":
             # one event per line: \kf sweeps each word over its sung time (centiseconds from when the line shows;
@@ -226,8 +340,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         elif style.effect == "fade":
             dialogue(show, line_end, pos + r"{\fad(250,300)}" + " ".join(texts))
         elif style.effect == "glitch":
-            events.extend(_glitch_line(words, texts, show, line_end, glitch_words or set(), W // 2, y, font, blur,
-                                       base, high))
+            main, bursts = _glitch_line(words, texts, show, line_end, glitch_words or set(), W // 2, y, font, blur,
+                                        base, high)
+            dialogue(show, line_end, main, layer=2)  # its split copies go on layer 1, between it and its shadow
+            events.extend(bursts)
         elif style.effect == "pop":
             for wi, w in enumerate(words):
                 end = words[wi + 1].start if wi + 1 < len(words) else line_end
@@ -242,19 +358,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 dialogue(w.start, end, pos + " ".join(parts))
         else:
             def text(sung: int) -> str:
-                return pos + " ".join(f"{{\\c{high if j < sung else base}}}{t}" for j, t in enumerate(texts))
+                return pos + " ".join(f"{{\\c{high}\\1a&H00&}}{t}" if j < sung else f"{{\\c{base}\\1a&H{unsung:02X}&}}{t}"
+                                      for j, t in enumerate(texts))
 
             dialogue(show, words[0].start, r"{\fscx90\fscy90\t(0,120,\fscx100\fscy100)}" + text(0))
             for wi, w in enumerate(words):
                 dialogue(w.start, words[wi + 1].start if wi + 1 < len(words) else line_end, text(wi + 1))
         if (landscape and style.effect in ("karaoke", "fill") and li + 1 < len(lines)
                 and next_start - line_end < 2.5 and _esc(lines[li + 1].text)):
-            dialogue(show, line_end, next_pos + _esc(_case(lines[li + 1].text, style.case, profile.code)), "LyricNext")
+            dialogue(show, line_end, next_pos + r"{\fad(150,150)}"
+                     + _esc(_case(lines[li + 1].text, style.case, profile.code)), "LyricNext")
         prev_end = line_end
     if title and _esc(title[0]):
         glow = style.model_copy(update={"highlight": title[3]}) if len(title) > 3 and title[3] else style
-        events += _neon_title(_esc(_case(title[0], "upper", profile.code)), title[1], title[2], glow, font, W,
-                              round(H * (0.72 if style.position == "high" else 0.3)))
+        at = title_at or (W // 2, round(H * (0.72 if style.position == "high" else 0.3)))
+        events += _neon_title(_esc(_case(title[0], "upper", profile.code)), title[1], title[2], glow, font, size,
+                              at, fit=0.38 if title_at else 0.8, lang=profile.code)
     if now_playing:
         events += now_playing_events(now_playing["title"], now_playing.get("label") or "Now playing",
                                      now_playing["start"], now_playing["length"], size, style.font,
@@ -262,11 +381,35 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(events) + "\n"
 
 
+def _alpha_over(a: int, b: int) -> int:
+    """ASS alpha (0 opaque .. 255 invisible) of something `a`-transparent seen through `b`."""
+    return 255 - (255 - a) * (255 - b) // 255
+
+
+def _backing(text: str, tags: str, shadow_alpha: int | None) -> str:
+    """The copy drawn under a lyric event: `text` (its override blocks and words) with `tags` added up front.
+    shadow_alpha set: only its shadow shows (the fill and outline are see-through, every \\alpha in the line,
+    including animated ones, turned into the shadow's alpha), so the line gets a soft drop shadow that follows its
+    fades and flickers. None (glow): the copy keeps its alphas and colours; `tags` give it the glow."""
+    if shadow_alpha is None:
+        return "{" + tags + "}" + text
+
+    def block(m: re.Match) -> str:
+        inner = re.sub(r"\\(?:1?c|2c)&H[0-9A-Fa-f]+&", "", m.group(1))  # colours don't matter: it's a shadow
+        inner = re.sub(r"\\[123]a&H[0-9A-Fa-f]{2}&", "", inner)
+        inner = re.sub(r"\\alpha&H([0-9A-Fa-f]{2})&",
+                       lambda a: f"\\4a&H{_alpha_over(int(a.group(1), 16), shadow_alpha):02X}&", inner)
+        return "{" + inner + "\\1a&HFF&\\2a&HFF&\\3a&HFF&}"
+
+    return "{" + tags + f"\\4a&H{shadow_alpha:02X}&\\1a&HFF&\\2a&HFF&\\3a&HFF&}}" + re.sub(r"\{([^}]*)\}", block, text)
+
+
 def _glitch_line(words: list, texts: list[str], show: float, end: float, hot: set[str], x: int, y: int, font: int,
-                 blur: str, base: str, high: str) -> list[str]:
-    """Dialogue lines for one lyric line in the glitch effect (build_karaoke_ass): the line itself, flickering at
-    each burst, over red and cyan copies that split apart and a torn slice that jumps sideways. Bursts: when the
-    line appears and on every sung word in `hot`, which is drawn in the highlight colour."""
+                 blur: str, base: str, high: str) -> tuple[str, list[str]]:
+    """One lyric line in the glitch effect (build_karaoke_ass): (the line's text, its burst events). The line
+    breaks in for 0.24 s: it blinks while red and cyan copies split apart and snap together and a torn slice jumps
+    sideways; on every sung word in `hot` (drawn in the highlight colour) the same happens for 4 frames. Between
+    bursts the line is solid and fully opaque: no copies or see-through frames linger."""
     marked = [_bare(w.text) in hot for w in words]
     bursts: list[float] = [show]
     for w, m in zip(words, marked):
@@ -274,25 +417,29 @@ def _glitch_line(words: list, texts: list[str], show: float, end: float, hot: se
             bursts.append(w.start)
     body = " ".join(f"{{\\c{high if m else base}}}{t}" for t, m in zip(texts, marked))
     plain = " ".join(texts)
-    # the line itself drops out while its split copies show, snaps back, then flickers once more
-    flicker = "".join(f"\\t({o},{o + 1},\\alpha&HFF&)\\t({o + 150},{o + 160},\\alpha&H00&)"
-                      f"\\t({o + 200},{o + 230},\\alpha&H80&)\\t({o + 230},{o + 260},\\alpha&H00&)"
-                      for o in (round((b - show) * 1000) for b in bursts))
+    # the break-in: out for 2 frames, in, a dimmed frame, then solid from 170 ms; a hit: one dimmed frame
+    flicker = (r"\alpha&HFF&\t(66,67,\alpha&H00&)\t(120,121,\alpha&H90&)\t(170,171,\alpha&H00&)"
+               + "".join(f"\\t({o},{o + 1},\\alpha&H70&)\\t({o + 40},{o + 41},\\alpha&H00&)"
+                         for o in (round((b - show) * 1000) for b in bursts[1:])))
     d = max(5, font // 7)  # how far the colour copies split
-    out = [f"Dialogue: 2,{_ts(show)},{_ts(end)},Lyric,,0,0,0,,{{\\pos({x},{y}){blur}\\fad(40,160){flicker}}}{body}"]
-    for b in bursts:
-        stop = min(b + 0.28, end)
+    main = f"{{\\pos({x},{y}){blur}\\fad(0,160){flicker}}}{body}"
+    out = []
+    for i, b in enumerate(bursts):
+        ms = 240 if i == 0 else 133  # the break-in / a hit (4 frames at 30 fps)
+        split = d if i == 0 else max(3, d // 2)
+        stop = min(b + ms / 1000, end)
         if stop <= b:
             continue
-        copy = "\\bord0\\shad0\\blur1\\fad(0,120)"
+        # the copies slide together and are gone (alpha to invisible) by the end of the burst: nothing lingers
+        copy = f"\\bord0\\shad0\\blur1\\alpha&H20&\\t({ms // 2},{ms},\\alpha&HFF&)"
         out.append(f"Dialogue: 1,{_ts(b)},{_ts(stop)},Lyric,,0,0,0,,"
-                   f"{{\\move({x + d},{y},{x - d // 2},{y},0,280){copy}\\1c&H3C2DFF&\\alpha&H18&}}{plain}")
+                   f"{{\\move({x + split},{y},{x},{y},0,{ms}){copy}\\1c&H3C2DFF&}}{plain}")
         out.append(f"Dialogue: 1,{_ts(b)},{_ts(stop)},Lyric,,0,0,0,,"
-                   f"{{\\move({x - d},{y},{x + d // 2},{y},0,280){copy}\\1c&HFFF02D&\\alpha&H18&}}{plain}")
-        tear = min(b + 0.12, end)  # a slice of the line torn sideways for a few frames
+                   f"{{\\move({x - split},{y},{x},{y},0,{ms}){copy}\\1c&HFFF02D&}}{plain}")
+        tear = min(b + (0.1 if i == 0 else 0.066), end)  # a slice of the line torn sideways for 2-3 frames
         out.append(f"Dialogue: 3,{_ts(b)},{_ts(tear)},Lyric,,0,0,0,,"
-                   f"{{\\pos({x + 2 * d},{y})\\clip(0,{y - font // 4},{x * 2},{y + font // 10}){blur}}}{body}")
-    return out
+                   f"{{\\pos({x + 2 * split},{y})\\clip(0,{y - font // 4},{x * 2},{y + font // 10}){blur}}}{body}")
+    return main, out
 
 
 def _rounded(w: float, h: float, r: float) -> str:
@@ -369,18 +516,49 @@ def now_playing_events(title: str, label: str, start: float, length: float, size
     return out
 
 
-def _neon_title(text: str, start: float, end: float, style: "LyricStyle", font: int, W: int, y: int) -> list[str]:
-    """A title that flickers on like a neon tube: a wide blurred glow in the neon colour under a pale, sharp core."""
+def _neon_title(text: str, start: float, end: float, style: "LyricStyle", font: int, size: tuple[int, int],
+                at: tuple[int, int], fit: float = 0.8, lang: str = "en") -> list[str]:
+    """A title that flickers on like a neon tube, centred on `at`: a white-hot core with a crisp outline in the neon
+    colour, over a wide blurred glow in that colour (two layers, both switched by the same flicker, so they never
+    drift into a double image). As big as the lyrics allow (~1.9x) but no wider than `fit` of the frame: two
+    stacked lines when one is too wide. Flickers on over ~0.4 s, holds steady, then one clean 0.5 s fade."""
     from .styles import ass_color
 
+    W, H = size
     neon = ass_color(style.highlight)
     px = round(font * 1.9)
-    # on, off, on, dim, on: the first second of a neon sign being switched on; fades out at the end
-    flicker = (r"\alpha&HFF&\t(0,40,\alpha&H00&)\t(90,110,\alpha&HC0&)\t(170,190,\alpha&H00&)"
-               r"\t(330,350,\alpha&H70&)\t(420,440,\alpha&H00&)\fad(0,250)")
-    common = f"\\pos({W // 2},{y})\\an5\\fn{style.font}\\fs{px}\\b1\\fsp{round(px * 0.08)}"
-    glow = f"{{{common}\\1c{neon}\\3c{neon}\\bord{max(6, px // 9)}\\shad0\\blur{max(12, px // 5)}{flicker}}}{text}"
-    core = f"{{{common}\\1c&H00F4F0FF&\\3c{neon}\\bord{max(2, px // 40)}\\shad0\\blur2{flicker}}}{text}"
+    room = W * fit
+
+    def wide(t: str, s: int) -> float:
+        return _text_width(t, style.font, s, lang, spacing=round(s * 0.08)) + 2 * max(3, s // 22)
+
+    rows = [text]
+    words = text.split()
+    if wide(text, px) > room and len(words) > 1:
+        rows = _balance(words, 2, lambda t: wide(t, px))
+    widest = max(wide(r, px) for r in rows)
+    if widest > room:
+        px = max(round(font * 0.9), int(px * room / widest))
+    # kept inside the frame (its glow too) wherever `at` asks for it
+    half_w = max(wide(r, px) for r in rows) / 2 + px * 0.3
+    half_h = len(rows) * px / 2 + px * 0.3
+    x = round(min(max(at[0], half_w), W - half_w))
+    y = round(min(max(at[1], half_h), H - half_h))
+    # off, on, off, dim, on, half, on (a tube catching), all within 0.4 s; then steady until a single fade out.
+    # `on`: the layer's alpha when lit (the glow stays a little see-through)
+    def flicker(on: int) -> str:
+        steps = ((0, 30, on), (80, 90, 0xD0), (150, 170, on), (230, 240, 0xA0), (290, 310, on), (350, 360, 0x60),
+                 (380, 400, on))
+        return (r"\alpha&HFF&" + "".join(f"\\t({a},{b},\\alpha&H{max(v, on):02X}&)" for a, b, v in steps)
+                + r"\fad(0,500)")
+
+    common = (f"\\an5\\pos({x},{y})\\fn{style.font}\\fs{px}\\b1\\fsp{round(px * 0.08)}\\q2"
+              f"\\fscx100\\fscy100")
+    lines = r"\N".join(rows)
+    # the glow: a wide soft halo of neon light; the core: near-white letters, a neon edge, a hair of bloom
+    glow = (f"{{{common}\\1c{neon}\\3c{neon}\\bord{max(10, px // 6)}\\shad0\\blur{max(14, px // 4)}"
+            f"{flicker(0x18)}}}{lines}")
+    core = (f"{{{common}\\1c&HFFF8FF&\\3c{neon}\\bord{max(4, px // 15)}\\shad0\\blur2{flicker(0)}}}{lines}")
     return [f"Dialogue: 3,{_ts(start)},{_ts(end)},Lyric,,0,0,0,,{glow}",
             f"Dialogue: 4,{_ts(start)},{_ts(end)},Lyric,,0,0,0,,{core}"]
 
