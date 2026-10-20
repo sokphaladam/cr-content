@@ -72,11 +72,24 @@ def best_frames(video: Path, count: int = 4, samples: int = 32) -> list[float]:
          f"crop={SAMPLE_W}:{SAMPLE_H}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
         stdin=subprocess.DEVNULL, capture_output=True, check=True)
     size = SAMPLE_W * SAMPLE_H * 3
+    frames = [proc.stdout[k * size:(k + 1) * size] for k in range(len(proc.stdout) // size)]
+    # brightness of each sample (green ~ luma) and how much of it is blown out to white
+    means = [sum(f[1::3]) / (len(f) // 3) for f in frames]
+    blown = [sum(1 for g in f[1::3] if g > 245) / (len(f) // 3) for f in frames]
     scored = []
-    for k in range(len(proc.stdout) // size):
+    for k, f in enumerate(frames):
         t = k / rate
         if 0.2 <= t <= length - 0.3:
-            scored.append((_frame_score(proc.stdout[k * size:(k + 1) * size]), round(t, 2)))
+            score = _frame_score(f)
+            # a white flash / impact frame: much brighter than the samples either side of it (a scene that is just
+            # bright stays bright next door) or largely blown out; a cover caught mid-flash looks washed out
+            near = [means[j] for j in (k - 1, k + 1) if 0 <= j < len(means)]
+            jump = means[k] - (sum(near) / len(near) if near else means[k])
+            if jump > 18:
+                score *= max(0.15, 1 - (jump - 18) / 40)
+            if blown[k] > 0.2:
+                score *= max(0.3, 1 - blown[k])
+            scored.append((score, round(t, 2)))
     scored.sort(reverse=True)
     gap = length / (count * 2.5)
     picks: list[float] = []

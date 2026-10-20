@@ -16,7 +16,7 @@ import {
 } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import { PLATFORM_NAMES, PLATFORMS } from "./Settings";
-import { Button, IconButton, Segmented, useToast } from "./ui";
+import { Button, DropZone, IconButton, Segmented, useToast } from "./ui";
 
 const PLATFORM_LABEL: Record<string, string> = { tiktok: "TikTok", youtube: "YouTube Shorts", instagram: "Instagram Reels", x: "X" };
 
@@ -293,7 +293,7 @@ function References({
     }
   }
 
-  async function upload(files: FileList | null) {
+  async function upload(files: FileList | File[] | null) {
     if (!files?.length) return;
     setUploading(true);
     try {
@@ -322,6 +322,7 @@ function References({
         Videos are downloaded and transcribed so Claude can pick the moments. Folders (Google Drive, Dropbox) can&apos;t be downloaded automatically: download the
         files and add them here.
       </p>
+      <DropZone accept="video/*,audio/*,image/*,.pdf,.txt" multiple label="Drop to add references" onFiles={(f) => void upload(f)} onReject={(m) => toast(m, "error")}>
       {busy && <p className="m-0 mb-3 rounded-lg bg-caption/25 px-3 py-2 text-base">{preparing?.log.at(-1) ?? "Waiting for the current render to finish…"}</p>}
       {preparing?.status === "error" && <p className="m-0 mb-3 text-base text-danger">{preparing.error}</p>}
       {campaign.references.length > 0 && (
@@ -376,6 +377,7 @@ function References({
           Add files
         </Button>
       </form>
+      </DropZone>
     </Panel>
   );
 }

@@ -1,4 +1,5 @@
 """Looks for music videos: how the lyrics are drawn (font, colours, effect) and how the footage is graded."""
+import re
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -11,6 +12,7 @@ FONTS: dict[str, dict[str, str]] = {
         "Arial": "arialbd.ttf",
         "Impact": "impact.ttf",
         "Segoe UI Black": "seguibl.ttf",
+        "Segoe UI Semibold": "seguisb.ttf",
         "Bahnschrift": "bahnschrift.ttf",
         "Georgia": "georgiab.ttf",
         "Trebuchet MS": "trebucbd.ttf",
@@ -69,7 +71,8 @@ def available_fonts(lang: str) -> list[str]:
     return [name for name, file in FONTS.get(lang, FONTS["en"]).items() if font_path(file)]
 
 
-EFFECTS = ("karaoke", "fill", "pop", "fade")  # word by word / smooth sweep / words appear / whole line fades
+EFFECTS = ("karaoke", "fill", "pop", "fade", "glitch")  # word by word / smooth sweep / words appear / whole line fades /
+# breaks in like a bad signal
 OUTLINES = ("outline", "shadow", "box", "glow")
 POSITIONS = ("low", "middle", "high")
 SIZES = ("s", "m", "l")
@@ -130,7 +133,14 @@ PRESETS: dict[str, dict] = {
               "position": "middle", "color": "#FFE9C7", "highlight": "#FF8A3D", "effect": "fill", "outline": "shadow",
               "case": "as_is"},
     "boxed": {"label": "Boxed", "font": "Arial", "font_km": "Khmer OS Battambang", "size": "m", "position": "low",
-              "color": "#FFFFFF", "highlight": "#FFE500", "effect": "karaoke", "outline": "box", "case": "as_is"},
+              "color": "#FFFFFF", "highlight": "#FFE500", "effect": "karaoke", "outline": "box", "case": "as_is"},    # a playlist / lyric video: plain white lines fading in and out under a soft shadow, no colour sweep
+    "playlist": {"label": "Playlist", "font": "Segoe UI Semibold", "font_km": "Khmer OS Battambang", "size": "m",
+                 "position": "low", "color": "#FFFFFF", "highlight": "#FFFFFF", "effect": "fade", "outline": "shadow",
+                 "case": "as_is"},
+    # lines that break in like a bad signal, the song title's words in cyan (static, lost connection, VHS, cyberpunk)
+    "glitch": {"label": "Glitch", "font": "Bahnschrift", "font_km": "Khmer OS Siemreap", "size": "m",
+               "position": "middle", "color": "#FFFFFF", "highlight": "#5CF2FF", "effect": "glitch",
+               "outline": "shadow", "case": "upper"},
 }
 
 
@@ -140,28 +150,85 @@ def preset_style(name: str) -> LyricStyle:
                       **{k: v for k, v in p.items() if k not in ("label", "font", "font_km")})
 
 
-# Colour grades for the footage: applied to every shot so clips from different sources look like one film.
+# Colour grades for the footage: applied to every shot so clips from different sources look like one film. Kept
+# light: no grade darkens by more than 0.03 (pastel pictures turn muddy), vignettes are gentle, and film grain is
+# faint (animated noise at any strength eats the encoder's bitrate and turns to blocks after upload).
 LOOKS: dict[str, dict[str, str]] = {
-    "natural": {"label": "Natural", "vf": "eq=brightness=-0.04:saturation=1.08"},
+    "natural": {"label": "Natural", "vf": "eq=saturation=1.08"},
     "cinematic": {"label": "Cinematic", "vf": (
         "colorbalance=rs=-0.06:gs=-0.01:bs=0.08:rh=0.07:gh=0.02:bh=-0.07,"
-        "eq=contrast=1.1:saturation=1.05:brightness=-0.05,vignette=angle=PI/5")},
+        "eq=contrast=1.1:saturation=1.05:brightness=-0.03,vignette=angle=PI/6")},
     "film": {"label": "Warm film", "vf": (
         "colorbalance=rs=0.04:bs=-0.04:rm=0.05:bm=-0.03,eq=contrast=1.05:saturation=0.88:brightness=-0.03,"
-        "noise=alls=7:allf=t,vignette=angle=PI/5")},
+        "noise=alls=2:allf=t,vignette=angle=PI/6")},
     "moody": {"label": "Moody", "vf": (
-        "eq=contrast=1.12:saturation=0.72:brightness=-0.09:gamma=0.95,colorbalance=bs=0.05:bm=0.03,"
-        "vignette=angle=PI/4")},
+        "eq=contrast=1.12:saturation=0.72:brightness=-0.03:gamma=0.95,colorbalance=bs=0.05:bm=0.03,"
+        "vignette=angle=PI/5")},
     "vibrant": {"label": "Vibrant", "vf": "eq=contrast=1.06:saturation=1.35:brightness=-0.03,unsharp=5:5:0.4"},
     "dusk": {"label": "Neon dusk", "vf": (  # pink shadows, orange highlights: synthwave sunsets and city nights
         "colorbalance=rs=0.09:gs=-0.07:bs=0.07:rm=0.05:gm=-0.04:bm=0.02:rh=0.10:gh=0.03:bh=-0.09,"
-        "eq=contrast=1.08:saturation=1.25:brightness=-0.04,vignette=angle=PI/5")},
-    "mono": {"label": "Black & white", "vf": "hue=s=0,eq=contrast=1.15:brightness=-0.04,noise=alls=5:allf=t,vignette=angle=PI/5"},
+        "eq=contrast=1.08:saturation=1.25:brightness=-0.03,vignette=angle=PI/6")},
+    "mono": {"label": "Black & white", "vf": "hue=s=0,eq=contrast=1.15:brightness=-0.03,noise=alls=2:allf=t,vignette=angle=PI/6"},
 }
 
 
 def look_filter(name: str) -> str:
     return LOOKS.get(name, LOOKS["natural"])["vf"]
+
+
+# words in a song's mood, genre and video idea -> the look and lyric style they point to (a free, instant
+# suggestion; Claude's ideas and shot lists pick their own)
+LOOK_WORDS = {
+    "film": ("nostalgic", "nostalgia", "retro", "vintage", "memory", "memories", "vhs", "hazy", "dreamy",
+             "summer", "warm", "disco", "lofi", "lo-fi", "bittersweet", "polaroid", "90s", "80s", "70s"),
+    "vibrant": ("energetic", "euphoric", "party", "dance", "upbeat", "bright", "cute", "happy", "playful", "fun",
+                "kawaii", "hype", "joyful"),
+    "moody": ("sad", "melancholic", "melancholy", "lonely", "loneliness", "dark", "moody", "heartbreak", "grief",
+              "cold", "longing", "empty"),
+    "dusk": ("neon", "night", "city lights", "cyberpunk", "synthwave", "nightclub", "midnight", "sunset"),
+    "cinematic": ("epic", "cinematic", "orchestral", "dramatic", "drama", "anthem", "heroic", "rock"),
+    "mono": ("black and white", "noir", "monochrome"),
+}
+LYRIC_WORDS = {
+    "glitch": ("glitch", "glitchy", "static", "signal", "disconnected", "lost connection", "cyber", "digital",
+               "broken", "distortion", "error", "fuzz"),
+    "neon": ("neon", "synthwave", "edm", "electronic", "nightclub", "club", "cyberpunk", "future bass"),
+    "retro": ("disco", "funk", "70s", "80s", "groovy", "retro", "boogie"),
+    "bold_pop": ("hip hop", "hip-hop", "rap", "phonk", "trap", "hype", "drill", "party"),
+    "cinematic": ("epic", "cinematic", "orchestral", "ballad", "film score", "anthem"),
+    "minimal": ("lofi", "lo-fi", "ambient", "acoustic", "chill", "soft", "minimal", "piano"),
+    "playlist": ("dreamy", "dream pop", "j-pop", "jpop", "k-pop", "city pop", "bedroom pop", "indie"),
+}
+LOOK_WHY = {"film": "warm and nostalgic", "vibrant": "bright and upbeat", "moody": "dark and sad",
+            "dusk": "neon night", "cinematic": "dramatic", "mono": "black and white", "natural": "clean and true"}
+# a flat pastel cover turns muddy under the dark grades (the app's One cover picks the same way)
+COVER_LOOKS = ("natural", "film", "vibrant")
+
+
+def _hits(text: str, words: tuple[str, ...]) -> list[str]:
+    return [w for w in words if re.search(rf"(?<!\w){re.escape(w)}(?!\w)", text)]
+
+
+def suggest_style(mood: str, genre: str, idea: str = "", cover: bool = False) -> dict:
+    """The footage look and lyric preset that fit a song: {"look", "lyric_preset", "reason"}. Counts the words of
+    LOOK_WORDS / LYRIC_WORDS in its mood, genre and video idea (the mood and genre count double: they describe
+    the song itself). A one-cover video keeps to looks that leave its pastel clean and leans to Playlist lyrics."""
+    song = f"{mood} {genre}".lower()
+    text = f"{song} {idea}".lower()
+
+    def score(words: tuple[str, ...]) -> int:
+        return len(_hits(text, words)) + len(_hits(song, words))
+
+    looks = {k: score(v) for k, v in LOOK_WORDS.items() if not cover or k in COVER_LOOKS}
+    look = max(looks, key=looks.get) if looks and max(looks.values()) > 0 else "natural"
+    lyrics = {k: score(v) for k, v in LYRIC_WORDS.items()}
+    if cover:  # a calm fade suits one held picture unless the song clearly asks for something else
+        lyrics["playlist"] += 1
+    preset = max(lyrics, key=lyrics.get) if max(lyrics.values()) > 0 else "classic"
+    words = _hits(song, tuple(dict.fromkeys(w for ws in (*LOOK_WORDS.values(), *LYRIC_WORDS.values()) for w in ws)))
+    found = [w for w in words if not any(w != o and w in o for o in words)][:3]  # "dreamy", not also "dream"
+    reason = (", ".join(found) or LOOK_WHY[look]) + (" song" if found else "")
+    return {"look": look, "lyric_preset": preset, "reason": reason}
 
 
 def catalog() -> dict:
@@ -183,7 +250,7 @@ class CaptionStyle(BaseModel):
     font: str = ""  # "" = the language's caption font
     size: str = "m"
     y: float = 0.62  # middle of the caption
-    headline_y: float = 0.12  # top of the scene headline
+    headline_y: float = 0.13  # top of the scene headline (~250 px: clear of the platforms' top bar)
     color: str = "#FFFFFF"  # words not being spoken
     highlight: str = "#FFE500"  # the word being spoken
     keyword: str = "#4ADE80"  # words marked as keywords in the transcript

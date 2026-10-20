@@ -2,14 +2,17 @@
 
 import { ChevronDown, Clapperboard, Dices, GalleryHorizontal, ImageIcon, Paintbrush, RefreshCw, Square, Wand2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, fileUrl, type ArtStatus, type ArtStyle, type Aspect, type Motion, type PicturePace, type SongArtPlan, type SongDirection, type SongArtSlot } from "@/lib/api";
+import { api, fileUrl, type ArtStatus, type ArtStyle, type Aspect, type Motion, type PictureFit, type PicturePace, type SongArtPlan, type SongDirection, type SongArtSlot } from "@/lib/api";
 import { PictureReview } from "./PictureReview";
 import { Button, Message, Spinner } from "./ui";
 
-const MOTION_ORDER: Motion[] = ["dolly_3d", "orbit_3d", "rise_3d", "push_in", "pull_out", "pan_left", "pan_right", "tilt_up", "tilt_down", "still"];
+const MOTION_ORDER: Motion[] = ["dolly_3d", "orbit_3d", "rise_3d", "push_in", "pull_out", "pan_left", "pan_right", "tilt_up", "tilt_down", "still", "breathe"];
 const newSeed = () => Math.floor(Math.random() * 2 ** 31) + 1;
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const without = <T,>(o: Record<number, T>, k: number) => Object.fromEntries(Object.entries(o).filter(([i]) => Number(i) !== k)) as Record<number, T>;
+/** The shape a picture is drawn in: a cover character portrait, unless it fills the screen or is a whole scene. */
+const drawAspect = (slot: SongArtSlot, fit: PictureFit, aspect: Aspect): Aspect =>
+  slot.frame === "4:3" ? "16:9" : slot.frame === "cover" && fit === "fit" && /simple background/i.test(slot.prompt) ? "9:16" : aspect;
 const edits = (slots: SongArtSlot[]) => slots.map(({ prompt, motion, effects, seed }) => ({ prompt, motion, effects, seed }));
 
 /**
@@ -22,6 +25,7 @@ export function SongPictures({
   direction,
   style,
   pace,
+  fit,
   idea,
   look,
   aspect,
@@ -32,6 +36,7 @@ export function SongPictures({
   direction: SongDirection | null; // the shot list the pictures follow (when made from this idea)
   style: ArtStyle;
   pace: PicturePace;
+  fit: PictureFit;
   idea: string;
   look: string;
   aspect: Aspect;
@@ -84,12 +89,23 @@ export function SongPictures({
   const save = useCallback(
     (next: SongArtPlan, now = false) => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      const run = () => api.saveSongArtPlan(name, { bible: next.bible, slots: edits(next.slots) }).catch((e) => setMessage({ text: (e as Error).message, error: true }));
+      const run = () => api.saveSongArtPlan(name, { bible: next.bible, fit, slots: edits(next.slots) }).catch((e) => setMessage({ text: (e as Error).message, error: true }));
       if (now) void run();
       else saveTimer.current = setTimeout(run, 700);
     },
-    [name],
+    [name, fit],
   );
+
+  // Fit or Fill changed: the plan remembers it, and shows the pictures already drawn in the new shape
+  useEffect(() => {
+    if (!loaded || !planRef.current) return;
+    const cur = planRef.current;
+    api
+      .saveSongArtPlan(name, { bible: cur.bible, fit, slots: edits(cur.slots) })
+      .then((r) => setPlan(r.plan))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the choice changes
+  }, [fit]);
 
   const update = (k: number, patch: Partial<SongArtSlot>, now = false) => {
     const cur = planRef.current;
@@ -127,7 +143,7 @@ export function SongPictures({
     const seed = newTake ? newSeed() : slot.seed;
     setBusy((b) => ({ ...b, [k]: "draw" }));
     try {
-      const m = await api.artDraw({ prompt: slot.prompt, style, seed, aspect: slot.frame === "4:3" ? "16:9" : aspect });
+      const m = await api.artDraw({ prompt: slot.prompt, style, seed, aspect: drawAspect(slot, fit, aspect) });
       update(k, { seed, picture: { media: m.media, url: m.url, kind: "photo" } }, newTake);
       return true;
     } catch (e) {
@@ -289,7 +305,7 @@ export function SongPictures({
           <ol className={`m-0 grid list-none gap-2 p-0 ${aspect === "16:9" ? "grid-cols-1" : "grid-cols-2"}`}>
             {plan.slots.map((slot, k) => (
               <li key={k} className="grid content-start gap-1.5 rounded-lg border border-line/70 bg-sunken p-1.5">
-                <div className={`relative grid place-items-center overflow-hidden rounded-md bg-ink/[0.06] ${slot.frame === "4:3" ? "aspect-[4/3] self-center" : aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"}`}>
+                <div className={`relative grid place-items-center overflow-hidden rounded-md bg-ink/[0.06] ${slot.frame === "4:3" ? "aspect-[4/3] self-center" : drawAspect(slot, fit, aspect) === "9:16" && aspect === "16:9" ? "aspect-[9/16] max-h-64 self-center" : aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"}`}>
                   {previews[k] ? (
                     <video src={fileUrl(previews[k])} autoPlay loop muted playsInline className="size-full object-cover" />
                   ) : slot.picture ? (

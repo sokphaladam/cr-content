@@ -584,11 +584,12 @@ def _record(job: Path, platform: str, info: dict) -> None:
 
 
 def upload(job: Path, platform: str, log=print, privacy: str | None = None, publish_at: datetime | None = None,
-           category: str | None = None, channel: str | None = None) -> dict:
+           category: str | None = None, channel: str | None = None, tiktok_post: dict | None = None) -> dict:
     """`privacy`: YouTube public | unlisted | private, or a TikTok TIKTOK_PRIVACY level / "DRAFT". `publish_at`
     (local time): YouTube and Facebook upload now and make it public then (Facebook: FB_SCHEDULE_MIN to
     FB_SCHEDULE_MAX ahead). `category` is YouTube only. `channel`: the YouTube channel, Facebook Page or Instagram account
-    id to post to (default: the one chosen in Settings)."""
+    id to post to (default: the one chosen in Settings). `tiktok_post`: the interactions and content disclosure picked
+    for a TikTok direct post (see _upload_tiktok)."""
     video = job / "video.mp4"
     if not video.exists():
         raise PublishError("This video hasn't been rendered.")
@@ -608,7 +609,7 @@ def upload(job: Path, platform: str, log=print, privacy: str | None = None, publ
     elif platform == "instagram":
         info = _upload_instagram(job, video, log, channel)
     else:
-        info = _upload_tiktok(job, video, log, privacy)
+        info = _upload_tiktok(job, video, log, privacy, tiktok_post)
     _record(job, platform, info)
     return info
 
@@ -878,8 +879,9 @@ def _tiktok_call(path: str, token: str, body: dict) -> dict:
         code = err.get("code", r.status_code)
         hints = {
             "unaudited_client_can_only_post_to_private_accounts":
-                "TikTok hasn't audited your developer app yet, so it can only post privately. Set TikTok privacy to "
-                "'Only me', or switch to 'Send to TikTok drafts' and post from the app.",
+                "TikTok hasn't audited your developer app yet, so it can only post to a private account as 'Only me'. "
+                "In the TikTok app turn on Settings and privacy → Privacy → Private account, or switch to "
+                "'Send to TikTok drafts' and post from the app.",
             "spam_risk_too_many_posts": "TikTok's daily post limit for this account was reached. Try again tomorrow.",
             "scope_not_authorized": "The TikTok app wasn't granted this permission. Disconnect and connect again.",
         }
@@ -896,7 +898,10 @@ def tiktok_creator() -> dict:
     info = _tiktok_call("/post/publish/creator_info/query/", _token("tiktok"), {})
     return {"username": info.get("creator_username", ""), "nickname": info.get("creator_nickname", ""),
             "privacy_options": [o for o in info.get("privacy_level_options") or [] if o in TIKTOK_PRIVACY] or ["SELF_ONLY"],
-            "max_seconds": info.get("max_video_post_duration_sec") or 0}
+            "max_seconds": info.get("max_video_post_duration_sec") or 0,
+            # interactions the creator turned off in TikTok's own settings; the app can't allow them
+            "comment_disabled": bool(info.get("comment_disabled")), "duet_disabled": bool(info.get("duet_disabled")),
+            "stitch_disabled": bool(info.get("stitch_disabled"))}
 
 
 def _cover_ms(job: Path, video: Path, log, name: str = "TikTok") -> int:
@@ -920,8 +925,10 @@ def _cover_ms(job: Path, video: Path, log, name: str = "TikTok") -> int:
     return int(at * 1000)
 
 
-def _upload_tiktok(job: Path, video: Path, log, privacy: str | None = None) -> dict:
-    """`privacy`: a TIKTOK_PRIVACY level, or "DRAFT" for your TikTok drafts, for this upload (None = Settings)."""
+def _upload_tiktok(job: Path, video: Path, log, privacy: str | None = None, post: dict | None = None) -> dict:
+    """`privacy`: a TIKTOK_PRIVACY level, or "DRAFT" for your TikTok drafts, for this upload (None = Settings).
+    `post`: allow_comment / allow_duet / allow_stitch and the disclosure brand_organic / brand_content, as picked on
+    the Upload card (None for auto and scheduled uploads: interactions allowed, nothing disclosed)."""
     token = _token("tiktok")
     prefs = dict(settings()["tiktok"])
     if privacy == "DRAFT":
@@ -944,12 +951,19 @@ def _upload_tiktok(job: Path, video: Path, log, privacy: str | None = None) -> d
         privacy = prefs["privacy"] if prefs["privacy"] in options else ("SELF_ONLY" if "SELF_ONLY" in options else options[0])
         if privacy != prefs["privacy"]:
             log(f"TikTok: this account can't post as {prefs['privacy']}; posting as {privacy}.")
+        allow = post or {"allow_comment": True, "allow_duet": True, "allow_stitch": True}
+        post_info = {"title": caption, "privacy_level": privacy,
+                "disable_comment": not allow.get("allow_comment") or bool(creator.get("comment_disabled")),
+                "disable_duet": not allow.get("allow_duet") or bool(creator.get("duet_disabled")),
+                "disable_stitch": not allow.get("allow_stitch") or bool(creator.get("stitch_disabled")),
+                "video_cover_timestamp_ms": _cover_ms(job, video, log)}
+        if post and (post.get("brand_organic") or post.get("brand_content")):
+            if post.get("brand_content") and privacy == "SELF_ONLY":
+                raise PublishError("TikTok: branded content can't be posted as 'Only me'. Pick another visibility.")
+            post_info.update(brand_organic_toggle=bool(post.get("brand_organic")),
+                        brand_content_toggle=bool(post.get("brand_content")))
         log(f"TikTok: posting to @{creator.get('creator_username', '')}…")
-        init = _tiktok_call("/post/publish/video/init/", token, {
-            "post_info": {"title": caption, "privacy_level": privacy, "disable_comment": False,
-                          "disable_duet": False, "disable_stitch": False,
-                          "video_cover_timestamp_ms": _cover_ms(job, video, log)},
-            "source_info": source})
+        init = _tiktok_call("/post/publish/video/init/", token, {"post_info": post_info, "source_info": source})
     publish_id, upload_url = init["publish_id"], init["upload_url"]
     log(f"TikTok: uploading {size / 1e6:.1f} MB…")
     with open(video, "rb") as f:

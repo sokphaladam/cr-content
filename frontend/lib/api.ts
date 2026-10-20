@@ -47,8 +47,8 @@ export const ART_STYLES: { value: ArtStyle; label: string; hint: string }[] = [
   { value: "flat", label: "Flat 2D", hint: "Flat motion-graphics illustration, for explainers" },
 ];
 /** Camera moves over a picture (crcontent/fx.py MOTIONS); the _3d ones split it into depth layers. */
-export type Motion = "push_in" | "pull_out" | "pan_left" | "pan_right" | "tilt_up" | "tilt_down" | "orbit_3d" | "dolly_3d" | "rise_3d" | "still";
-export type Effect = "glow" | "light_leak" | "dust" | "snow" | "embers" | "sparkles" | "petals" | "speed_lines" | "chromatic" | "grain" | "vignette" | "flash";
+export type Motion = "push_in" | "pull_out" | "pan_left" | "pan_right" | "tilt_up" | "tilt_down" | "orbit_3d" | "dolly_3d" | "rise_3d" | "still" | "breathe";
+export type Effect = "glow" | "light_leak" | "dust" | "snow" | "embers" | "sparkles" | "petals" | "bokeh" | "rain" | "neon_glow" | "speed_lines" | "chromatic" | "grain" | "vignette" | "flash";
 /** Effects you pick per scene; bloom, grain and vignette come with the art style. */
 export const MOOD_EFFECTS: Effect[] = ["dust", "snow", "embers", "sparkles", "petals", "speed_lines", "light_leak", "flash"];
 
@@ -209,7 +209,7 @@ export interface SongScript {
 }
 
 export type Look = "natural" | "cinematic" | "film" | "moody" | "vibrant" | "dusk" | "mono";
-export type LyricPreset = "classic" | "neon" | "bold_pop" | "cinematic" | "minimal" | "retro" | "boxed";
+export type LyricPreset = "classic" | "neon" | "bold_pop" | "cinematic" | "minimal" | "retro" | "boxed" | "playlist" | "glitch";
 export type CutPace = "slow" | "normal" | "fast";
 /** Old-tape treatments for a section (crcontent/fx.py TAPES / FRAMES). */
 export type Tape = "" | "play" | "rewind" | "static_in" | "static";
@@ -246,7 +246,7 @@ export interface LyricStyle {
   position: "low" | "middle" | "high";
   color: string; // "#RRGGBB", words not sung yet
   highlight: string; // sung words
-  effect: "karaoke" | "fill" | "pop" | "fade";
+  effect: "karaoke" | "fill" | "pop" | "fade" | "glitch";
   outline: "outline" | "shadow" | "box" | "glow";
   case: "as_is" | "upper" | "lower";
 }
@@ -258,7 +258,8 @@ export interface StyleCatalog {
 }
 
 /** How many AI pictures a music video gets (crcontent/pipeline.py PICTURE_PACES): fewer = one per ~8 s, normal ~4.5 s, more ~3 s. */
-export type PicturePace = "fewer" | "normal" | "more";
+export type PicturePace = "fewer" | "normal" | "more" | "cover";
+export type PictureFit = "fit" | "fill"; // a cover picture: the whole character on its colour, or filling the screen
 
 /** One planned picture of a music video (crcontent/pipeline.py song_slots + Claude's prompt). */
 export interface SongArtSlot {
@@ -271,8 +272,9 @@ export interface SongArtSlot {
   motion: Motion;
   effects: Effect[];
   seed: number;
-  frame?: "4:3"; // a home-video section: drawn landscape
+  frame?: "4:3" | "cover"; // a home-video section: drawn landscape; a cover character: drawn portrait, set on a flat frame
   picture: MediaInfo | null; // already drawn (free to check before the render)
+  draw_aspect?: Aspect; // the shape it is drawn in (a cover character portrait unless it fills the screen)
 }
 
 /** A song's picture plan; a music video with the same look, pace and idea uses it as it is. */
@@ -294,6 +296,17 @@ export interface MusicVideoSettings {
   art_style?: ArtStyle | ""; // "" = stock footage; undefined = the song's last choice
   pictures?: PicturePace; // undefined = the song's last choice
   direction?: SongDirection | null; // the shot list for the idea; undefined = the song's
+  cold_open?: boolean; // the song's name in neon over the opening seconds; undefined = the song's last choice
+  now_playing?: boolean; // a now-playing card: title, progress bar, spinning record; undefined = the song's last choice
+  picture_fit?: PictureFit; // a cover picture: fit (whole) or fill (the whole screen); undefined = the song's last choice
+}
+
+/** The look and lyric style that fit a song, from its mood, genre and the idea (instant, no Claude call). */
+export interface StyleSuggestion {
+  look: Look;
+  lyric_preset: LyricPreset;
+  reason: string; // "nostalgic, hazy, dreamy song"
+  prompt: string; // a starter prompt for the cover picture: paste it into the picture and redraw
 }
 
 export interface VideoIdeaSuggestion {
@@ -316,9 +329,11 @@ export type Aspect = "16:9" | "9:16";
 
 export interface Job {
   id: string;
-  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips";
+  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video";
   status: "queued" | "running" | "done" | "error";
   step: number;
+  progress?: number | null; // how far the current step is, 0..1 (null/absent: no measure for it)
+  detail?: string; // what the current step is doing right now ("Rendering the cover 1:23 / 4:26")
   log: string[];
   title: string;
   video?: string;
@@ -341,6 +356,19 @@ export interface TikTokCreator {
   nickname: string;
   privacy_options: TikTokPrivacy[];
   max_seconds: number;
+  // interactions the creator turned off in TikTok's own settings
+  comment_disabled: boolean;
+  duet_disabled: boolean;
+  stitch_disabled: boolean;
+}
+
+/** What a TikTok direct post allows and discloses, chosen on the Upload card (TikTok's Direct Post guidelines). */
+export interface TikTokPost {
+  allow_comment: boolean;
+  allow_duet: boolean;
+  allow_stitch: boolean;
+  brand_organic: boolean; // "Your brand": promoting yourself or your own business
+  brand_content: boolean; // "Branded content": a paid partnership with a third party
 }
 
 /** A connected channel/account and its upload settings (crcontent/publish.py status()). */
@@ -404,7 +432,7 @@ export type PublishAccounts = Record<Platform, PublishAccount> & {
   youtube_categories?: Record<string, string>; // id -> name (missing on an older engine)
 };
 
-export type ServiceKey = "ANTHROPIC_API_KEY" | "ANTHROPIC_WORKSPACE_ID" | "PIXABAY_API_KEY" | "PEXELS_API_KEY" | "ELEVENLABS_API_KEY" | "JAMENDO_CLIENT_ID";
+export type ServiceKey = "ANTHROPIC_API_KEY" | "ANTHROPIC_WORKSPACE_ID" | "PIXABAY_API_KEY" | "PEXELS_API_KEY" | "ELEVENLABS_API_KEY" | "JAMENDO_CLIENT_ID" | "YOUTUBE_API_KEY";
 
 /** A free instrumental track on Jamendo (crcontent/music.py search()). */
 export interface MusicResult {
@@ -537,7 +565,7 @@ export interface VideoSummary {
   title: string;
   lang: Lang;
   created: string;
-  kind: "video" | "song" | "music_video";
+  kind: "video" | "song" | "music_video" | "long_video"; // long_video: Script to Video (16:9, from a script .md)
   source: "" | "upload"; // "upload" = your own song (mp3 + lyrics)
   aspect: Aspect;
   song_folder: string; // music video: the song it was made from ("" if that song was deleted)
@@ -557,6 +585,9 @@ export interface VideoDetail extends VideoSummary {
   art_style?: ArtStyle | ""; // same, for the AI scene art ("" = stock footage)
   pictures?: PicturePace; // same, for how many AI pictures
   direction?: SongDirection | null; // songs: the shot list made from the idea
+  cold_open?: boolean; // same, for the neon title intro
+  now_playing?: boolean; // same, for the now-playing card
+  picture_fit?: PictureFit; // same, for how a cover picture sits on the frame
   lyric_style?: LyricStyle | null; // same, for the lyrics
   post: string;
   published?: Partial<Record<Platform, Published>>; // missing on an older engine
@@ -570,6 +601,36 @@ export interface VideoDetail extends VideoSummary {
   thumb_suggestions: ThumbSuggestions | null; // last "Suggest covers" result
 }
 
+/** One Smart Highlights candidate (crcontent/highlights report.json). Files are inside the source video's folder. */
+export interface HighlightCandidate {
+  candidate: number;
+  final_rank: number; // 1 = the pick (Claude's order when the judge ran, else the score's)
+  score_rank: number;
+  start: number; // seconds into the source video
+  end: number;
+  length: number;
+  section: string; // "Final Chorus"
+  kind: string; // "chorus"
+  score: number;
+  parts: { structure: number; lyrics: number; visual?: number; hook: number; repeat_penalty?: number };
+  hook_line: string; // the lyric it opens on
+  lyrics: string[];
+  // title / line / question / hashtags / comment: the upload text (older reports only have the caption)
+  ai: { rank: number; reason: string; hook_text: string; caption: string; title?: string; hashtags?: string[]; comment?: string } | null;
+  hook_text: string;
+  caption: string;
+  covers: { file: string; at: number; score: number }[];
+  job: string; // the rendered clip's output folder ("" = not rendered, or deleted since)
+}
+
+export interface HighlightsReport {
+  title: string;
+  judge: boolean; // Claude ranked them
+  chosen: number[]; // candidate numbers that were rendered
+  candidates: HighlightCandidate[]; // in final order
+  page: string; // report.html, inside the video's folder
+}
+
 /** One "Suggest titles" option: a ready-to-post title, description and hashtags (no # sign). */
 export interface PostSuggestion {
   angle: string; // e.g. "Curiosity gap", "Emotional story"
@@ -578,7 +639,7 @@ export interface PostSuggestion {
   hashtags: string[];
 }
 
-export type ThumbStyle ="bold" | "box" | "stacked" | "designed"; // designed: a full layout Claude draws
+export type ThumbStyle = "bold" | "box" | "stacked" | "designed" | "magazine"; // designed: a full layout Claude draws; magazine: a one-cover video's character in front of huge words
 
 export interface ThumbSuggestion {
   text: string;
@@ -754,6 +815,41 @@ async function request<T>(path: string, init: RequestInit & { json?: unknown; ti
 /** URL for a project-relative file (uploads/..., cache/...) or an output folder file. */
 export const fileUrl = (projectPath: string) =>
   `${API_BASE}/${projectPath.split("/").map(encodeURIComponent).join("/")}`;
+/** "Review packaging": Claude's scores for the title, thumbnail and opening, and stronger versions of each. */
+export interface PackagingReview {
+  title: { score: number; verdict: string };
+  thumbnail: { score: number; verdict: string };
+  opening: { score: number; verdict: string };
+  titles: string[];
+  thumbnail_texts: { text: string; emphasis: string }[];
+  opening_line: string;
+  fixes: string[];
+  fluff: string[]; // stock intros found in the opening ("welcome back", "in this video")
+  current_title: string;
+}
+
+/** A YouTube video with far more views than its channel has subscribers, and Claude's remake plan for it. */
+export interface Outlier {
+  id: string;
+  url: string;
+  title: string;
+  channel: string;
+  views: number;
+  subs: number;
+  ratio: number; // views per subscriber
+  published: string;
+  seconds: number;
+  thumbnail: string;
+  weak?: ("title" | "thumbnail" | "execution")[];
+  verdict?: string;
+  target?: boolean; // strong idea, under-delivered: worth remaking
+  better_title?: string;
+  better_thumbnail?: string;
+  hook?: string;
+  plan?: string;
+  topic?: string;
+}
+
 export interface TopicIdea {
   format: string; // the hook style: "rank these", "myth vs fact", ...
   topic: string; // the angle, for the script writer
@@ -770,6 +866,9 @@ export const api = {
   /** Ideas for the next Shorts in a mix of hook formats, none a near-repeat of the library's recent titles. */
   topicIdeas: (niche: string, lang: Lang) =>
     request<{ topics: TopicIdea[] }>("/api/topic-ideas", { method: "POST", json: { niche, lang }, timeout: 0 }),
+  /** Proven ideas, weakly packaged: YouTube videos about `query` with 5x+ views per subscriber, judged by Claude. */
+  outliers: (query: string, lang: Lang, length: "short" | "long" | "any") =>
+    request<{ videos: Outlier[]; found: number; note?: string }>("/api/outliers", { method: "POST", json: { query, lang, length }, timeout: 0 }),
   importScript: (text: string) =>
     request<{ script: VideoScript; lang: Lang; method: "claude" | "basic" }>("/api/import", { method: "POST", json: { text, lang: "auto" }, timeout: 0 }),
   translate: (script: VideoScript, target: Lang) =>
@@ -821,6 +920,12 @@ export const api = {
     request<SongScript>("/api/song/write", { method: "POST", json: body, timeout: 0 }),
   composeSong: (body: { song: SongScript; topic: string; lang: Lang; stems: boolean }) =>
     request<{ id: string }>("/api/song/compose", { method: "POST", json: body, timeout: 0 }),
+  /** A long 16:9 video from a script .md: builds voiceover, timing and footage up to the storyboard to check. */
+  longVideo: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{ id: string; title: string; scenes: number; notes: string[] }>("/api/longform", { method: "POST", body: form, timeout: 0 });
+  },
   importSong: (body: { file: File; title: string; lyrics: string; lang: Lang; aspect: Aspect }) => {
     const form = new FormData();
     form.append("file", body.file);
@@ -846,8 +951,14 @@ export const api = {
     request<{ id: string }>(`/api/videos/${encodeURIComponent(name)}/lyrics/sync`, { method: "POST", timeout: 0 }),
   musicVideo: (name: string, settings: MusicVideoSettings) =>
     request<{ id: string }>(`/api/videos/${encodeURIComponent(name)}/music-video`, { method: "POST", json: settings, timeout: 0 }),
+  styleSuggestion: (name: string, body: { idea: string; pictures: string }) =>
+    request<StyleSuggestion>(`/api/videos/${encodeURIComponent(name)}/style-suggestion`, { method: "POST", json: body }),
   videoIdeas: (name: string) =>
     request<{ ideas: VideoIdeaSuggestion[] }>(`/api/videos/${encodeURIComponent(name)}/video-ideas`, { method: "POST", timeout: 0 }),
+  highlights: (name: string) =>
+    request<{ report: HighlightsReport | null; job: string | null }>(`/api/videos/${encodeURIComponent(name)}/highlights`),
+  findHighlights: (name: string, body: { ai_judge: boolean; artist: string }) =>
+    request<{ id: string }>(`/api/videos/${encodeURIComponent(name)}/highlights`, { method: "POST", json: body }),
   drafts: () => request<DraftSummary[]>("/api/drafts"),
   draft: (id: string) => request<DraftData & { id: string }>(`/api/drafts/${encodeURIComponent(id)}`),
   createDraft: (d: DraftData) => request<{ id: string; updated: string }>("/api/drafts", { method: "POST", json: d }),
@@ -866,6 +977,12 @@ export const api = {
     request<{ items: PostSuggestion[] }>(`/api/videos/${encodeURIComponent(name)}/post/suggest`, { method: "POST", json: { idea }, timeout: 0 }),
   savePost: (name: string, post: Omit<PostSuggestion, "angle">) =>
     request<{ post: string }>(`/api/videos/${encodeURIComponent(name)}/post`, { method: "PUT", json: post }),
+  reviewPackaging: (name: string) =>
+    request<PackagingReview>(`/api/videos/${encodeURIComponent(name)}/packaging`, { method: "POST", timeout: 0 }),
+  setPostTitle: (name: string, title: string) =>
+    request<{ post: string }>(`/api/videos/${encodeURIComponent(name)}/post/title`, { method: "PUT", json: { title } }),
+  journey: () => request<{ journey: string }>("/api/settings/journey"),
+  saveJourney: (journey: string) => request<{ journey: string }>("/api/settings/journey", { method: "PUT", json: { journey } }),
   serviceKeys: () => request<ServiceKeys>("/api/settings/keys"),
   locations: () => request<Locations>("/api/settings/locations"),
   // moving a big library to another drive takes a while: no time limit
@@ -893,6 +1010,7 @@ export const api = {
       category?: string;
       channel?: string;
       tiktok_privacy?: TikTokPrivacy | "DRAFT";
+      tiktok_post?: TikTokPost; // direct posts only
       facebook_publish_at?: string; // uploads now; Facebook publishes it at this local time (10 min to 28 days ahead)
     } = {},
   ) =>
@@ -938,7 +1056,7 @@ export const api = {
     request<SongDirection>(`/api/videos/${encodeURIComponent(name)}/direct`, { method: "PUT", json: direction }),
   planSongArt: (name: string, body: { style: ArtStyle; pictures: PicturePace; idea: string; bible?: string; direction?: SongDirection | null }) =>
     request<{ plan: SongArtPlan }>(`/api/videos/${encodeURIComponent(name)}/art-plan`, { method: "POST", json: body, timeout: 300_000 }),
-  saveSongArtPlan: (name: string, body: { bible?: string; slots: Pick<SongArtSlot, "prompt" | "motion" | "effects" | "seed">[] }) =>
+  saveSongArtPlan: (name: string, body: { bible?: string; fit?: PictureFit; slots: Pick<SongArtSlot, "prompt" | "motion" | "effects" | "seed">[] }) =>
     request<{ plan: SongArtPlan }>(`/api/videos/${encodeURIComponent(name)}/art-plan`, { method: "PUT", json: body }),
   /** A few seconds of a drawn picture with its camera move and effects. */
   previewShot: (body: { media: string; style: ArtStyle; motion: Motion; effects: Effect[]; aspect: Aspect; look?: string }) =>

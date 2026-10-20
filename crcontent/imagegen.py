@@ -438,9 +438,28 @@ def _no_people(prompt: str, style: str) -> bool:
     return style == "anime" and ("no humans" in prompt.lower() or not _PEOPLE.search(prompt))
 
 
-def full_prompt(prompt: str, style: str) -> str:
+# parts of a prompt that tell an editor what to deliver, not what to draw ("16:9 at high resolution", "a clean version
+# with no title text"): the model can't follow them, they use up its ~75 tokens, and "title text" draws letters
+_DELIVERY = re.compile(r"\b(\d+:\d+|aspect ratio|resolution|\d+k|uhd|title|text|clean version|editing|thumbnail|"
+                       r"make it|so (?:you|i|we) can|wallpaper size)\b", re.I)
+_MAN = re.compile(r"\b(man|boy|guy|husband|boyfriend)\b", re.I)
+_WOMAN = re.compile(r"\b(woman|girl|lady|wife|girlfriend)\b", re.I)
+
+
+def _tidy(prompt: str) -> str:
+    """A prompt written as sentences, made drawable: the delivery instructions dropped (whole comma or sentence
+    parts), and a man and a woman counted as "1boy, 1girl" (without the count Animagine draws one of them)."""
+    parts = [p.strip() for p in re.split(r"[,.;]\s*|\s+and\s+(?=keep|make|so\b)", prompt) if p.strip()]
+    kept = [p for p in parts if not _DELIVERY.search(p)]
+    out = prompt if len(kept) == len(parts) else ", ".join(re.sub(r"^and\s+", "", p) for p in kept) or prompt
+    if not re.search(r"\b\d+(girl|boy)s?\b", out, re.I) and _MAN.search(out) and _WOMAN.search(out):
+        out = f"1boy, 1girl, {out}"
+    return out
+
+
+def full_prompt(prompt: str, style: str, legacy: bool = False) -> str:
     spec = STYLES[style]
-    prompt = prompt.strip().rstrip(",")
+    prompt = _tidy(prompt.strip()).rstrip(",")
     if _no_people(prompt, style) and "no humans" not in prompt.lower():
         prompt = f"no humans, {prompt}"
     male, female = _sexes(prompt)
@@ -448,7 +467,30 @@ def full_prompt(prompt: str, style: str) -> str:
         # without it Animagine draws "1boy" with long or messy hair as a girl (and pastes any beard onto her)
         head, _, rest = prompt.partition(",")
         prompt = f"{head}, male focus,{rest}" if rest else f"{head}, male focus"
+    if _flat(prompt, style):
+        # a cover on a plain background: "simple/plain background" first (the text encoder drops whatever passes
+        # ~75 tokens), the colour last (up front it leaks into the hair and clothes; the render repaints the
+        # background to the exact colour anyway), and no "cinematic lighting", which pulls in a lit scene
+        tags = [t.strip() for t in prompt.split(",")]
+        back = [t for t in tags if t.lower().endswith("background")]
+        if legacy:  # how covers drawn before 2026-10-17 evening were worded: every background tag first
+            back = back[:1] + ["plain background"] + back[1:] if "plain background" not in back else back
+            return f"{spec['prefix']}{', '.join(back + [t for t in tags if t not in back])}, anime illustration"
+        plain = [t for t in back if t.lower() in ("simple background", "plain background")]
+        plain += [] if "plain background" in (t.lower() for t in plain) else ["plain background"]
+        colour = [t for t in back if t not in plain]
+        return f"{spec['prefix']}{', '.join(plain + [t for t in tags if t not in back] + colour)}, anime illustration"
     return f"{spec['prefix']}{prompt}{spec['suffix']}"
+
+
+def _flat(prompt: str, style: str) -> bool:
+    """An anime picture on a plain background (a music video's cover picture)."""
+    return style == "anime" and "simple background" in prompt.lower()
+
+
+FLAT_NEGATIVE = ("scenery, outdoors, indoors, building, architecture, window, sky, detailed background, gradient "
+                 "background, abstract background, multicolored background, patterned background, paint splatter, "
+                 "splashes, border, frame, picture frame, panel, from below, foreshortening, reaching towards viewer")
 
 
 def _sex_negative(prompt: str, style: str) -> str:
@@ -466,13 +508,13 @@ def _sex_negative(prompt: str, style: str) -> str:
 
 
 def cache_file(prompt: str, style: str, size: tuple[int, int], seed: int, hires: bool = True, negative: str = "",
-               reference: Path | None = None) -> Path:
+               reference: Path | None = None, legacy: bool = False) -> Path:
     """Where generate() keeps this picture (it may not be drawn yet)."""
     w, h = base_size(size)
     # the full prompt and hi-res scale are part of the key, so changing a look's wording draws new pictures
     ref = f"\nref {hashlib.sha1(reference.read_bytes()).hexdigest()[:12]} {IP_SCALE}" if reference else ""
-    key = hashlib.sha1(f"{style}\n{w}x{h}\n{seed}\n{hires}{HIRES_SCALE}\n{negative}{_sex_negative(prompt, style)}\n"
-                       f"{full_prompt(prompt.strip(), style)}{ref}"
+    key = hashlib.sha1(f"{style}\n{w}x{h}\n{seed}\n{hires}{HIRES_SCALE}\n{negative}{_sex_negative(prompt, style)}{FLAT_NEGATIVE if _flat(prompt, style) else ''}\n"
+                       f"{full_prompt(prompt.strip(), style, legacy)}{ref}"
                        .encode()).hexdigest()[:16]
     return GEN_CACHE / f"{style}-{key}.png"
 
@@ -481,8 +523,11 @@ def drawn(prompt: str, style: str, size: tuple[int, int], seed: int) -> Path | N
     """The picture if generate() already drew it, else None (nothing is drawn)."""
     if style not in STYLES or not prompt.strip():
         return None
-    out = cache_file(prompt, style, size, seed)
-    return out if out.exists() and out.stat().st_size else None
+    for legacy in (False, True):  # a cover drawn under the old wording is still that picture
+        out = cache_file(prompt, style, size, seed, legacy=legacy)
+        if out.exists() and out.stat().st_size:
+            return out
+    return None
 
 
 _CFG_INPUTS = ["prompt_embeds", "add_text_embeds", "add_time_ids"]
@@ -536,6 +581,9 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
     out = cache_file(prompt, style, size, seed, hires, negative, reference)
     if out.exists() and out.stat().st_size:
         return out
+    old = cache_file(prompt, style, size, seed, hires, negative, reference, legacy=True)
+    if _flat(prompt, style) and old.exists() and old.stat().st_size:  # drawn under the old cover wording: keep it
+        return old
     with _lock:
         import torch
         from diffusers import StableDiffusionXLImg2ImgPipeline
@@ -550,7 +598,8 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
             # once loaded, the model needs a photo every time: a blank one at no weight draws as without IP-Adapter
             pipe.set_ip_adapter_scale(IP_SCALE if reference else 0.0)
             ip = {"ip_adapter_image": _reference_image(reference) if reference else Image.new("RGB", (224, 224))}
-        neg = ", ".join(x for x in (spec["negative"], _sex_negative(prompt, style), negative) if x)
+        neg = ", ".join(x for x in (spec["negative"], _sex_negative(prompt, style), negative,
+                                    FLAT_NEGATIVE if _flat(prompt, style) else "") if x)
         # on a Mac the seed's noise comes from the CPU: diffusers' advice, for the same picture every time
         generator = torch.Generator("cuda" if device() == "cuda" else "cpu").manual_seed(seed)
         image = _run(pipe, CFG_UNTIL[0], prompt=full_prompt(prompt, style), negative_prompt=neg, width=w, height=h,
@@ -568,3 +617,45 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
         image.save(tmp)
         os.replace(tmp, out)
     return out
+
+
+def outpaint(image, mask, prompt: str, style: str, seed: int, log=print, tidy=None):
+    """Paint the white part of `mask` (a PIL "L" image) in `image` (a PIL picture at an SDXL size) so it continues
+    the rest: a picture widened to another shape. The unpainted part is kept exactly; the result then gets the same
+    hi-res pass as generate(). `tidy`: a function (PIL picture -> PIL picture) run before that pass, e.g. to flatten
+    a background, so the pass doesn't sharpen a faint seam into a drawn line. Returns a PIL picture HIRES_SCALE x
+    bigger."""
+    import torch
+    from diffusers import StableDiffusionXLImg2ImgPipeline, StableDiffusionXLInpaintPipeline
+    from PIL import Image, ImageFilter
+
+    with _lock:
+        spec = STYLES[style]
+        pipe = _load(style, log)
+        ip = {}
+        if getattr(pipe, "image_encoder", None) is not None:  # loaded for an earlier picture: draw as without it
+            pipe.set_ip_adapter_scale(0.0)
+            ip = {"ip_adapter_image": Image.new("RGB", (224, 224))}
+        neg = ", ".join(x for x in (spec["negative"], _sex_negative(prompt, style),
+                                    FLAT_NEGATIVE if _flat(prompt, style) else "") if x)
+        generator = torch.Generator("cuda" if device() == "cuda" else "cpu").manual_seed(seed)
+        paint = StableDiffusionXLInpaintPipeline(**pipe.components)  # the same modules: no second copy
+        paint.set_progress_bar_config(disable=True)
+        # full guidance throughout (not _run): the inpainting blend splits its mask by guidance, and switching it
+        # off midway leaves the mask and the picture with different batch sizes
+        painted = paint(prompt=full_prompt(prompt, style), negative_prompt=neg, image=image, mask_image=mask,
+                        width=image.width, height=image.height, strength=0.99, num_inference_steps=spec["steps"] + 8,
+                        guidance_scale=spec["cfg"], generator=generator, **ip).images[0]
+        # what wasn't to be painted stays exactly as it was: the blend runs outside it (the painted part shrunk
+        # first), never over its outline
+        soft = mask.filter(ImageFilter.MinFilter(13)).filter(ImageFilter.GaussianBlur(4))
+        image = Image.composite(painted, image, soft)
+        if tidy:
+            image = tidy(image)
+        refine = StableDiffusionXLImg2ImgPipeline(**pipe.components)
+        refine.set_progress_bar_config(disable=True)
+        w, h = image.size
+        image = image.resize((round(w * HIRES_SCALE / 8) * 8, round(h * HIRES_SCALE / 8) * 8), resample=3)
+        return _run(refine, CFG_UNTIL[1], prompt=full_prompt(prompt, style), negative_prompt=neg, image=image,
+                    strength=0.3, num_inference_steps=HIRES_STEPS, guidance_scale=spec["cfg"], generator=generator,
+                    **ip)

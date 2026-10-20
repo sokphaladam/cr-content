@@ -98,6 +98,139 @@ export function Field({ label, htmlFor, hint, children }: { label: ReactNode; ht
   );
 }
 
+/* ---------- File drop ---------- */
+
+/** Does `file` match an <input accept> list (".mp3,.wav,audio/*")? An empty list takes anything. */
+export function accepts(accept: string, file: File) {
+  const rules = accept.split(",").map((r) => r.trim().toLowerCase()).filter(Boolean);
+  if (!rules.length) return true;
+  const name = file.name.toLowerCase();
+  const type = file.type.toLowerCase();
+  return rules.some((r) => (r.startsWith(".") ? name.endsWith(r) : r.endsWith("/*") ? type.startsWith(r.slice(0, -1)) : type === r));
+}
+
+const hasFiles = (e: React.DragEvent | DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+
+let guarded = false;
+/** A file dropped outside every drop zone would otherwise replace the whole app with that file. */
+function guardWindow() {
+  if (guarded || typeof window === "undefined") return;
+  guarded = true;
+  const stop = (e: DragEvent) => {
+    if (hasFiles(e)) e.preventDefault();
+  };
+  window.addEventListener("dragover", stop);
+  window.addEventListener("drop", stop);
+}
+
+/** Files can be dragged onto `children` as well as picked with their file input: the ones `accept` allows go to
+ * `onFiles` (only the first unless `multiple`); when none fit, `onReject` says what was expected. */
+export function DropZone({
+  accept = "",
+  multiple = false,
+  disabled = false,
+  onFiles,
+  onReject,
+  label = "Drop to add",
+  className = "",
+  children,
+}: {
+  accept?: string;
+  multiple?: boolean;
+  disabled?: boolean;
+  onFiles: (files: File[]) => void;
+  onReject?: (message: string) => void;
+  label?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const [over, setOver] = useState(false);
+  const depth = useRef(0); // dragenter/dragleave fire for every child the pointer crosses
+  useEffect(guardWindow, []);
+
+  return (
+    <div
+      className={`relative ${className}`}
+      onDragEnter={(e) => {
+        if (disabled || !hasFiles(e)) return;
+        e.preventDefault();
+        depth.current += 1;
+        setOver(true);
+      }}
+      onDragOver={(e) => {
+        if (disabled || !hasFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={() => {
+        depth.current = Math.max(0, depth.current - 1);
+        if (!depth.current) setOver(false);
+      }}
+      onDrop={(e) => {
+        if (disabled || !hasFiles(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        depth.current = 0;
+        setOver(false);
+        const ok = Array.from(e.dataTransfer.files).filter((f) => accepts(accept, f));
+        if (!ok.length) {
+          const exts = accept.split(",").map((r) => r.trim()).filter((r) => r.startsWith("."));
+          onReject?.(`That file can't be used here${exts.length ? ` (use ${exts.join(", ")})` : ""}.`);
+          return;
+        }
+        onFiles(multiple ? ok : ok.slice(0, 1));
+      }}
+    >
+      {children}
+      {over && (
+        <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-xl border-2 border-dashed border-cobalt bg-cobalt/10">
+          <span className="rounded-md bg-cobalt px-3 py-1.5 text-base font-semibold text-white shadow">{label}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A file field you can drop a file on or click to choose one; shows the chosen file's name. */
+export function FileInput({
+  id,
+  accept,
+  file,
+  onFile,
+  onReject,
+  disabled = false,
+}: {
+  id: string;
+  accept: string;
+  file: string; // the chosen file's name ("" = none yet)
+  onFile: (file: File) => void;
+  onReject?: (message: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <DropZone accept={accept} disabled={disabled} onFiles={(f) => onFile(f[0])} onReject={onReject} label="Drop the file">
+      <div className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border-2 border-dashed border-line bg-sunken/50 px-4 py-4 ${disabled ? "opacity-60" : ""}`}>
+        <label htmlFor={id} className={`${buttonClass("secondary", "sm")} ${disabled ? "pointer-events-none" : "cursor-pointer"}`}>
+          Choose file
+        </label>
+        <input
+          id={id}
+          type="file"
+          accept={accept}
+          disabled={disabled}
+          className="sr-only"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = ""; // choosing the same file again (after editing it) reads it again
+            if (f) onFile(f);
+          }}
+        />
+        {file ? <span className="min-w-0 truncate text-base font-semibold text-ink">{file}</span> : <span className="text-base text-ink-soft">or drag it here</span>}
+      </div>
+    </DropZone>
+  );
+}
+
 export function Message({ text, error }: { text: string; error?: boolean }) {
   if (!text) return null;
   return (

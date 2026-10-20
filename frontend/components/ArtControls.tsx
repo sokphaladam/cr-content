@@ -156,7 +156,7 @@ export function ArtStylePicker({
   );
 }
 
-const MOTION_ORDER: Motion[] = ["dolly_3d", "orbit_3d", "rise_3d", "push_in", "pull_out", "pan_left", "pan_right", "tilt_up", "tilt_down", "still"];
+const MOTION_ORDER: Motion[] = ["dolly_3d", "orbit_3d", "rise_3d", "push_in", "pull_out", "pan_left", "pan_right", "tilt_up", "tilt_down", "still", "breathe"];
 
 /** A scene's AI picture: its prompt, draw / another take, the camera move and atmosphere effects. */
 export function ScenePicture({
