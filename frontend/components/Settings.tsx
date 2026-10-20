@@ -32,6 +32,13 @@ const SERVICES: { key: ServiceKey; name: string; does: string; url: string; opti
     url: "https://devportal.jamendo.com/",
     optional: true,
   },
+  {
+    key: "YOUTUBE_API_KEY",
+    name: "YouTube Data API",
+    does: "Searches YouTube for outlier videos to remake. Not needed when a YouTube channel is connected below.",
+    url: "https://console.cloud.google.com/apis/credentials",
+    optional: true,
+  },
 ];
 
 const ID_LABEL: Record<Platform, string> = { youtube: "Client ID", tiktok: "Client key", facebook: "App ID", instagram: "App ID" };
@@ -210,6 +217,7 @@ function ServiceRow({ service, state, onSaved }: { service: (typeof SERVICES)[nu
 const SECTIONS = [
   { id: "services", label: "Services" },
   { id: "channels", label: "Channels" },
+  { id: "journey", label: "Your journey" },
   { id: "queue", label: "Upload queue" },
   { id: "scene-art", label: "AI features" },
   { id: "appearance", label: "Appearance" },
@@ -309,6 +317,60 @@ function SettingRow({ title, hint, children }: { title: string; hint?: string; c
         {hint && <span className="text-sm text-ink-soft">{hint}</span>}
       </div>
       {children}
+    </div>
+  );
+}
+
+/* ---------- Your journey (a progress line in descriptions) ---------- */
+
+function JourneyRow() {
+  const toast = useToast();
+  const [saved, setSaved] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.journey().then((r) => {
+      setSaved(r.journey);
+      setText(r.journey);
+    }).catch(() => setSaved(""));
+  }, []);
+
+  async function save() {
+    setBusy(true);
+    try {
+      const r = await api.saveJourney(text);
+      setSaved(r.journey);
+      setText(r.journey);
+      toast(r.journey ? "Journey saved" : "Journey line turned off", "success");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-2 px-4 py-3.5">
+      <label htmlFor="journey" className="text-md font-semibold">
+        Where you are now <span className="text-sm font-normal text-ink-soft">optional</span>
+      </label>
+      <textarea
+        id="journey"
+        rows={2}
+        maxLength={400}
+        value={text}
+        disabled={saved === null}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Week 6 of posting a Short every day. 312 subscribers, aiming for 1,000 by March."
+        className="field-input resize-y py-1.5 text-base leading-snug"
+      />
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm text-ink-soft">Update it as you grow. Leave it empty to turn the line off.</span>
+        <Button size="sm" variant="primary" loading={busy} disabled={saved === null || text.trim() === saved} onClick={save}>
+          Save
+        </Button>
+      </div>
     </div>
   );
 }
@@ -1202,6 +1264,13 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
             ) : (
               <p className="m-0 p-4 text-base text-ink-soft">Checking accounts…</p>
             )}
+          </Section>
+          <Section
+            id="journey"
+            title="Your journey"
+            intro="Viewers stick with a channel they feel they're growing with. Say where you are, and Claude works one honest line about it into each description it writes, never into the video itself."
+          >
+            <JourneyRow />
           </Section>
           <Section
             id="queue"

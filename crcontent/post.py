@@ -113,7 +113,11 @@ def suggest_posts(job: Path, lang: str, count: int = 5, idea: str = "",
     if idea.strip():
         prompt += f"The user's direction for the post:\n<idea>\n{idea.strip()}\n</idea>\nFollow it.\n\n"
     prompt += f"Write {count} options, each with a different angle. Make the first one your strongest pick."
+    from .packaging import JOURNEY_RULE, journey
+
     system = SYSTEM + (KHMER_NOTE if lang == "km" else "")
+    if journey():
+        system += "\n\n" + JOURNEY_RULE.format(note=journey())
     response = client.beta.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=6000,
@@ -147,5 +151,14 @@ def write_post(job: Path, title: str, description: str, hashtags: list[str]) -> 
             if line.startswith(("Sources: ", "Photo: ", 'Music: "')) and line not in description]
     description = "\n\n".join([description.strip(), *kept])
     text = f"{title.strip()}\n\n{description}\n\n{tags}\n{credit}"
+    (job / "post.txt").write_text(text, encoding="utf-8")
+    return text
+
+
+def set_title(job: Path, title: str) -> str:
+    """Swap only the title line of post.txt (the description, hashtags and credits stay as they are)."""
+    old = (job / "post.txt").read_text(encoding="utf-8") if (job / "post.txt").exists() else ""
+    _, _, rest = old.partition("\n")
+    text = f"{title.strip()}\n{rest}" if rest else f"{title.strip()}\n"
     (job / "post.txt").write_text(text, encoding="utf-8")
     return text

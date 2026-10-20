@@ -231,6 +231,18 @@ def _case(text: str, case: str, lang: str) -> str:
     return text.upper() if case == "upper" else text.lower() if case == "lower" else text
 
 
+KARAOKE_MARGIN = 80  # the Lyric style's left/right margin: libass wraps a line at the frame width minus both
+
+
+def karaoke_font(profile: LangProfile, style: "LyricStyle", size: tuple[int, int] = (WIDTH, HEIGHT)) -> int:
+    """The lyric line's font size in build_karaoke_ass: ~68 px at 1080p landscape, ~74-80 px on a 1080x1920 frame
+    (Khmer a little bigger: its stacked vowels), times the style's size."""
+    W, H = size
+    font = round(profile.font_size * (0.85 if profile.code == "km" else 0.8))
+    font = round(font * (0.92 if W > H else 1.04) * min(W, H) / 1080)
+    return round(font * {"s": 0.8, "m": 1.0, "l": 1.25}[style.size])
+
+
 def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: float = 0.8,
                       size: tuple[int, int] = (WIDTH, HEIGHT), style: "LyricStyle | None" = None,
                       title: tuple | None = None,
@@ -259,10 +271,7 @@ def build_karaoke_ass(lines, profile: LangProfile, lead_in: float = 0.35, hold: 
     style = (style or LyricStyle()).clean(profile.code)
     W, H = size
     landscape = W > H
-    # ~68 px at 1080p landscape, ~74-80 px on a 1080x1920 frame (Khmer a little bigger: its stacked vowels)
-    font = round(profile.font_size * (0.85 if profile.code == "km" else 0.8))
-    font = round(font * (0.92 if landscape else 1.04) * min(W, H) / 1080)
-    font = round(font * {"s": 0.8, "m": 1.0, "l": 1.25}[style.size])
+    font = karaoke_font(profile, style, size)
     small = round(font * 0.72)
     base, high = ass_color(style.color), ass_color(style.highlight)
     unsung = 0x38  # words not sung yet: ~78% opaque, so the sung ones stand out even when both are white

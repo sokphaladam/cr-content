@@ -1,21 +1,32 @@
 "use client";
 
-import { Check, Copy, Download, Film, ImageIcon, ImageUp, ListMusic, Music, Sparkles, Trash2 } from "lucide-react";
+import { Check, Copy, Download, Film, ImageIcon, ImageUp, ListMusic, ListVideo, Music, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { API_BASE, api, fileUrl, outputUrl, type Job, type Lang, type MusicVideoSettings, type Options, type PostSuggestion, type Scene, type ThumbStyle, type ThumbSuggestion, type ThumbSuggestions, type VideoDetail, type VideoSummary } from "@/lib/api";
 import { isImagePath, relativeTime } from "@/lib/format";
 import type { DraftTimeline } from "@/lib/useDraftTimeline";
-import { Button, IconButton, Segmented, buttonClass, useToast } from "./ui";
+import { Button, DropZone, IconButton, Segmented, buttonClass, useToast } from "./ui";
+import { HighlightsCard } from "./HighlightsCard";
 import { CaptionPanel, LiveControls, LiveFrame, type FrameEdits } from "./LivePreview";
 import { MusicVideoOptions } from "./MusicVideoOptions";
+import { PackagingReview } from "./PackagingReview";
 import { PublishCard } from "./PublishCard";
 
 const STEPS = ["Script", "Voiceover", "Footage", "Captions", "Final render"];
 const SONG_STEPS = ["Lyrics", "Compose", "Lyric timing"];
 const MUSIC_VIDEO_STEPS = ["Lyric timing", "Beats and footage", "Captions", "Final render"];
 const SYNC_STEPS = ["Read lyrics", "Lyric timing"];
+const LONG_STEPS = ["Read the script", "Voiceover", "Timing", "Footage", "Storyboard"]; // up to the storyboard to check
 const stepsFor = (job: Job | null) =>
-  job?.kind === "song" ? SONG_STEPS : job?.kind === "song_video" ? MUSIC_VIDEO_STEPS : job?.kind === "lyrics_sync" ? SYNC_STEPS : STEPS;
+  job?.kind === "song"
+    ? SONG_STEPS
+    : job?.kind === "song_video"
+      ? MUSIC_VIDEO_STEPS
+      : job?.kind === "lyrics_sync"
+        ? SYNC_STEPS
+        : job?.kind === "long_video"
+          ? LONG_STEPS
+          : STEPS;
 
 function SongPlayer({ detail }: { detail: VideoDetail }) {
   return (
@@ -33,7 +44,7 @@ function SongPlayer({ detail }: { detail: VideoDetail }) {
 }
 
 /** The idea, look, lyric style and visuals a song's last music video used: the starting point for the next one. */
-export function settingsOf(detail: Pick<VideoDetail, "idea" | "look" | "lyric_style" | "art_style" | "pictures" | "direction" | "cold_open" | "now_playing">): MusicVideoSettings {
+export function settingsOf(detail: Pick<VideoDetail, "idea" | "look" | "lyric_style" | "art_style" | "pictures" | "direction" | "cold_open" | "now_playing" | "picture_fit">): MusicVideoSettings {
   return {
     idea: detail.idea ?? "",
     look: detail.look ?? "",
@@ -43,6 +54,7 @@ export function settingsOf(detail: Pick<VideoDetail, "idea" | "look" | "lyric_st
     direction: detail.direction ?? null,
     cold_open: detail.cold_open ?? false,
     now_playing: detail.now_playing ?? false,
+    picture_fit: detail.picture_fit ?? "fit",
   };
 }
 
@@ -406,6 +418,7 @@ ${o.description}
       ) : (
         <p className="m-0 p-3.5 text-base text-ink-soft">No caption saved for this video.</p>
       )}
+      {detail.video && <PackagingReview detail={detail} onPost={setPost} />}
       <div className="grid gap-2 border-t border-line p-3.5">
         <label className="field-label" htmlFor={`post-idea-${detail.name}`}>
           Title direction <span className="font-normal">optional</span>
@@ -608,167 +621,169 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
     i.text === saved.text && i.at === saved.at && i.style === saved.style && i.emphasis === saved.emphasis && (i.image ?? "") === saved.image;
 
   return (
-    <section aria-label="Thumbnail" className="mx-auto grid w-full max-w-[300px] gap-3 card p-3.5">
-      <div className="grid gap-2">
-        <label className="field-label" htmlFor={`cover-idea-${detail.name}`}>
-          Cover idea <span className="font-normal">optional</span>
-        </label>
-        <textarea
-          id={`cover-idea-${detail.name}`}
-          lang={detail.lang}
-          rows={2}
-          maxLength={600}
-          value={coverIdea}
-          onChange={(e) => setCoverIdea(e.target.value)}
-          placeholder="A silhouette against a neon city at night, the headline asks a question"
-          className="field-input resize-y py-1.5 text-base leading-snug"
-        />
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm text-ink-soft">Describe the picture, words or mood you want.</span>
-          <Button size="sm" variant={ideas && !coverIdea ? "ghost" : "primary"} icon={<Sparkles className="size-3.5" />} loading={suggesting} onClick={suggest}>
-            {ideas ? "New ideas" : "Suggest covers"}
-          </Button>
-        </div>
-        {suggesting && <p className="m-0 text-sm text-ink-soft">Claude is picking frames, writing headlines and designing each cover… about a minute.</p>}
-        {ideas && (
-          <>
-            <div className={`grid grid-cols-4 gap-1.5 ${suggesting ? "opacity-50" : ""}`}>
-              {ideas.items.map((idea) => (
-                <button
-                  key={idea.file}
-                  type="button"
-                  disabled={busy || suggesting}
-                  onClick={() => generate({ text: idea.text, at: idea.at, style: idea.style, emphasis: idea.emphasis, image: idea.image ?? "", design: idea.design })}
-                  title={`Use “${idea.text}” (${idea.style}, ${idea.image ? "stock photo" : `${idea.at.toFixed(1)} s`})`}
-                  aria-label={`Use cover: ${idea.text}`}
-                  className={`relative ${detail.aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"} cursor-pointer overflow-hidden rounded-md bg-media outline outline-offset-1 transition hover:brightness-110 disabled:cursor-wait ${
-                    isCurrent(idea) ? "outline-2 outline-cobalt" : "outline-1 outline-line"
-                  }`}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element -- local engine file */}
-                  <img src={`${outputUrl(detail.name, idea.file)}?v=${ideasV}`} alt="" className="h-full w-full object-cover" />
-                  {idea.image && (
-                    <span className="absolute inset-x-0 bottom-0 bg-black/60 py-px text-center text-2xs font-semibold text-white">Photo</span>
-                  )}
-                  {isCurrent(idea) && (
-                    <span className="absolute top-1 right-1 grid size-4 place-items-center rounded-full bg-cobalt text-white">
-                      <Check className="size-3" />
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-            <p className="m-0 text-sm text-ink-soft">{ideas.note || "Click one to use it, then fine-tune below."}</p>
-          </>
-        )}
-      </div>
-      <div className="flex gap-3">
-        <div className={`relative shrink-0 overflow-hidden rounded-md bg-media ${detail.aspect === "16:9" ? "aspect-video w-[132px]" : "aspect-[9/16] w-[84px]"}`}>
-          {image && image !== saved.image ? (
-            // eslint-disable-next-line @next/next/no-img-element -- local engine file
-            <img src={fileUrl(image)} alt="Chosen background photo" className="h-full w-full object-cover" />
-          ) : pickingFrame ? (
-            <video
-              ref={frame}
-              src={`${outputUrl(detail.name, "video.mp4")}?v=${encodeURIComponent(detail.created)}`}
-              muted
-              playsInline
-              preload="auto"
-              onLoadedMetadata={(e) => (e.currentTarget.currentTime = at)}
-              className="h-full w-full object-cover"
-            />
-          ) : detail.thumb ? (
-            // eslint-disable-next-line @next/next/no-img-element -- local engine file
-            <img src={`${outputUrl(detail.name, "thumbnail.jpg")}?v=${saved.v}`} alt="Current thumbnail" className="h-full w-full object-cover" />
-          ) : (
-            <span className="grid h-full place-items-center text-white/60">
-              <ImageIcon className="size-5" />
-            </span>
-          )}
-        </div>
-        <div className="grid min-w-0 flex-1 content-start gap-2">
-          <label className="field-label" htmlFor="thumb-text">
-            Thumbnail headline
+    <section aria-label="Thumbnail" className="mx-auto w-full max-w-[300px] card">
+      <DropZone accept="image/jpeg,image/png,image/webp" label="Drop to use this photo" disabled={uploading} onFiles={(f) => void uploadPhoto(f[0])} onReject={(m) => toast(m, "error")} className="grid gap-3 p-3.5">
+        <div className="grid gap-2">
+          <label className="field-label" htmlFor={`cover-idea-${detail.name}`}>
+            Cover idea <span className="font-normal">optional</span>
           </label>
           <textarea
-            id="thumb-text"
+            id={`cover-idea-${detail.name}`}
             lang={detail.lang}
-            rows={3}
-            maxLength={120}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="No headline: just the frame"
-            className="field-input resize-none py-1.5 text-base leading-snug"
+            rows={2}
+            maxLength={600}
+            value={coverIdea}
+            onChange={(e) => setCoverIdea(e.target.value)}
+            placeholder="A silhouette against a neon city at night, the headline asks a question"
+            className="field-input resize-y py-1.5 text-base leading-snug"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm text-ink-soft">Describe the picture, words or mood you want.</span>
+            <Button size="sm" variant={ideas && !coverIdea ? "ghost" : "primary"} icon={<Sparkles className="size-3.5" />} loading={suggesting} onClick={suggest}>
+              {ideas ? "New ideas" : "Suggest covers"}
+            </Button>
+          </div>
+          {suggesting && <p className="m-0 text-sm text-ink-soft">Claude is picking frames, writing headlines and designing each cover… about a minute.</p>}
+          {ideas && (
+            <>
+              <div className={`grid grid-cols-4 gap-1.5 ${suggesting ? "opacity-50" : ""}`}>
+                {ideas.items.map((idea) => (
+                  <button
+                    key={idea.file}
+                    type="button"
+                    disabled={busy || suggesting}
+                    onClick={() => generate({ text: idea.text, at: idea.at, style: idea.style, emphasis: idea.emphasis, image: idea.image ?? "", design: idea.design })}
+                    title={`Use “${idea.text}” (${idea.style}, ${idea.image ? "stock photo" : `${idea.at.toFixed(1)} s`})`}
+                    aria-label={`Use cover: ${idea.text}`}
+                    className={`relative ${detail.aspect === "16:9" ? "aspect-video" : "aspect-[9/16]"} cursor-pointer overflow-hidden rounded-md bg-media outline outline-offset-1 transition hover:brightness-110 disabled:cursor-wait ${
+                      isCurrent(idea) ? "outline-2 outline-cobalt" : "outline-1 outline-line"
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- local engine file */}
+                    <img src={`${outputUrl(detail.name, idea.file)}?v=${ideasV}`} alt="" className="h-full w-full object-cover" />
+                    {idea.image && (
+                      <span className="absolute inset-x-0 bottom-0 bg-black/60 py-px text-center text-2xs font-semibold text-white">Photo</span>
+                    )}
+                    {isCurrent(idea) && (
+                      <span className="absolute top-1 right-1 grid size-4 place-items-center rounded-full bg-cobalt text-white">
+                        <Check className="size-3" />
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              <p className="m-0 text-sm text-ink-soft">{ideas.note || "Click one to use it, then fine-tune below."}</p>
+            </>
+          )}
+        </div>
+        <div className="flex gap-3">
+          <div className={`relative shrink-0 overflow-hidden rounded-md bg-media ${detail.aspect === "16:9" ? "aspect-video w-[132px]" : "aspect-[9/16] w-[84px]"}`}>
+            {image && image !== saved.image ? (
+              // eslint-disable-next-line @next/next/no-img-element -- local engine file
+              <img src={fileUrl(image)} alt="Chosen background photo" className="h-full w-full object-cover" />
+            ) : pickingFrame ? (
+              <video
+                ref={frame}
+                src={`${outputUrl(detail.name, "video.mp4")}?v=${encodeURIComponent(detail.created)}`}
+                muted
+                playsInline
+                preload="auto"
+                onLoadedMetadata={(e) => (e.currentTarget.currentTime = at)}
+                className="h-full w-full object-cover"
+              />
+            ) : detail.thumb ? (
+              // eslint-disable-next-line @next/next/no-img-element -- local engine file
+              <img src={`${outputUrl(detail.name, "thumbnail.jpg")}?v=${saved.v}`} alt="Current thumbnail" className="h-full w-full object-cover" />
+            ) : (
+              <span className="grid h-full place-items-center text-white/60">
+                <ImageIcon className="size-5" />
+              </span>
+            )}
+          </div>
+          <div className="grid min-w-0 flex-1 content-start gap-2">
+            <label className="field-label" htmlFor="thumb-text">
+              Thumbnail headline
+            </label>
+            <textarea
+              id="thumb-text"
+              lang={detail.lang}
+              rows={3}
+              maxLength={120}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="No headline: just the frame"
+              className="field-input resize-none py-1.5 text-base leading-snug"
+            />
+          </div>
+        </div>
+        <div className="grid gap-1">
+          <label className="field-label" htmlFor="thumb-emphasis">
+            Highlight
+          </label>
+          <input
+            id="thumb-emphasis"
+            lang={detail.lang}
+            maxLength={60}
+            value={emphasis}
+            onChange={(e) => setEmphasis(e.target.value)}
+            placeholder="Auto: a number or the key word"
+            className="field-input h-8 text-base"
           />
         </div>
-      </div>
-      <div className="grid gap-1">
-        <label className="field-label" htmlFor="thumb-emphasis">
-          Highlight
-        </label>
-        <input
-          id="thumb-emphasis"
-          lang={detail.lang}
-          maxLength={60}
-          value={emphasis}
-          onChange={(e) => setEmphasis(e.target.value)}
-          placeholder="Auto: a number or the key word"
-          className="field-input h-8 text-base"
-        />
-      </div>
-      <div className="grid justify-items-start gap-1">
-        <span className="field-label">Style</span>
-        <Segmented name="thumb-style" size="sm" value={style} options={THUMB_STYLES} onChange={setStyle} />
-        {style === "designed" && (
-          <span className="text-sm text-ink-soft">Claude lays out the whole cover. New words keep the design; the first one takes a minute.</span>
-        )}
-      </div>
-      <div className="grid gap-1">
-        <label className="field-label flex justify-between" htmlFor="thumb-at">
-          {image ? "Background" : "Frame"} <span className="font-normal text-ink-soft tabular-nums">{image ? "photo" : `${at.toFixed(1)} s`}</span>
-        </label>
-        {image ? (
-          <Button size="sm" variant="ghost" className="justify-self-start" icon={<Film className="size-3.5" />} onClick={() => setImage("")}>
-            Use a video frame instead
+        <div className="grid justify-items-start gap-1">
+          <span className="field-label">Style</span>
+          <Segmented name="thumb-style" size="sm" value={style} options={THUMB_STYLES} onChange={setStyle} />
+          {style === "designed" && (
+            <span className="text-sm text-ink-soft">Claude lays out the whole cover. New words keep the design; the first one takes a minute.</span>
+          )}
+        </div>
+        <div className="grid gap-1">
+          <label className="field-label flex justify-between" htmlFor="thumb-at">
+            {image ? "Background" : "Frame"} <span className="font-normal text-ink-soft tabular-nums">{image ? "photo" : `${at.toFixed(1)} s`}</span>
+          </label>
+          {image ? (
+            <Button size="sm" variant="ghost" className="justify-self-start" icon={<Film className="size-3.5" />} onClick={() => setImage("")}>
+              Use a video frame instead
+            </Button>
+          ) : (
+            <input
+              id="thumb-at"
+              type="range"
+              min={0}
+              max={Math.max(0.1, duration - 0.1)}
+              step={0.1}
+              value={at}
+              onChange={(e) => setAt(+e.target.value)}
+              className="h-6 w-full accent-cobalt"
+            />
+          )}
+          <label className={`${buttonClass("ghost", "sm")} cursor-pointer justify-self-start ${uploading ? "opacity-60" : ""}`}>
+            <ImageUp className="size-3.5" /> {uploading ? "Uploading…" : image ? "Upload another photo" : "Use my own photo"}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="sr-only"
+              disabled={uploading}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) void uploadPhoto(f);
+              }}
+            />
+          </label>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" variant={changed ? "primary" : "secondary"} icon={<ImageIcon className="size-3.5" />} loading={busy} onClick={() => generate()}>
+            {detail.thumb ? "Regenerate" : "Generate"}
           </Button>
-        ) : (
-          <input
-            id="thumb-at"
-            type="range"
-            min={0}
-            max={Math.max(0.1, duration - 0.1)}
-            step={0.1}
-            value={at}
-            onChange={(e) => setAt(+e.target.value)}
-            className="h-6 w-full accent-cobalt"
-          />
-        )}
-        <label className={`${buttonClass("ghost", "sm")} cursor-pointer justify-self-start ${uploading ? "opacity-60" : ""}`}>
-          <ImageUp className="size-3.5" /> {uploading ? "Uploading…" : image ? "Upload another photo" : "Use my own photo"}
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            className="sr-only"
-            disabled={uploading}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (f) void uploadPhoto(f);
-            }}
-          />
-        </label>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <Button size="sm" variant={changed ? "primary" : "secondary"} icon={<ImageIcon className="size-3.5" />} loading={busy} onClick={() => generate()}>
-          {detail.thumb ? "Regenerate" : "Generate"}
-        </Button>
-        {detail.thumb && (
-          <a className={buttonClass("ghost", "sm")} href={`${API_BASE}/api/videos/${encodeURIComponent(detail.name)}/thumbnail.jpg`}>
-            <Download className="size-3.5" />
-            Download
-          </a>
-        )}
-      </div>
+          {detail.thumb && (
+            <a className={buttonClass("ghost", "sm")} href={`${API_BASE}/api/videos/${encodeURIComponent(detail.name)}/thumbnail.jpg`}>
+              <Download className="size-3.5" />
+              Download
+            </a>
+          )}
+        </div>
+      </DropZone>
     </section>
   );
 }
@@ -810,6 +825,7 @@ export function PreviewPane({
   onOpenTiming,
   onSelectVideo,
   onOpenSettings,
+  onVideosChanged,
   variant = "full",
 }: {
   variant?: "full" | "stage"; // stage: only the player, filling the space it gets (the editor's centre)
@@ -830,6 +846,7 @@ export function PreviewPane({
   onOpenTiming: (name: string) => void;
   onSelectVideo: (name: string) => void;
   onOpenSettings: () => void;
+  onVideosChanged: () => void; // new videos were made outside the page's own jobs (Smart Highlights clips)
 }) {
   const showProgress = rendering || job?.status === "error";
   const canToggle = !!scene && !!detail?.video && !showProgress;
@@ -911,7 +928,12 @@ export function PreviewPane({
         {toggle}
       </div>
 
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-4 p-5">
+      {/* every card under the preview is as wide as it: the phone of a vertical video, the full pane for a 16:9 one */}
+      <div
+        className={`grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-4 p-5 ${
+          !showVideo ? "" : landscape ? "[&>section]:max-w-none" : "[&>section]:mx-auto [&>section]:w-full [&>section]:max-w-[300px]"
+        }`}
+      >
         <Phone landscape={landscape}>{screen}</Phone>
 
         {!showProgress && !showVideo && scene && live && <LiveControls timeline={live.timeline} music={live.music} />}
@@ -939,6 +961,21 @@ export function PreviewPane({
             ) : (
               <p className="m-0 text-sm text-ink-soft">The song this video was made from has been deleted, so its timing can&apos;t be edited.</p>
             )}
+          </section>
+        )}
+        {showVideo && detail?.kind === "music_video" && (
+          <HighlightsCard key={`highlights-${detail.name}`} detail={detail} onSelectVideo={onSelectVideo} onVideosChanged={onVideosChanged} />
+        )}
+        {!showProgress && detail?.kind === "long_video" && (
+          <section aria-label="Storyboard" className="grid gap-1.5 card p-3.5">
+            <a href={outputUrl(detail.name, "storyboard.html")} target="_blank" rel="noreferrer" className={buttonClass("secondary", "md", "gap-1.5")}>
+              <ListVideo className="size-4" aria-hidden /> Open the storyboard
+            </a>
+            <p className="m-0 text-sm text-ink-soft">
+              {detail.video
+                ? "Made from the approved storyboard. Swap footage there and approve again for a new render; the chapters, captions and credits are in this folder."
+                : "Not rendered yet: check every scene in the storyboard, swap what's wrong, then approve it to render."}
+            </p>
           </section>
         )}
         {isSong && detail && (

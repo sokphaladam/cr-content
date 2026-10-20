@@ -438,9 +438,28 @@ def _no_people(prompt: str, style: str) -> bool:
     return style == "anime" and ("no humans" in prompt.lower() or not _PEOPLE.search(prompt))
 
 
+# parts of a prompt that tell an editor what to deliver, not what to draw ("16:9 at high resolution", "a clean version
+# with no title text"): the model can't follow them, they use up its ~75 tokens, and "title text" draws letters
+_DELIVERY = re.compile(r"\b(\d+:\d+|aspect ratio|resolution|\d+k|uhd|title|text|clean version|editing|thumbnail|"
+                       r"make it|so (?:you|i|we) can|wallpaper size)\b", re.I)
+_MAN = re.compile(r"\b(man|boy|guy|husband|boyfriend)\b", re.I)
+_WOMAN = re.compile(r"\b(woman|girl|lady|wife|girlfriend)\b", re.I)
+
+
+def _tidy(prompt: str) -> str:
+    """A prompt written as sentences, made drawable: the delivery instructions dropped (whole comma or sentence
+    parts), and a man and a woman counted as "1boy, 1girl" (without the count Animagine draws one of them)."""
+    parts = [p.strip() for p in re.split(r"[,.;]\s*|\s+and\s+(?=keep|make|so\b)", prompt) if p.strip()]
+    kept = [p for p in parts if not _DELIVERY.search(p)]
+    out = prompt if len(kept) == len(parts) else ", ".join(re.sub(r"^and\s+", "", p) for p in kept) or prompt
+    if not re.search(r"\b\d+(girl|boy)s?\b", out, re.I) and _MAN.search(out) and _WOMAN.search(out):
+        out = f"1boy, 1girl, {out}"
+    return out
+
+
 def full_prompt(prompt: str, style: str, legacy: bool = False) -> str:
     spec = STYLES[style]
-    prompt = prompt.strip().rstrip(",")
+    prompt = _tidy(prompt.strip()).rstrip(",")
     if _no_people(prompt, style) and "no humans" not in prompt.lower():
         prompt = f"no humans, {prompt}"
     male, female = _sexes(prompt)

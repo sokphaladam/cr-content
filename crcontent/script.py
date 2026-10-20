@@ -193,23 +193,33 @@ def generate_script(topic: str, lang: str = "en", scenes: int = 4, seconds: int 
     if style:
         prompt += f"Style / extra instructions: {style}\n"
     system = SYSTEM + (KHMER_NOTE if lang == "km" else "")
+    from .packaging import fluff_opening
 
-    response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=16000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
-        system=system,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    if response.stop_reason == "refusal":
-        raise RuntimeError(f"Claude declined this topic: {response.stop_details}")
-    if response.stop_reason == "max_tokens":
-        raise RuntimeError("Script generation was cut off (max_tokens); try fewer scenes.")
+    messages = [{"role": "user", "content": prompt}]
+    for attempt in range(2):
+        response = client.beta.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=16000,
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
+            system=system,
+            messages=messages,
+        )
+        if response.stop_reason == "refusal":
+            raise RuntimeError(f"Claude declined this topic: {response.stop_details}")
+        if response.stop_reason == "max_tokens":
+            raise RuntimeError("Script generation was cut off (max_tokens); try fewer scenes.")
 
-    text = next(b.text for b in response.content if b.type == "text")
-    script = VideoScript.model_validate(json.loads(text))
+        text = next(b.text for b in response.content if b.type == "text")
+        script = VideoScript.model_validate(json.loads(text))
+        # an opening that makes the viewer wait loses them in the first second: write it again, once
+        fluff = fluff_opening(script.scenes[0].narration) if script.scenes else []
+        if not fluff or attempt:
+            break
+        messages += [{"role": "assistant", "content": text},
+                     {"role": "user", "content": f"Scene 1 opens with {' and '.join(fluff)}. Rewrite the whole "
+                      "script so the first sentence states the payoff itself, with no intro."}]
     script.hashtags = [h.lstrip("#").replace(" ", "") for h in script.hashtags]
     return script
 

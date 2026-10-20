@@ -14,6 +14,11 @@ Examples:
   python make.py --song-file output/<job>/song.json          (re-compose an edited song)
   python make.py "..." --song --video                          (song + karaoke music video)
   python make.py --music-video output/<job>                    (music video from a composed song)
+  python make.py --highlights output/<mv job>                  (best 15-30 s clips + covers + report)
+  python make.py --highlights song.mp4 --lyrics lyrics.txt --title "..." --artist "..."
+  python make.py --script-video scripts/smartest-birds.md    (long YouTube video: stops at the storyboard)
+  python make.py --storyboard output/<job>                   (check / swap footage / approve in the browser)
+  python make.py --approve output/<job>                      (approve the storyboard as it is and render)
 """
 import argparse
 import sys
@@ -54,7 +59,46 @@ def main() -> int:
     p.add_argument("--video", action="store_true", help="with --song/--song-file: also render the music video")
     p.add_argument("--music-video", type=Path, metavar="JOB_DIR",
                    help="render a music video from an already composed song folder (output/<job>)")
+    p.add_argument("--highlights", type=Path, metavar="JOB_OR_VIDEO",
+                   help="Smart Highlights: pick the best 15-30 s Shorts/Reels clips of a finished video (output/<job> "
+                        "or an mp4), with covers and a report (see crcontent/highlights)")
+    p.add_argument("--lyrics", type=Path, metavar="TXT", help="with --highlights on a plain video: its lyrics text")
+    p.add_argument("--title", default="", help="with --highlights: song title (default: from song.json)")
+    p.add_argument("--artist", default="", help="with --highlights: artist name for the covers and captions")
+    p.add_argument("--no-render", action="store_true", help="with --highlights: analyse, rank and report only")
+    p.add_argument("--no-judge", action="store_true", help="with --highlights: skip the Claude judge this time")
+    p.add_argument("--script-video", type=Path, metavar="MD",
+                   help="Script to Video: a 1920x1080 YouTube video from a script .md (voiceover, timing, footage), "
+                        "up to the storyboard to approve (see crcontent/longform)")
+    p.add_argument("--storyboard", type=Path, metavar="JOB_DIR",
+                   help="open a Script to Video storyboard in the browser to swap footage and approve the render")
+    p.add_argument("--approve", type=Path, metavar="JOB_DIR",
+                   help="approve a Script to Video storyboard as it is now and render it")
+    p.add_argument("--port", type=int, default=8000, help="with --storyboard: the engine's port")
     args = p.parse_args()
+
+    if args.script_video or args.storyboard or args.approve:
+        from crcontent.config import ROOT
+        load_dotenv(ROOT / ".env")  # the app's keys live in the data folder
+        from crcontent import longform
+        if args.script_video:
+            longform.make_storyboard(args.script_video)
+            return 0
+        if args.approve:
+            from crcontent.longform import storyboard
+            storyboard.approve(args.approve.resolve())
+            longform.render_video(args.approve.resolve())
+            return 0
+        return open_storyboard(args.storyboard.resolve(), args.port)
+
+    if args.highlights:
+        from crcontent.config import ROOT
+        from crcontent.highlights import make_highlights
+        load_dotenv(ROOT / ".env")  # the app's keys live in the data folder
+        make_highlights(args.highlights, args.lyrics, args.title, args.artist,
+                        args.lang if "--lang" in sys.argv else "", render=not args.no_render,
+                        ai_judge=False if args.no_judge else None)
+        return 0
 
     if args.music_video:
         from crcontent.pipeline import make_music_video
@@ -118,6 +162,36 @@ def main() -> int:
         make_video(args.topic, script=translated, **common)
         return 0
     make_video(args.topic, script_path=args.script, **common)
+    return 0
+
+
+def open_storyboard(job: Path, port: int) -> int:
+    """The storyboard page from the engine (started here unless the app's engine is already running)."""
+    import threading
+    import webbrowser
+    from urllib.parse import quote
+
+    import requests
+
+    from crcontent.config import OUTPUT_DIR
+    if job.parent.resolve() != OUTPUT_DIR.resolve() or not (job / "storyboard.html").exists():
+        print(f"No storyboard in {job} (it must be a folder in {OUTPUT_DIR} made by --script-video).")
+        return 1
+    url = f"http://127.0.0.1:{port}/media/{quote(job.name)}/storyboard.html"
+    try:
+        requests.get(f"http://127.0.0.1:{port}/api/options", timeout=2).raise_for_status()
+        print(f"Opening {url} (the engine is already running)")
+        webbrowser.open(url)
+        return 0
+    except requests.RequestException:
+        pass
+    import uvicorn
+
+    from crcontent.web import app
+    print(f"Storyboard: {url}")
+    print("Approve it there to render; Ctrl+C here when you're done.")
+    threading.Timer(2.0, webbrowser.open, [url]).start()
+    uvicorn.run(app, host="127.0.0.1", port=port, timeout_graceful_shutdown=3)
     return 0
 
 

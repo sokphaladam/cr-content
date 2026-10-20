@@ -51,6 +51,7 @@ def main() -> int:
         "--collect-submodules", "crcontent",
         "--collect-submodules", "uvicorn",
         "--collect-data", "edge_tts",
+        "--collect-data", "cv2",  # the Haar cascade .xml files Smart Highlights finds faces with
         "--hidden-import", "resvg_py",  # imported lazily by crcontent.art
         "--collect-submodules", "yt_dlp",  # campaign reference downloads; its site extractors load lazily
         *[arg for mod in AI_MODULES for arg in ("--exclude-module", mod)],

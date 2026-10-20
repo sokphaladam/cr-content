@@ -21,13 +21,13 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import addons, art, campaigns, drafts, locations, music, publish, schedule, sheet, voiceover
+from . import addons, art, campaigns, drafts, locations, music, packaging, publish, schedule, sheet, voiceover
 from .config import ASSETS_DIR, CACHE_DIR, CODE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT, SCENE_PAD_SEC, frame_size
 from .lyrics import SongScript, generate_song, suggest_video_ideas
 from .align import lines_from_json, load_lines, save_lines
 from .pipeline import (AUDIO_EXTS, COVER_STYLES, import_song, make_music_video, make_song, make_thumbnail, make_video,
                        song_versions, split_song_renders, suggest_thumbnails, sync_lyrics)
-from .post import suggest_posts, write_post
+from .post import set_title, suggest_posts, write_post
 from .render import duration, run as run_ffmpeg
 from .importer import import_script
 from .script import VideoScript, generate_script, suggest_queries, suggest_topics, translate_script
@@ -866,7 +866,7 @@ def _run_music_video(job_id: str, folder: Path, req: "MusicVideoRequest") -> Non
     try:
         final = make_music_video(folder, log=log, idea=req.idea[:IDEA_MAX], look=req.look, lyric_style=req.lyric_style,
                                  art_style=req.art_style, pictures=req.pictures, direction=req.direction,
-                                 cold_open=req.cold_open, now_playing=req.now_playing)
+                                 cold_open=req.cold_open, now_playing=req.now_playing, fit=req.picture_fit)
         with jobs_lock:
             job.update(status="done", step=4, video=final.parent.name)
         _auto_publish(final.parent, log)
@@ -948,6 +948,7 @@ class MusicVideoRequest(BaseModel):
     direction: dict | None = None  # the shot list for the idea (POST .../direct); None = the song's, if it fits
     cold_open: bool | None = None  # the song's name in neon over the opening; None = the song's last choice
     now_playing: bool | None = None  # a now-playing card (title, progress, spinning record); None = the song's last
+    picture_fit: str | None = None  # a cover picture "fit" (whole, on its colour) or "fill"s the screen; None = last
 
 
 @app.post("/api/videos/{name}/music-video")
@@ -961,6 +962,228 @@ def music_video(name: str, req: MusicVideoRequest | None = None):
     with jobs_lock:
         jobs[job_id] = {"id": job_id, "kind": "song_video", "status": "queued", "step": 0, "log": [], "title": title}
     renderer.submit(_run_music_video, job_id, folder, req or MusicVideoRequest())
+    return {"id": job_id}
+
+
+# ---------- Smart Highlights (crcontent/highlights: the best Shorts / Reels clips of a music video) ----------
+
+class HighlightsRequest(BaseModel):
+    ai_judge: bool | None = None  # None = highlights.json's "ai_judge.enabled"
+    artist: str = ""  # drawn under the title on the covers
+
+
+def _highlights_job(name: str) -> str | None:
+    """The id of a queued or running highlights job for this video."""
+    with jobs_lock:
+        return next((j["id"] for j in jobs.values() if j.get("kind") == "highlights" and j.get("source") == name
+                     and j["status"] in ("queued", "running")), None)
+
+
+def _run_highlights(job_id: str, folder: Path, req: HighlightsRequest) -> None:
+    from .highlights import make_highlights
+
+    job = jobs[job_id]
+    log = _job_logger(job, 7)
+    with jobs_lock:
+        job["status"] = "running"
+    try:
+        make_highlights(folder, artist=req.artist.strip()[:80], ai_judge=req.ai_judge, log=log)
+        # the clips are alternatives to choose from, so they aren't auto-uploaded like other renders
+        with jobs_lock:
+            job.update(status="done", step=7)
+    except Exception as e:
+        traceback.print_exc()
+        with jobs_lock:
+            job.update(status="error", error=str(e).strip().splitlines()[-1] if str(e).strip() else repr(e))
+
+
+@app.post("/api/videos/{name}/highlights")
+def find_highlights(name: str, req: HighlightsRequest | None = None):
+    """Pick the video's best 15–30 s for Shorts / Reels, make covers, render the top 3 as clips and write a report
+    (several minutes). A run already going for this video is returned instead of starting another."""
+    folder = _video_dir(name)
+    if not (folder / "video.mp4").exists() or not (folder / "lyrics.json").exists():
+        raise HTTPException(400, "Smart Highlights needs a music video with timed lyrics.")
+    running = _highlights_job(name)
+    if running:
+        return {"id": running}
+    job_id = uuid.uuid4().hex[:10]
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "highlights", "status": "queued", "step": 0, "log": [],
+                        "title": _summary(folder)["title"], "source": name}
+    renderer.submit(_run_highlights, job_id, folder, req or HighlightsRequest())
+    return {"id": job_id}
+
+
+@app.get("/api/videos/{name}/highlights")
+def get_highlights(name: str):
+    """The last Smart Highlights report (files relative to the video's folder; a clip's `job` is "" once it's been
+    deleted) and the id of a run still going."""
+    folder = _video_dir(name)
+    path = folder / "highlights" / "report.json"
+    report = None
+    if path.exists():
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            report = None
+    if report:
+        report.pop("curve", None)  # per-second curves: only the HTML report draws them
+        for e in report.get("candidates", []):
+            e["covers"] = [{**c, "file": f"highlights/{c['file']}"} for c in e.get("covers", [])]
+            e["job"] = e.get("job", "") if e.get("job") and (OUTPUT_DIR / e["job"] / "video.mp4").exists() else ""
+            e.pop("video", None)
+        report["page"] = "highlights/report.html"
+    return {"report": report, "job": _highlights_job(name)}
+
+
+# ---------- Script to Video (crcontent/longform: a long YouTube video from a script .md) ----------
+# The storyboard page (<job>/storyboard.html, served under /media) calls these to swap footage and approve.
+
+class FootagePick(BaseModel):
+    key: str
+
+
+class FootageSearch(BaseModel):
+    query: str
+
+
+def _longform_dir(name: str) -> Path:
+    folder = _video_dir(name)
+    if not (folder / "footage.json").exists():
+        raise HTTPException(404, "This isn't a Script to Video storyboard.")
+    return folder
+
+
+def _longform_job(name: str) -> str | None:
+    """The id of a queued or running render of this storyboard."""
+    with jobs_lock:
+        return next((j["id"] for j in jobs.values() if j.get("kind") == "long_video" and j.get("source") == name
+                     and j["status"] in ("queued", "running")), None)
+
+
+def _longform_busy(name: str) -> None:
+    if _longform_job(name):
+        raise HTTPException(409, "It's rendering: changes have to wait until it's done.")
+
+
+@app.post("/api/longform/{name}/scenes/{n}/pick")
+def longform_pick(name: str, n: int, req: FootagePick):
+    """Scene `n` uses one of its alternatives (downloaded and checked now)."""
+    from . import longform
+
+    folder = _longform_dir(name)
+    _longform_busy(name)
+    try:
+        return longform.pick_footage(folder, n, req.key)
+    except KeyError as e:
+        raise HTTPException(404, str(e).strip("'\""))
+    except (requests.RequestException, ValueError, OSError) as e:
+        raise HTTPException(502, f"Couldn't get that one ({type(e).__name__}): try another.")
+
+
+@app.post("/api/longform/{name}/scenes/{n}/search")
+def longform_search(name: str, n: int, req: FootageSearch):
+    """New alternatives for scene `n` from other search words."""
+    from . import longform
+
+    folder = _longform_dir(name)
+    _longform_busy(name)
+    try:
+        return longform.search_footage(folder, n, req.query)
+    except KeyError as e:
+        raise HTTPException(404, str(e).strip("'\""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/longform/{name}/reload")
+def longform_reload(name: str):
+    """Use the files put in media/<script>/ (scene-XX.*) since the storyboard was made."""
+    from . import longform
+
+    folder = _longform_dir(name)
+    _longform_busy(name)
+    entries, found = longform.reload_media(folder)
+    return {"footage": entries, "found": found}
+
+
+LONG_SCRIPTS = ROOT / "scripts"  # uploaded script .md files; the file name picks its media/<name>/ folder
+
+
+def _run_storyboard(job_id: str, script_md: Path) -> None:
+    from . import longform
+
+    job = jobs[job_id]
+    log = _job_logger(job, longform.STEPS)
+    with jobs_lock:
+        job["status"] = "running"
+    try:
+        folder = longform.make_storyboard(script_md, log=log)
+        with jobs_lock:
+            job.update(status="done", step=5, video=folder.name, source=folder.name)
+    except Exception as e:
+        _fail(job, e)
+
+
+@app.post("/api/longform")
+def longform_new(file: UploadFile = File(...)):
+    """A long 16:9 video from a script .md: voiceover, timing and footage up to the storyboard to check (steps 1-5)."""
+    from .longform.parse import parse
+
+    name = Path(file.filename or "").name
+    if Path(name).suffix.lower() not in (".md", ".markdown", ".txt"):
+        raise HTTPException(400, "Use the script as a .md file (a markdown table: Time | Visual | On-screen Text | Voiceover).")
+    data = file.file.read(2_000_001)
+    if len(data) > 2_000_000:
+        raise HTTPException(400, "That script is too big (over 2 MB). It should be text only.")
+    stem = re.sub(r"[^\w\-. ]+", "", Path(name).stem).strip(" .") or "script"
+    LONG_SCRIPTS.mkdir(parents=True, exist_ok=True)
+    dest = LONG_SCRIPTS / f"{stem}.md"
+    dest.write_bytes(data)
+    try:  # catch a script the app can't read now, not minutes into the job
+        script = parse(dest)
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't read that script: {str(e).strip().splitlines()[-1] if str(e).strip() else type(e).__name__}")
+    if not script.scenes:
+        raise HTTPException(400, "No scenes found. The script needs a table with the columns Time | Visual | On-screen Text | Voiceover.")
+    job_id = uuid.uuid4().hex[:10]
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "long_video", "status": "queued", "step": 0, "log": [], "title": script.title}
+    renderer.submit(_run_storyboard, job_id, dest)
+    return {"id": job_id, "title": script.title, "scenes": len(script.scenes), "notes": script.notes}
+
+
+def _run_long_video(job_id: str, folder: Path) -> None:
+    from . import longform
+
+    job = jobs[job_id]
+    log = _job_logger(job, longform.STEPS)
+    with jobs_lock:
+        job["status"] = "running"
+    try:
+        longform.render_video(folder, log=log)
+        with jobs_lock:
+            job.update(status="done", step=longform.STEPS)
+    except Exception as e:
+        _fail(job, e)
+
+
+@app.post("/api/longform/{name}/approve")
+def longform_approve(name: str):
+    """Approve the storyboard as it is now and render it (steps 6-7: many minutes for a 10 minute video)."""
+    from .longform import storyboard
+
+    folder = _longform_dir(name)
+    running = _longform_job(name)
+    if running:
+        return {"id": running}
+    storyboard.approve(folder)
+    job_id = uuid.uuid4().hex[:10]
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "long_video", "status": "queued", "step": 5, "log": [],
+                        "title": _summary(folder)["title"], "source": name}
+    renderer.submit(_run_long_video, job_id, folder)
     return {"id": job_id}
 
 
@@ -980,7 +1203,8 @@ def _plan_view(folder: Path, plan: dict | None) -> dict:
 
     size = frame_size(plan.get("aspect") or "9:16")
     for k, slot in enumerate(plan["slots"]):
-        shape = picture_shape(slot, size)  # a home video is drawn landscape, a cover character portrait
+        shape = picture_shape(slot, size, plan.get("fit", "fit"))  # a home video landscape, a cover character portrait
+        slot["draw_aspect"] = "9:16" if shape == frame_size("9:16") else plan.get("aspect") or "9:16"
         path = imagegen.drawn(slot["prompt"], plan["style"], shape, slot.get("seed") or k + 1)
         slot["picture"] = _media_info(path) if path else None
     return {"plan": plan}
@@ -1044,6 +1268,7 @@ class ArtPlanSlotEdit(BaseModel):
 
 class ArtPlanEdit(BaseModel):
     bible: str | None = None
+    fit: str | None = None  # pipeline.PICTURE_FITS: a cover that fills the screen is drawn in the frame's shape
     slots: list[ArtPlanSlotEdit]
 
 
@@ -1051,7 +1276,7 @@ class ArtPlanEdit(BaseModel):
 def edit_art_plan(name: str, req: ArtPlanEdit):
     """Save your changes to the planned pictures (prompts, takes, camera moves, effects)."""
     from .fx import EFFECTS, MOTIONS
-    from .pipeline import load_art_plan, save_art_plan
+    from .pipeline import PICTURE_FITS, load_art_plan, save_art_plan
 
     folder = _video_dir(name)
     plan = load_art_plan(folder)
@@ -1061,6 +1286,8 @@ def edit_art_plan(name: str, req: ArtPlanEdit):
         raise HTTPException(409, "The plan changed meanwhile; reload it.")
     if req.bible is not None:
         plan["bible"] = req.bible.strip()
+    if req.fit in PICTURE_FITS:
+        plan["fit"] = req.fit
     for k, (slot, edit) in enumerate(zip(plan["slots"], req.slots)):
         if edit.prompt.strip():
             slot["prompt"] = edit.prompt.strip()
@@ -1424,6 +1651,7 @@ def video_detail(name: str):
     data["direction"] = meta.get("direction")  # the shot list made from the idea (songs)
     data["cold_open"] = bool(meta.get("cold_open"))
     data["now_playing"] = bool(meta.get("now_playing"))
+    data["picture_fit"] = meta.get("picture_fit", "fit")
     data["duration"] = (round(duration(folder / "video.mp4"), 2) if data["video"]
                         else meta.get("duration", 0))
     data["thumb_text"] = meta.get("thumb_text", data["title"])
@@ -1510,6 +1738,71 @@ def video_post_suggest(name: str, req: PostIdeaRequest | None = None):
         traceback.print_exc()
         raise HTTPException(500, f"Couldn't suggest post text: {str(e).strip().splitlines()[-1]}")
     return {"items": items}
+
+
+@app.post("/api/videos/{name}/packaging")
+def video_packaging(name: str):
+    """Claude scores the title, thumbnail and opening together and writes stronger ones."""
+    folder = _video_dir(name)
+    try:
+        return packaging.review(folder, _summary(folder)["lang"])
+    except (anthropic.APIError, RuntimeError) as e:
+        raise _claude_error(e)
+
+
+class OutliersRequest(BaseModel):
+    query: str
+    lang: str = "en"
+    length: str = "any"  # "short" | "long" | "any"
+    months: int = 12
+    min_ratio: float = 5.0
+
+
+@app.post("/api/outliers")
+def outliers(req: OutliersRequest):
+    """Videos with far more views than subscribers about a topic, judged for weak packaging, with a remake plan."""
+    if not req.query.strip():
+        raise HTTPException(400, "Type a topic to search YouTube for.")
+    lang = req.lang if req.lang in LANGS else "en"
+    length = req.length if req.length in ("short", "long", "any") else "any"
+    try:
+        found = packaging.find_outliers(req.query.strip()[:100], max(1, min(req.months, 60)),
+                                        max(1.0, req.min_ratio), length)
+    except packaging.OutlierError as e:
+        raise HTTPException(400, str(e))
+    except requests.RequestException as e:
+        raise HTTPException(502, f"Couldn't reach YouTube: {e}")
+    try:
+        return {"videos": packaging.judge_outliers(found, lang, "long YouTube video" if length == "long" else "short"),
+                "found": len(found)}
+    except (anthropic.APIError, RuntimeError) as e:  # still show the numbers without Claude's verdicts
+        print(f"  ! outlier verdicts: {type(e).__name__}: {e}")
+        return {"videos": found[:10], "found": len(found), "note": "Claude was unavailable, so there are no verdicts."}
+
+
+class TitleRequest(BaseModel):
+    title: str
+
+
+@app.put("/api/videos/{name}/post/title")
+def video_post_title(name: str, req: TitleRequest):
+    if not req.title.strip():
+        raise HTTPException(400, "The title is empty.")
+    return {"post": set_title(_video_dir(name), req.title[:200])}
+
+
+class JourneyRequest(BaseModel):
+    journey: str = ""
+
+
+@app.get("/api/settings/journey")
+def settings_journey():
+    return {"journey": packaging.journey()}
+
+
+@app.put("/api/settings/journey")
+def save_settings_journey(req: JourneyRequest):
+    return {"journey": packaging.set_journey(req.journey)}
 
 
 class PostText(BaseModel):
@@ -1773,6 +2066,7 @@ SERVICE_KEYS = {
     "PEXELS_API_KEY": "Pexels",
     "ELEVENLABS_API_KEY": "ElevenLabs",
     "JAMENDO_CLIENT_ID": "Jamendo",
+    "YOUTUBE_API_KEY": "YouTube Data API",
 }
 
 

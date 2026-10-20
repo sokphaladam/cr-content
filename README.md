@@ -229,6 +229,9 @@ In VS Code: Run and Debug → **Web UI** → F5.
 .venv\Scripts\python make.py --script output\<job>\script.json --to km   # translate, then render
 .venv\Scripts\python make.py --batch topics.example.txt             # a month of content in one run
 .venv\Scripts\python make.py --voices km                            # list voices
+.venv\Scripts\python make.py --highlights output\<music video>      # best Shorts/Reels clips (see Smart Highlights)
+.venv\Scripts\python make.py --script-video scripts\my-video.md     # long YouTube video (see Script to Video)
+.venv\Scripts\python make.py --script-video scripts\my-video.md     # long YouTube video (see Script to Video)
 ```
 
 ### From an Excel content plan
@@ -342,6 +345,149 @@ vocals stem, so keep "split vocals and instrumental" on when composing (your own
 alignment model (default `medium` on GPU, `base` on CPU). Describe a sound, not a real singer: lyrics and styles
 never name real artists, and `post.txt` notes the music is AI-generated.
 
+## Smart Highlights (Shorts / Reels from a finished video)
+
+Picks the most attractive 15–30 s of a finished music video, renders the best 3 as vertical clips with covers, and
+writes a report to compare them.
+
+**In the app**: open a music video and press **Find highlights** on the **Smart Highlights** card, under the video
+(optionally with an artist name for the covers, and with or without Claude's judging). It takes a few minutes, and you
+can keep working meanwhile. The card then lists the picks in order, each with its covers, Claude's hook and reason, a caption to
+copy and **Open clip**, plus a link to the full report. The clips are added to Videos and aren't auto-uploaded: they're
+alternatives to choose from. Run it again any time; earlier clips stay.
+
+**Command line** (also works on any video, given its lyrics):
+
+```powershell
+.venv\Scripts\pip install -r requirements-highlights.txt      # OpenCV + PySceneDetect (also needs requirements-music.txt)
+.venv\Scripts\python make.py --highlights output\<music video folder>
+.venv\Scripts\python make.py --highlights song.mp4 --lyrics lyrics.txt --title "Replay" --artist "Your name"
+```
+
+Add `--no-judge` to skip Claude this time, `--no-render` to analyse and report only, and `--artist` to put a name on
+the covers. On a short-studio music video folder, the lyrics, their word timing (`lyrics.json`, including your
+hand corrections) and the song's sections come from the folder itself. For any other video, pass its lyrics: they're
+forced-aligned to the audio with stable-ts (vocals isolated with Demucs first). Plain transcription isn't used,
+because it mishears AI-generated vocals.
+
+How a clip is chosen (`crcontent/highlights/`):
+
+1. **Audio structure** (`structure.py`): beats and bars (librosa; bars from chord changes and the kick), sections from
+   the song's plan or, for an unknown song, from where the music repeats. Choruses, loud parts, repeated parts and beat
+   drops score high. allin1 is used when installed, but it can't be installed on Windows (it needs NATTEN and madmom).
+2. **Lyrics** (`lyrics_score.py`): lines sung most often and lines with the song's title score high.
+3. **Visuals** (`visual.py`): the lyric-free picture (`work/joined.mp4`), cut to the 9:16 window the clip will show,
+   is scored for motion, sharpness, colour, faces (OpenCV) and scene cuts (PySceneDetect). Black, blurry or frozen
+   stretches score low. A one-cover music video scores about the same throughout, so the audio and lyrics decide.
+4. **Ranking** (`rank.py`): every 15–30 s window that starts on a lyric line and ends after one. The start moves back
+   to the bar line before the line (keeping a pickup), else the beat, and never cuts into the previous line's last
+   word. The end goes to the next bar or beat after the last word, before the next line. A hook bonus goes to clips
+   whose first 2 s hold a strong line or a beat drop. The top picks never overlap, and a clip that repeats the lyrics
+   of one already picked (the same chorus again) is marked down a little.
+5. **AI judge** (`judge.py`, optional): Claude looks at the top 5 (lyrics plus 4 frames each) and ranks them by
+   hook strength, with a reason, an on-screen hook (8 words at most) and an Instagram / Shorts caption. Uses
+   `ANTHROPIC_API_KEY` from `.env`. Without it, or with the judge off, the score ranking stands.
+6. **Covers** (`covers.py`): each clip's frames are scored for sharpness, face size, open eyes, contrast, colour and
+   rule of thirds. The best 3 become 1080×1920 covers with the title in big letters, kept out of the bottom 20% and
+   right 15% (the apps' buttons and captions). Khmer and English, even mixed in one title, each get their own heavy
+   font, and Khmer is shaped correctly.
+7. **Render** (`clip.py`): the lyric-free picture framed 9:16, fresh karaoke lyrics in the video's own lyric style,
+   the hook for the first 3 s (kept off the subject's face), and the song mixed to −14 LUFS. Encoded with NVENC on an
+   NVIDIA GPU at the same quality as the app's x264 renders, falling back to the CPU. A video without a lyric-free
+   picture is shown whole over a blurred fill, so its burned-in lyrics stay readable.
+
+Each clip is a normal Library video, `output/<time>-<lang>-hl<rank>-<title>/` (`video.mp4`, `thumbnail.jpg`,
+`post.txt` with Claude's caption, `meta.json`), ready for the Upload card. Analysis and covers go to the source video's
+`highlights/` folder: `report.html` (open it in a browser: song timeline, score breakdown, Claude's reason, hook,
+caption with a copy button, covers and the clip for every candidate), `report.json`, `structure.json`,
+`visual.json` and `candidate_<n>/cover_<k>.jpg`.
+
+**Tuning**: `highlights.json` in the data folder (written with the defaults on the first run) holds the weights
+(`weights`: structure / lyrics / visual / hook, plus the parts of each), how attractive each section kind is, clip
+lengths, `clip.repeat_penalty` (0 = the same chorus may be picked twice), `ai_judge.enabled`, cover counts and `render.encoder` (`auto`, `nvenc` or `cpu`). Change a weight and run
+again; the report shows the weights it used.
+
+## Script to Video (long YouTube videos from a script)
+
+Turns a script `.md` into an upload-ready 1920×1080 YouTube video (8–15 min): voiceover per scene, the timeline
+recomputed from the real audio, footage for every scene, a storyboard to check and fix, and only then the render.
+
+```powershell
+.venv\Scripts\python make.py --script-video scripts\smartest-birds.md   # steps 1-5: stops at the storyboard
+.venv\Scripts\python make.py --storyboard output\<job>                   # check, swap footage, approve -> render
+.venv\Scripts\python make.py --approve output\<job>                      # or approve it as it is from here
+```
+
+**The script** (sample: `scripts/smartest-birds.md`): the title on the first `# ` line, then one or more tables with
+the columns `Time | Visual | On-screen Text | Voiceover`. Every such table is the script, in order; other tables
+(an Overview) are skipped by their header, so headings and prose around them are free. On-screen Text is shown
+without its quotes, and a line like `#10 GREEN HERON` becomes a title card. A packaging section is read too:
+`**Thumbnail:**`, `**Title options**` (a list), `**Description ...**` (with a `Chapters: 0:00 Intro · 0:45 Green
+heron` line) and `**Shorts ...**`.
+
+The steps (`crcontent/longform/`):
+
+1. **Parse** (`parse.py`): the scene list goes to `scenes.json`.
+2. **Voiceover** (`voice.py`): one audio file per scene. `voice.engine` in `longform.json` is `edge` (free, the
+   default; English and Khmer voices), `elevenlabs` (`ELEVENLABS_API_KEY`, `voice.elevenlabs.voice_id`) or `files`:
+   your own recordings, `media/<script>/scene-XX.wav` (or .mp3 / .m4a / .flac). A recording you put there is used
+   whatever the engine; its word timing is force-aligned to the scene's text (stable-ts) for the captions.
+3. **Timing** (`timing.py`): a scene lasts as long as its voiceover + 0.4 s. When that differs from the Time column,
+   the whole timeline moves, and every chapter goes with the scene its planned time pointed at. A video outside
+   8–15 min, or chapters YouTube won't accept (under 10 s, fewer than 3), is flagged.
+4. **Footage** (`footage.py`), for each scene in this order:
+   1. Your own file, `media/<script>/scene-XX.mp4` (or .mov, .jpg, .png...).
+   2. What the scene is, as Claude reads the script (any topic, not only wildlife). Each kind is searched in the
+      libraries that suit it:
+      - **footage** (everyday shots): Pexels and Pixabay (most popular, full-HD clips first), then Wikimedia
+        Commons.
+      - **species** (one animal or plant): stock video, then research-grade iNaturalist photos and Wikimedia
+        Commons.
+      - **archival** (history, people, artworks, events, space): Internet Archive film and newsreels (only
+        the Prelinger, Universal Newsreels and FedFlix collections, which are public domain), NASA, Wikimedia Commons
+        and the Met's open-access collection.
+      - **graphic** (a comparison, a list, a logo sting, an end screen): a card drawn by the app (`cards.py`).
+      - **montage** (a cold open, a recap): quick cuts of the footage picked for the other scenes.
+
+      The search words come from the Visual column; Claude names the subject of each section, so "Slow-motion catch"
+      under #10 GREEN HERON searches "green heron catching fish".
+   3. Nothing good enough: a card with the scene's on-screen text, flagged.
+
+   Claude looks at each pick. Under 7/10 it tries the next match, spread across the libraries, then the broader
+   search words. A pick under 5/10 is never used, whatever the libraries had: the scene gets a card and a flag
+   instead. Each scene keeps a few alternatives. Every file's source page, author and licence is saved
+   (`footage.json`).
+5. **Storyboard** (`storyboard.py`): `storyboard.html` lists every scene with its footage, its real and planned
+   time, its text, its voiceover (playable) and anything flagged. Open it with `--storyboard` (or from the engine at
+   `http://127.0.0.1:8000/media/<job>/storyboard.html`) to pick another alternative, search again with other words,
+   or press **Reload my files** after dropping files into `media/<script>/`. **Nothing renders until you press
+   Approve and render**, and any change after approving needs approving again.
+6. **Render** (`video.py`): each scene is cropped to 1920×1080 at 30 fps, photos with a slow Ken Burns push-in, all
+   in one colour grade (`render.look`). Old 4:3 film and portrait pictures are shown whole over a blurred copy, so
+   heads aren't cut off; black bars baked into archive film are removed first. The
+   scenes are joined with 0.4 s dissolves, and the voice sits at the real scene times. `#N NAME` lines become
+   title cards (number and name centred over a dimmed frame); other on-screen text becomes a lower third. Music
+   comes from your own tracks in `assets/music/own` (any number, played back to back with crossfades), ducked
+   under the voice. The mix goes to −14 LUFS, and the video is H.264 + AAC, on NVENC with a CPU fallback.
+7. **Extras** (`extras.py`):
+   - `captions.srt` from the voiceover's word timing (`render.captions: true` also burns them in).
+   - `description.txt`: the script's description, chapters at their real times, and the credits that must be
+     named (Wikimedia and iNaturalist authors and licences, and the archives used).
+   - `credits.txt`: every clip, photo and track, with its licence and source.
+   - `post.txt` and `thumbnail.jpg` for the app's Upload card.
+
+Everything lands in `output/<time>-<lang>-<title>/`: `video.mp4` and the files above, plus the working files
+(`scenes.json`, `voice/`, `timeline.json`, `footage.json`, `storyboard/`).
+
+**Settings**: `longform.json` in the data folder, written with the defaults on the first run:
+- `voice`: the engine, and the voices per language.
+- `timing.pad_seconds`.
+- `footage`: `media_dir`, `sources` and their order (for everyday footage), `by_kind` (the libraries for species
+  and archival scenes), `alternatives`, and `check_subject` (Claude's check).
+- `render`: size, `crossfade`, `look` (`natural`, `cinematic`, `film`, `moody`, `vibrant` or `mono`), `encoder`
+  (`auto`, `nvenc` or `cpu`), `captions`, and how long title cards and lower thirds stay up.
+- `music`: `dir` and `volume`.
+
 ## Upload to YouTube, TikTok, Facebook and Instagram
 
 Every rendered video has an **Upload to channels** card under its post text. It uploads `video.mp4` with
@@ -425,6 +571,8 @@ out when you open it. The queue is kept in `schedule.json`, campaigns in `campai
 | `crcontent/schedule.py` | Scheduled uploads queue and posting-time slots |
 | `crcontent/publish.py` | YouTube / TikTok sign-in (OAuth + PKCE) and uploads, auto-upload settings |
 | `crcontent/web.py` + `web/` | FastAPI backend and the browser UI |
+| `crcontent/highlights/` | Smart Highlights: best Shorts / Reels clips of a music video |
+| `crcontent/longform/` | Script to Video: long 16:9 YouTube video from a script `.md`, with a storyboard to approve |
 | `crcontent/config.py` | Voices, fonts, sizes per language |
 
 ## Roadmap ideas

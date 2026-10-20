@@ -189,6 +189,18 @@ def concat(clips: list[Path], workdir: Path, out_name: str) -> Path:
 # file. Without film grain a clean picture sits far below it at crf 16; the platforms re-encode the upload anyway,
 # and the better the upload, the better what they make of it (YouTube's VP9 at 1440p from a 2560x1440 upload)
 MAX_RATE, BUF_SIZE = "30M", "60M"
+_nvenc: bool | None = None
+
+
+def nvenc_available() -> bool:
+    """Whether FFmpeg can encode H.264 on an NVIDIA GPU here (has h264_nvenc, and a driver that takes a test frame)."""
+    global _nvenc
+    if _nvenc is None:
+        proc = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=black:s=256x256:d=0.1",
+                               "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"],
+                              stdin=subprocess.DEVNULL, capture_output=True)
+        _nvenc = proc.returncode == 0
+    return _nvenc
 
 # Loudness. Shorts and Reels play back to back at about -14 LUFS; a quieter video sounds weak next to them (the
 # platforms turn loud videos down, but never quiet ones up). The voice is set to VOICE_LUFS first and the music
@@ -287,7 +299,7 @@ def _size(path: Path) -> tuple[int, int]:
 def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
              music: Path | None, music_volume: float = 0.25, soundtrack: Path | None = None,
              fade_out: float = 0.0, effects: list[tuple[Path, float, float]] = (), progress=None,
-             animation: bool = False, out_size: tuple[int, int] | None = None) -> None:
+             animation: bool = False, out_size: tuple[int, int] | None = None, encoder: str = "x264") -> None:
     """Burn captions, mix the audio (voice, ducked music, sound effects) at -14 LUFS, and write a web-optimized mp4.
 
     soundtrack replaces the video's own audio entirely (a music video's song); music is then ignored.
@@ -298,6 +310,7 @@ def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
     out_size: (width, height) to upload at, when it differs from the video's: the picture is scaled first (Lanczos)
     and the captions drawn after, at the output size, so the text stays sharp (16:9 music videos go up at 2560x1440,
     which gets YouTube's better VP9 encode even for a 1080p source).
+    encoder: "x264" (CPU) or "nvenc" (an NVIDIA GPU; see nvenc_available).
     Runs inside workdir with relative names so the subtitles filter avoids Windows drive-letter escaping.
     """
     # complex (HarfBuzz) shaping is required for Khmer subscripts/vowel reordering; "auto" picks simple
@@ -315,9 +328,14 @@ def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
     # the one encode that matters (the shots are near-lossless intermediates): quality-based at crf 16, slow preset,
     # aq-mode 3 (keeps dark gradients from banding), keyframes every 2 s, BT.709 tags (what the shots are converted
     # to, and how players show HD). Capped only against pathological frames (MAX_RATE)
-    cmd += ["-c:v", "libx264", "-preset", "slow", "-crf", "16", *(["-tune", "animation"] if animation else []),
-            "-aq-mode", "3", "-g", str(FPS * 2), "-bf", "2", "-maxrate", MAX_RATE, "-bufsize", BUF_SIZE,
-            "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+    if encoder == "nvenc":  # the GPU's encoder (much faster); constant-quality VBR at about crf 16's quality
+        cmd += ["-c:v", "h264_nvenc", "-preset", "p7", "-tune", "hq", "-rc", "vbr", "-cq", "17", "-b:v", "0",
+                "-spatial-aq", "1", "-temporal-aq", "1", "-bf", "3", "-b_ref_mode", "middle", "-rc-lookahead", "32",
+                "-profile:v", "high", "-g", str(FPS * 2), "-maxrate", MAX_RATE, "-bufsize", BUF_SIZE]
+    else:
+        cmd += ["-c:v", "libx264", "-preset", "slow", "-crf", "16", *(["-tune", "animation"] if animation else []),
+                "-aq-mode", "3", "-g", str(FPS * 2), "-bf", "2", "-maxrate", MAX_RATE, "-bufsize", BUF_SIZE]
+    cmd += ["-pix_fmt", "yuv420p", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
             "-color_range", "tv",
             "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", "-shortest", str(out.resolve())]
     if progress:

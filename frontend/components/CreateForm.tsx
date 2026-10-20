@@ -1,10 +1,11 @@
 "use client";
 
-import { ClipboardPaste, Music, PenLine, Sparkles, Upload } from "lucide-react";
+import { Clapperboard, ClipboardPaste, Music, PenLine, Sparkles, Upload } from "lucide-react";
 import { useState } from "react";
 import { api, type Aspect, type Lang, type Options, type SongScript, type TopicIdea, type VideoScript } from "@/lib/api";
 import { ExcelPlanForm } from "./ExcelPlanForm";
-import { Button, Field, Message, Segmented, Tabs } from "./ui";
+import { OutlierFinder } from "./OutlierFinder";
+import { Button, DropZone, Field, FileInput, Message, Segmented, Tabs } from "./ui";
 
 const PLACEHOLDER: Record<Lang, string> = {
   en: "3 weird facts about octopuses",
@@ -23,7 +24,7 @@ const PASTE_EXAMPLE = [
   "…",
 ].join("\n");
 
-type Mode = "topic" | "paste" | "excel" | "song";
+type Mode = "topic" | "paste" | "excel" | "song" | "long";
 
 const LYRICS_EXAMPLE = ["[Verse 1]", "I walked along the river in the rain", "The city lights were calling out your name", "", "[Chorus]", "Stay with me tonight", "…"].join("\n");
 
@@ -57,17 +58,16 @@ function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string
   return (
     <form onSubmit={submit} className="grid gap-5 card p-5 sm:p-6">
       <Field label="Song file" hint="mp3, wav, m4a, flac" htmlFor="own-file">
-        <input
+        <FileInput
           id="own-file"
-          type="file"
-          required
           accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,audio/*"
-          onChange={(e) => {
-            const f = e.target.files?.[0] ?? null;
+          file={file?.name ?? ""}
+          onReject={(text) => setMsg({ text, error: true })}
+          onFile={(f) => {
             setFile(f);
-            if (f && !title) setTitle(f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "));
+            setMsg({ text: "" });
+            if (!title) setTitle(f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "));
           }}
-          className="field-input h-auto py-2 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-ink/[0.06] file:px-3 file:py-1.5 file:font-semibold"
         />
       </Field>
 
@@ -128,6 +128,63 @@ function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string
   );
 }
 
+/** A long 16:9 YouTube video from your script .md: the app builds the storyboard (voiceover, timing, footage) to check. */
+function LongVideoForm({ onStarted }: { onStarted: (jobId: string, title: string) => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!file) return;
+    setBusy(true);
+    setMsg({ text: "Reading your script…" });
+    try {
+      const r = await api.longVideo(file);
+      setMsg({ text: "" });
+      onStarted(r.id, r.title);
+    } catch (err) {
+      setMsg({ text: (err as Error).message, error: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="grid gap-5 card p-5 sm:p-6">
+      <Field label="Script (.md)" hint="a table with Time | Visual | On-screen Text | Voiceover" htmlFor="long-file">
+        <FileInput
+          id="long-file"
+          accept=".md,.markdown,.txt,text/markdown,text/plain"
+          file={file?.name ?? ""}
+          disabled={busy}
+          onReject={(text) => setMsg({ text, error: true })}
+          onFile={(f) => {
+            setFile(f);
+            setMsg({ text: "" });
+          }}
+        />
+      </Field>
+      <div className="grid gap-1.5 text-base text-ink-soft">
+        <p className="m-0">
+          The title goes on the first <code># </code> line. Each table row is a scene; a line like <code>#10 GREEN HERON</code> in On-screen Text makes it a title card.
+          Optional sections: <b>Thumbnail:</b>, <b>Title options</b>, <b>Description</b> (with a <code>Chapters:</code> line) and <b>Shorts</b>.
+        </p>
+        <p className="m-0">
+          The app records the voiceover, times every scene and picks stock footage or photos for each one, then stops at the storyboard so you can swap anything
+          wrong before it renders. To use your own clip for a scene, name it <code>scene-05.mp4</code> (or .jpg) in the script&apos;s media folder.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
+        <Button type="submit" variant="primary" loading={busy} disabled={!file} icon={<Clapperboard className="size-4" />}>
+          {busy ? "Starting…" : "Build the storyboard"}
+        </Button>
+      </div>
+      <Message {...msg} />
+    </form>
+  );
+}
+
 export function CreateForm({
   options,
   onScript,
@@ -135,6 +192,7 @@ export function CreateForm({
   onImportSong,
   onExcelDrafts,
   onExcelRender,
+  onLongVideo,
 }: {
   options: Options | null;
   onScript: (script: VideoScript, lang: Lang, topic: string, notice?: string) => void;
@@ -142,6 +200,7 @@ export function CreateForm({
   onImportSong: (jobId: string, title: string) => void;
   onExcelDrafts: (drafts: { ep: number; id: string; title: string }[]) => void;
   onExcelRender: (jobId: string, title: string) => void;
+  onLongVideo: (jobId: string, title: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("topic");
   const [songSource, setSongSource] = useState<"own" | "ai">("own");
@@ -247,7 +306,7 @@ export function CreateForm({
         <div className="grid gap-2">
           <h1 className="page-title m-0">Make a new video</h1>
           <p className="page-intro m-0">
-            Start from an idea and let Claude write the script, paste a script you already have, or upload a content plan in Excel. Every script becomes a draft you can edit.
+            Start from an idea and let Claude write the script, paste a script you already have, or upload a content plan in Excel. Every script becomes a draft you can edit. For a long YouTube video, upload its script .md.
           </p>
         </div>
 
@@ -263,6 +322,7 @@ export function CreateForm({
             { value: "paste", label: "Paste a script" },
             { value: "excel", label: "Excel plan" },
             { value: "song", label: "Music video" },
+            { value: "long", label: "Long video" },
           ]}
         />
 
@@ -384,6 +444,7 @@ export function CreateForm({
                   ))}
                 </ul>
               )}
+              <OutlierFinder query={topic} lang={lang} disabled={claudeMissing} onRemake={setTopic} />
             </Field>
 
             <div className="grid items-end gap-5 sm:grid-cols-[auto_1fr_1fr]">
@@ -431,9 +492,18 @@ export function CreateForm({
 
         {mode === "excel" && <ExcelPlanForm claude={!!options?.keys.anthropic} onDrafts={onExcelDrafts} onRender={onExcelRender} />}
 
+        {mode === "long" && <LongVideoForm onStarted={onLongVideo} />}
+
         {mode === "paste" && (
           <form onSubmit={importPasted} className="grid gap-4 card p-5 sm:p-6">
             <Field label="Script" htmlFor="pasted">
+              <DropZone
+                accept=".txt,.md,.markdown,text/plain,text/markdown"
+                label="Drop to paste its text"
+                onFiles={async (f) => setPasted((await f[0].text()).replace(/\r\n/g, "\n"))}
+                onReject={(text) => setImportMsg({ text, error: true })}
+                className="grid"
+              >
               <textarea
                 id="pasted"
                 rows={14}
@@ -443,6 +513,7 @@ export function CreateForm({
                 placeholder={PASTE_EXAMPLE}
                 className="field-input resize-y font-mono text-base leading-relaxed"
               />
+              </DropZone>
             </Field>
             <p className="m-0 text-base text-ink-soft">
               English or ខ្មែរ, any layout. Voiceover is kept word for word, visual notes become footage searches, and extra notes like production tips are ignored. Emoji in on-screen text are

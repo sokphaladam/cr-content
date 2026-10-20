@@ -392,7 +392,9 @@ function Studio() {
                   ? `${j.summary ?? "Videos ready"}. They're in Videos; each episode is also a draft.`
                   : j.kind === "lyrics_sync"
                     ? "Lyrics synced. Play the song to check the timing, then make the music video."
-                    : "Video ready. Your draft is still saved, so you can render another version.",
+                    : j.kind === "long_video"
+                      ? "Storyboard ready. Open it to check every scene, swap what's wrong, then approve it to render."
+                      : "Video ready. Your draft is still saved, so you can render another version.",
             "success",
           );
           await Promise.all([loadVideos(), loadDrafts()]);
@@ -519,6 +521,7 @@ function Studio() {
         }
       }}
       onSelectVideo={(name) => void selectVideo(name, false)}
+      onVideosChanged={loadVideos}
       onOpenSettings={() => {
         setPreviewOpen(false);
         setView("settings");
@@ -703,6 +706,15 @@ function Studio() {
                   setLibraryTab("drafts");
                   toast(`Created ${made.length} draft${made.length === 1 ? "" : "s"}. Check each one's footage, then render.`, "success");
                   if (made[0]) await selectDraft(made[0].id);
+                }}
+                onLongVideo={(id, title) => {
+                  setSelectedVideo(null);
+                  setDetail(null);
+                  setJobTitle(title);
+                  setJob({ id, kind: "long_video", status: "queued", step: 0, log: [], title });
+                  setLibraryTab("videos");
+                  setPreviewOpen(true);
+                  watch(id);
                 }}
                 onExcelRender={(id, title) => {
                   setSelectedVideo(null);

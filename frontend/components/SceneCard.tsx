@@ -5,7 +5,7 @@ import { useId, useRef, useState } from "react";
 import { api, fileUrl, type ArtStatus, type ArtStyle, type ArtSubject, type BRoll, type Lang, type Scene, type StockResult, type TextOverlay } from "@/lib/api";
 import { isImagePath } from "@/lib/format";
 import { ScenePicture } from "./ArtControls";
-import { Button, Chip, IconButton, Segmented, Spinner } from "./ui";
+import { Button, Chip, DropZone, IconButton, Segmented, Spinner } from "./ui";
 
 export type DraftScene = Scene & { uid: string };
 
@@ -382,7 +382,13 @@ export function SceneCard({
         active ? "border-cobalt/60 ring-3 ring-cobalt/15" : "border-line hover:border-line-strong"
       }`}
     >
-      <div className="grid content-start gap-2">
+      <DropZone
+        accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp"
+        label="Drop"
+        onFiles={(f) => void upload(f[0], "media")}
+        onReject={(m) => setStatus(m, true)}
+        className="grid content-start gap-2"
+      >
         <MediaSlot media={scene.media} ai={!!artStyle} onClick={() => openPicker("media")} />
         {layout === "split" && (
           <>
@@ -390,7 +396,7 @@ export function SceneCard({
             <span className="text-center text-xs text-ink-soft">Bottom</span>
           </>
         )}
-      </div>
+      </DropZone>
 
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-3">
         <div className="flex items-center justify-between gap-2">

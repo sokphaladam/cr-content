@@ -388,6 +388,8 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
         .center()
         .initialization_script(&format!("window.__ENGINE_URL__ = \"http://127.0.0.1:{port}\";"))
         .on_download(on_download)
+        // files dropped on the window go to the page (its drop zones), not to Tauri's own drag-drop events
+        .disable_drag_drop_handler()
         .build()?;
     Ok(())
 }

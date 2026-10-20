@@ -673,7 +673,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
                         <option value="">
                           Default (
                           {accounts.youtube_categories[accounts.youtube.category ?? ""] ??
-                            accounts.youtube_categories[detail.kind === "music_video" ? "10" : "22"]}
+                            accounts.youtube_categories[detail.kind === "music_video" || detail.song ? "10" : "22"]}
                           )
                         </option>
                         {Object.entries(accounts.youtube_categories).map(([id, name]) => (

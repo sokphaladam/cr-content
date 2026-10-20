@@ -13,12 +13,13 @@ import {
   type LyricPreset,
   type LyricStyle,
   type MusicVideoSettings,
+  type PictureFit,
   type PicturePace,
   type StyleCatalog,
   type StyleSuggestion,
   type VideoIdeaSuggestion,
 } from "@/lib/api";
-import { Button, Segmented } from "./ui";
+import { Button, DropZone, Segmented } from "./ui";
 
 // The catalog (presets, looks, installed fonts) is the same for every song: fetch it once per page load.
 let catalogPromise: Promise<StyleCatalog | null> | null = null;
@@ -253,18 +254,20 @@ export function MusicVideoOptions({
             </Button>
           </div>
         </div>
-        <textarea
-          id={ideaId}
-          rows={value.idea.length > 400 ? 8 : 2}
-          maxLength={IDEA_MAX}
-          value={value.idea}
-          onChange={(e) => {
-            setIdeaFile("");
-            onChange({ ...value, idea: e.target.value });
-          }}
-          placeholder="Empty city streets at blue hour, rain on neon signs, a lone figure under an umbrella"
-          className="field-input min-h-[3.5rem] resize-y text-base"
-        />
+        <DropZone accept=".md,.markdown,.txt,text/markdown,text/plain" label="Drop the idea file" onFiles={(f) => void loadIdeaFile(f[0])} onReject={setIdeasError} className="grid">
+          <textarea
+            id={ideaId}
+            rows={value.idea.length > 400 ? 8 : 2}
+            maxLength={IDEA_MAX}
+            value={value.idea}
+            onChange={(e) => {
+              setIdeaFile("");
+              onChange({ ...value, idea: e.target.value });
+            }}
+            placeholder="Empty city streets at blue hour, rain on neon signs, a lone figure under an umbrella (or drop a .md / .txt idea here)"
+            className="field-input min-h-[3.5rem] resize-y text-base"
+          />
+        </DropZone>
         {ideaFile && (
           <p className="m-0 text-sm text-ink-soft">
             Loaded <span className="font-semibold text-ink">{ideaFile}</span>. {sections.length > 0 ? "Now Direct my idea to turn it into a shot list." : ""}
@@ -346,6 +349,26 @@ export function MusicVideoOptions({
                 options={(Object.keys(PACES) as PicturePace[]).map((k) => ({ value: k, label: PACES[k].label }))}
               />
               <p className="m-0 text-sm text-ink-soft">{PACES[value.pictures ?? "normal"].hint}</p>
+              {value.pictures === "cover" && (
+                <div className="mt-1 grid justify-items-start gap-1">
+                  <span className="field-label">Picture on screen</span>
+                  <Segmented
+                    name={`${ideaId}-fit`}
+                    size="sm"
+                    value={value.picture_fit ?? "fit"}
+                    onChange={(picture_fit: PictureFit) => onChange({ ...value, picture_fit })}
+                    options={[
+                      { value: "fit", label: "Fit" },
+                      { value: "fill", label: "Fill screen" },
+                    ]}
+                  />
+                  <p className="m-0 text-sm text-ink-soft">
+                    {(value.picture_fit ?? "fit") === "fit"
+                      ? "The whole character, standing on its flat colour. A prompt that describes a whole scene (no “simple background”) is shown whole, never cut out."
+                      : "The picture is drawn in the video's shape and covers the whole screen, edge to edge, with nothing cut out. Covers already drawn for Fit are drawn again."}
+                  </p>
+                </div>
+              )}
               {value.pictures === "cover" && suggested?.prompt && (
                 <div className="grid w-full gap-1 rounded-lg border border-line p-2.5">
                   <div className="flex items-center justify-between gap-2">
@@ -374,6 +397,7 @@ export function MusicVideoOptions({
               direction={value.direction ?? null}
               style={value.art_style}
               pace={value.pictures ?? "normal"}
+              fit={value.picture_fit ?? "fit"}
               idea={value.idea}
               look={look}
               aspect={aspect}

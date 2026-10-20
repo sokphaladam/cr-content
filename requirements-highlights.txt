@@ -1,0 +1,6 @@
+# Optional extras for Smart Highlights (python make.py --highlights output\<job>).
+# Without them the visual score is skipped (audio structure and lyrics still rank the clips).
+# The audio side uses librosa from requirements-music.txt.
+#   pip install -r requirements-highlights.txt
+opencv-python>=4.10,<5   # frame scoring and face / eye detection (OpenCV 5 dropped the bundled Haar cascades)
+scenedetect>=0.6         # scene-change detection (PySceneDetect)

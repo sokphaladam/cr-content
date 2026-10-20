@@ -3,7 +3,7 @@
 import { Clapperboard, FileSpreadsheet, FilePen } from "lucide-react";
 import { useState } from "react";
 import { api, type ExcelPlan } from "@/lib/api";
-import { Button, Field, Message } from "./ui";
+import { Button, Field, FileInput, Message } from "./ui";
 
 /** Content plan in Excel: upload it, tick episodes, then make drafts to check or render them all in one go. */
 export function ExcelPlanForm({
@@ -80,16 +80,13 @@ export function ExcelPlanForm({
   return (
     <div className="grid gap-5 card p-5 sm:p-6">
       <Field label="Content plan (.xlsx)" hint="a Scripts sheet with Ep | Time | Visual | On-screen Text | Voiceover" htmlFor="excel-file">
-        <input
+        <FileInput
           id="excel-file"
-          type="file"
           accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          file={plan?.name ?? ""}
           disabled={busy !== ""}
-          onChange={(e) => {
-            void read(e.target.files?.[0]);
-            e.target.value = ""; // choosing the same file again (after editing it) reads it again
-          }}
-          className="field-input h-auto py-2 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-ink/[0.06] file:px-3 file:py-1.5 file:font-semibold"
+          onReject={(text) => setMsg({ text, error: true })}
+          onFile={(file) => void read(file)}
         />
       </Field>
 

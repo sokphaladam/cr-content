@@ -877,6 +877,17 @@ COVER_EFFECTS = ["bokeh", "sparkles", "glow"]  # no film grain: on flat pastel i
 COVER_SHAPE = "9:16"  # a cover character is drawn portrait (head to thighs with room above), then set on a flat frame
 
 
+# how a cover picture sits on the frame: "fit" = the whole character on its flat colour (a scene: the whole picture,
+# with a blurred copy of it behind); "fill" = drawn in the frame's shape and covering the whole screen
+PICTURE_FITS = ("fit", "fill")
+
+
+def scene_cover(prompt: str) -> bool:
+    """A cover prompt rewritten as a whole scene (no "simple background": a sky, a rooftop, a room): drawn in the
+    frame's own shape and shown as it is. Cut out onto the flat colour, its sky and room were erased in blobs."""
+    return bool(prompt.strip()) and "simple background" not in prompt.lower()
+
+
 def _background(small, target, tolerance: float = 26):
     """Which pixels of `small` (a float RGB array) are its plain background, and the background's colour on each row
     (it may be a gradient). The picture is split into smooth regions by its line art and shading edges; regions
@@ -972,7 +983,7 @@ def _drop_strays(img, character, target, tolerance: float = 34):
 
 
 def cover_canvas(picture: Path, size: tuple[int, int], colour: str, prompt: str = "", seed: int = 1,
-                 log: Callable[[str], None] = print) -> Path:
+                 log: Callable[[str], None] = print, fit: str = "fit") -> Path:
     """The drawn cover character (portrait) as a picture of the frame's shape on a flat `colour` background, set
     in the middle with room above the head. Only what the portrait cut off is painted on by the drawing model (hair
     or a sleeve running off a side or the top continues past it); a character the portrait shows whole is simply
@@ -983,6 +994,21 @@ def cover_canvas(picture: Path, size: tuple[int, int], colour: str, prompt: str 
     from . import imagegen
 
     W, H = size
+    if fit == "fill" or scene_cover(prompt):  # shown as drawn: nothing cut out or painted over
+        out = picture.with_name(f"{picture.stem}-{fit}-scene-{W}x{H}.png")
+        if out.exists():
+            return out
+        img = Image.open(picture).convert("RGB")
+        if fit == "fill" or abs(img.width / img.height - W / H) < 0.05:  # covering the whole screen
+            _crisp(ImageOps.fit(img, (W, H), Image.LANCZOS)).save(out)
+            return out
+        # the whole picture, on a blurred and darkened copy of itself that fills the rest of the frame
+        back = ImageOps.fit(img, (W // 4, H // 4), Image.LANCZOS).filter(ImageFilter.GaussianBlur(12))
+        frame = Image.eval(back, lambda v: int(v * 0.7)).resize((W, H), Image.BILINEAR)
+        whole = ImageOps.contain(img, (W, H), Image.LANCZOS)
+        frame.paste(_crisp(whole), ((W - whole.width) // 2, (H - whole.height) // 2))
+        frame.save(out)
+        return out
     out = picture.with_name(f"{picture.stem}-cover18-{W}x{H}-{colour.replace(' ', '_')}.png")
     if out.exists():
         return out
@@ -1274,9 +1300,12 @@ def _repeats(song) -> dict[int, int]:
 HOME_VIDEO = (1440, 1080)  # the shape a 4:3 home-video section's pictures are drawn in
 
 
-def picture_shape(slot: dict, size: tuple[int, int]) -> tuple[int, int]:
-    """The shape a planned picture is drawn in: landscape for a 4:3 home video, portrait for a cover character."""
-    return HOME_VIDEO if slot.get("frame") == "4:3" else frame_size(COVER_SHAPE) if slot.get("frame") == "cover" else size
+def picture_shape(slot: dict, size: tuple[int, int], fit: str = "fit") -> tuple[int, int]:
+    """The shape a planned picture is drawn in: landscape for a 4:3 home video, portrait for a cover character (unless
+    it fills the screen: `fit` "fill", or a whole scene)."""
+    if slot.get("frame") == "cover" and fit != "fill" and not scene_cover(slot.get("prompt", "")):
+        return frame_size(COVER_SHAPE)
+    return HOME_VIDEO if slot.get("frame") == "4:3" else size
 ART_PLAN = "art_plan.json"  # a song's picture plan, kept in the song folder so it can be checked before a render
 
 
@@ -1464,7 +1493,7 @@ def plan_song_pictures(song_dir: Path, style: str, pace: str = "normal", idea: s
 
 def song_art(song_dir: Path, song, spans: list[tuple[float, float]], shots: list, lines: list, style: str,
              aspect: str, idea: str, size: tuple[int, int], workdir: Path, log: Callable[[str], None] = print,
-             pace: str = "normal", direction: dict | None = None) -> list[tuple[Path, "object"]]:
+             pace: str = "normal", direction: dict | None = None, fit: str = "") -> list[tuple[Path, "object"]]:
     """One AI picture per few shots of each section, prompted from the lyrics sung over them: the song's saved plan
     (checked and edited before the render) when it fits, else a new one from Claude, saved with the song.
     Returns (picture, director's ShotPlan) per shot; shots in a slot share its picture with different moves."""
@@ -1481,6 +1510,9 @@ def song_art(song_dir: Path, song, spans: list[tuple[float, float]], shots: list
     else:
         plan = _new_art_plan(song, slots, style, pace, aspect, idea, log, direction=direction)
         save_art_plan(song_dir, plan)
+    if fit in PICTURE_FITS and plan.get("fit", "fit") != fit:  # a cover that fills the screen is drawn another shape
+        plan["fit"] = fit
+        save_art_plan(song_dir, plan)
     if reused:
         log(f"      repeated sections show their pictures again ({len(reused)} shots)")
     (workdir / "art.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1489,7 +1521,7 @@ def song_art(song_dir: Path, song, spans: list[tuple[float, float]], shots: list
     for k, s in enumerate(plan["slots"]):
         seed = s.get("seed") or k + 1
         plans.append(director.ShotPlan(s["prompt"], s.get("motion") or "push_in", s.get("effects") or []))
-        shape = picture_shape(s, size)
+        shape = picture_shape(s, size, plan.get("fit", "fit"))
         done = imagegen.drawn(s["prompt"], style, shape, seed)
         log(f"      drawing picture {k + 1}/{len(plan['slots'])}" + (" (already drawn)" if done else ""))
         report(k / len(plan["slots"]), f"Picture {k + 1} of {len(plan['slots'])}" + (" (already drawn)" if done else ""))
@@ -1676,7 +1708,7 @@ def progress_reporter(log: Callable[[str], None]):
 def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: str = "", look: str = "",
                      lyric_style: "dict | None" = None, art_style: str | None = None,
                      pictures: str | None = None, direction: dict | None = None,
-                     cold_open: bool | None = None, now_playing: bool | None = None) -> Path:
+                     cold_open: bool | None = None, now_playing: bool | None = None, fit: str | None = None) -> Path:
     """Song folder in -> a NEW video folder next to it: beat-cut footage per section, karaoke lyrics, the song as audio.
 
     The song folder works like a draft: its lyrics and timing stay editable, and every render is a separate version
@@ -1686,7 +1718,8 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     imagegen.STYLES look drawn on this computer (None = the song's last choice). `pictures`: how many of them
     (PICTURE_PACES: "fewer", "normal", "more"; None = the song's last choice). `cold_open`: the song's name flickers on
     in neon over its first seconds, until the singing starts (None = the song's last choice). `now_playing`: a now-playing card in the top-left corner (title, progress bar, a
-    spinning record; None = the song's last choice). Idea, look and styles are remembered on the song for the next version. Returns the new
+    spinning record; None = the song's last choice). `fit`: how a cover picture sits on the frame (PICTURE_FITS; None =
+    the song's last choice). Idea, look and styles are remembered on the song for the next version. Returns the new
     video.mp4.
     """
     from .align import load_lines, save_lines
@@ -1704,10 +1737,11 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
     pictures = pictures if pictures in PICTURE_PACES else song_meta.get("pictures") or "normal"
     cold_open = bool(song_meta.get("cold_open")) if cold_open is None else cold_open
     now_playing = bool(song_meta.get("now_playing")) if now_playing is None else now_playing
+    fit = fit if fit in PICTURE_FITS else song_meta.get("picture_fit") or "fit"
     # the shot list made from this idea (director.direct_idea, maybe edited); None = the song's, if it fits the idea
     direction = song_direction(song, song_meta.get("direction") if direction is None else direction, idea)
     remembered = {"idea": idea, "look": look, "lyric_style": style.model_dump(), "art_style": art_style,
-                  "pictures": pictures, "cold_open": cold_open, "now_playing": now_playing, **({"direction": direction} if direction else {})}
+                  "pictures": pictures, "cold_open": cold_open, "now_playing": now_playing, "picture_fit": fit, **({"direction": direction} if direction else {})}
     if any(song_meta.get(k) != v for k, v in remembered.items()):  # remembered for the next version
         song_meta.update(remembered)
         _save_meta(song_dir, song_meta)
@@ -1756,7 +1790,8 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
             section.visual_query = query
     song.save(job / "song.json")  # this version's searches; the song folder keeps its own
     log(f"      -> {len(shots)} shots ({beat_method})")
-    shot_art = (song_art(song_dir, song, spans, shots, lines, drawn, aspect, idea, size, work, log, pictures, direction)
+    shot_art = (song_art(song_dir, song, spans, shots, lines, drawn, aspect, idea, size, work, log, pictures, direction,
+                         fit)
                 if drawn else None)
     picker = FootagePicker(orientation(size))
     per_section: dict[int, list[list]] = {}  # section -> [[clip, seconds used], ...]
@@ -1769,7 +1804,7 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
         picture, plan = shot_art[0]
         seed = (json.loads((work / "art.json").read_text(encoding="utf-8"))["slots"][0].get("seed") or 1)
         report(0.0, "Setting the cover on the frame")
-        picture = cover_canvas(picture, size, cover_colour(song.title, idea), plan.prompt, seed, log)
+        picture = cover_canvas(picture, size, cover_colour(song.title, idea), plan.prompt, seed, log, fit)
         shutil.copy(picture, work / COVER_FRAME)  # for the magazine thumbnail
         log(f"      holding one picture for the whole song ({total:.0f}s)")
         clip = work / "shot_00.mp4"
