@@ -94,12 +94,19 @@ def _frame_image(video: Path, size: tuple[int, int], at: float):
 
 
 def _lines(title: str, sprite, px: int, max_w: float) -> list[str]:
-    """The title in at most 2 lines that fit `max_w` at `px` (balanced: the break nearest the middle)."""
+    """The title in 2 lines that fit `max_w` at `px` (balanced: the break nearest the middle), or 3 when a long
+    title (a Short's) can't fit in 2."""
     words = title.split()
     if len(words) < 2 or sprite(title, px)["w"] <= max_w:
         return [title]
+    widest = lambda rows: max(sprite(r, px)["w"] for r in rows)
     splits = [(" ".join(words[:k]), " ".join(words[k:])) for k in range(1, len(words))]
-    return list(min(splits, key=lambda s: max(sprite(s[0], px)["w"], sprite(s[1], px)["w"])))
+    two = list(min(splits, key=widest))
+    if widest(two) <= max_w or len(words) < 3:
+        return two
+    threes = [(" ".join(words[:a]), " ".join(words[a:b]), " ".join(words[b:]))
+              for a in range(1, len(words) - 1) for b in range(a + 1, len(words))]
+    return list(min(threes, key=widest))
 
 
 def _mixed_sprite(text: str, px: int, cache: dict, track: float = 0.0, weight: str = "heavy") -> dict:

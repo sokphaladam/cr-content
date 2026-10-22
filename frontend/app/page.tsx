@@ -1,20 +1,52 @@
 "use client";
 
 import { CircleAlert } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
-import { api, type Aspect, type DraftSummary, type Job, type Lang, type MusicVideoSettings, type Options, type SongScript, type VideoDetail, type VideoSummary } from "@/lib/api";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from "react";
+import {
+  API_BASE,
+  api,
+  outputUrl,
+  type Aspect,
+  type DraftSummary,
+  type Job,
+  type Lang,
+  type MusicVideoSettings,
+  type Options,
+  type SongScript,
+  type VideoDetail,
+  type VideoSummary,
+} from "@/lib/api";
 import { CreateForm } from "@/components/CreateForm";
 import { Library, type LibraryTab } from "@/components/Library";
-import { ExportCards, PreviewPane, settingsOf, type PreviewView } from "@/components/PreviewPane";
+import {
+  ExportCards,
+  PreviewPane,
+  settingsOf,
+  type PreviewView,
+} from "@/components/PreviewPane";
 import { LyricsTiming } from "@/components/LyricsTiming";
 import { NavRail, type AppView } from "@/components/NavRail";
 import { Settings } from "@/components/Settings";
 import { Campaigns } from "@/components/Campaigns";
 import { SongEditor } from "@/components/SongEditor";
-import { Storyboard, draftVoice, toDraft, toDraftData, type Draft, type SaveState } from "@/components/Storyboard";
+import {
+  Storyboard,
+  draftVoice,
+  toDraft,
+  toDraftData,
+  type Draft,
+  type SaveState,
+} from "@/components/Storyboard";
 import { TopBar } from "@/components/TopBar";
 import { UpdateNotice } from "@/components/UpdateNotice";
-import { Drawer, ResizeHandle, ToastProvider, useToast } from "@/components/ui";
+import { Button, Drawer, ResizeHandle, ToastProvider, useToast } from "@/components/ui";
 import { usePaneWidth } from "@/lib/appearance";
 import { DraftHistory } from "@/lib/draftHistory";
 import { useDraftTimeline } from "@/lib/useDraftTimeline";
@@ -66,23 +98,41 @@ function Studio() {
   const [view, setView] = useState<AppView>("studio");
   const [previewOpen, setPreviewOpen] = useState(false);
   // Song being edited (not autosaved; composing writes song.json into its output folder)
-  const [song, setSongState] = useState<{ song: SongScript; lang: Lang; topic: string } | null>(null);
+  const [song, setSongState] = useState<{
+    song: SongScript;
+    lang: Lang;
+    topic: string;
+  } | null>(null);
   const setSong = useCallback(
-    (update: (s: SongScript) => SongScript) => setSongState((cur) => (cur ? { ...cur, song: update(cur.song) } : cur)),
+    (update: (s: SongScript) => SongScript) =>
+      setSongState((cur) => (cur ? { ...cur, song: update(cur.song) } : cur)),
     [],
   );
   // Song whose lyric timing is open in the editor (its output folder); the version remounts it after a re-sync.
   // It keeps its own copy of the song's details so the preview can show a rendered version meanwhile.
-  const [timing, setTiming] = useState<{ name: string; version: number; title: string; lang: Lang; aspect: Aspect; sections: string[]; settings: MusicVideoSettings } | null>(
-    null,
-  );
+  const [timing, setTiming] = useState<{
+    name: string;
+    version: number;
+    title: string;
+    lang: Lang;
+    aspect: Aspect;
+    sections: string[];
+    settings: MusicVideoSettings;
+  } | null>(null);
   const poll = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // the open draft as a playable timeline, shared by the transcript editor and the live preview
-  const { voice: draftVoiceName, rate: draftRate } = draft && options ? draftVoice(draft, options) : { voice: "", rate: "" };
-  const timeline = useDraftTimeline(draft?.scenes ?? null, draftVoiceName, draftRate);
+  const { voice: draftVoiceName, rate: draftRate } =
+    draft && options ? draftVoice(draft, options) : { voice: "", rate: "" };
+  const timeline = useDraftTimeline(
+    draft?.scenes ?? null,
+    draftVoiceName,
+    draftRate,
+  );
   // while it plays, the scene being played is the one highlighted in the storyboard
-  const playheadUid = timeline.playing ? (draft?.scenes[timeline.pos.i]?.uid ?? null) : null;
+  const playheadUid = timeline.playing
+    ? (draft?.scenes[timeline.pos.i]?.uid ?? null)
+    : null;
   useEffect(() => {
     if (playheadUid) setActiveUid(playheadUid);
   }, [playheadUid]);
@@ -98,7 +148,11 @@ function Studio() {
 
   // undo/redo of draft edits (saving the new id after a first save isn't an edit, so it goes around this)
   const [history] = useState(() => new DraftHistory<Draft>());
-  const historyFlags = useSyncExternalStore(history.subscribe, history.flags, () => "00");
+  const historyFlags = useSyncExternalStore(
+    history.subscribe,
+    history.flags,
+    () => "00",
+  );
   const setDraft = useCallback(
     (update: (d: Draft) => Draft) =>
       setDraftState((d) => {
@@ -112,7 +166,8 @@ function Studio() {
   const step = useCallback(
     (dir: "undo" | "redo") => {
       const cur = currentDraft.current;
-      const to = cur && (dir === "undo" ? history.undo(cur) : history.redo(cur));
+      const to =
+        cur && (dir === "undo" ? history.undo(cur) : history.redo(cur));
       if (cur && to) setDraftState({ ...to, id: cur.id });
     },
     [history],
@@ -122,7 +177,11 @@ function Studio() {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || !currentDraft.current) return;
       const el = e.target as HTMLElement | null;
-      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (
+        el &&
+        (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
+      )
+        return;
       const key = e.key.toLowerCase();
       if (key === "z" || key === "y") {
         e.preventDefault();
@@ -148,7 +207,8 @@ function Studio() {
   }, []);
   const loadDrafts = useCallback(async () => {
     try {
-      setDrafts(await withRetry(api.drafts));
+      const apiDrafts = await withRetry(api.drafts);
+      setDrafts(apiDrafts);
     } catch {
       setDrafts([]);
     }
@@ -156,7 +216,10 @@ function Studio() {
 
   // after keys change in Settings: the "connected" checks in the editors read these
   const reloadOptions = useCallback(() => {
-    api.options().then(setOptions).catch(() => {});
+    api
+      .options()
+      .then(setOptions)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -177,10 +240,28 @@ function Studio() {
     };
   }, [loadVideos, loadDrafts]);
 
+  // The storyboard page (an iframe from the engine) started its render: show its progress here too.
+  // No deps: re-subscribed each render so it always calls the current watch().
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== new URL(API_BASE).origin || e.data?.type !== "storyboard-render") return;
+      const { id, job: name, kind } = e.data as { id: string; job: string; kind?: "short" };
+      const title = videos?.find((v) => v.name === name)?.title ?? name;
+      setJobTitle(title);
+      setJob({ id, kind: kind ?? "long_video", status: "queued", step: 5, log: [], title });
+      setPreviewOpen(true);
+      watch(id);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  });
+
   // Desktop app: the native "Save as" dialog reports how each download went.
   useEffect(() => {
     const onDownload = (e: Event) => {
-      const { success, name } = (e as CustomEvent<{ success: boolean; name: string | null }>).detail;
+      const { success, name } = (
+        e as CustomEvent<{ success: boolean; name: string | null }>
+      ).detail;
       if (success) toast(name ? `Saved ${name}` : "Download saved", "success");
       else toast("Download failed. Try again.", "error");
     };
@@ -296,6 +377,11 @@ function Studio() {
       } else if (openScript && d.kind !== "music_video") {
         setTiming(null);
       }
+      // a long video's storyboard opens in the middle, in place of whatever was being edited
+      if (openScript && (d.kind === "long_video" || d.kind === "short")) {
+        setSongState(null);
+        await closeDraft();
+      }
       if (openScript && d.song && d.kind === "song" && d.source !== "upload") {
         await closeDraft();
         setSongState({ song: d.song, lang: d.lang, topic: "" });
@@ -310,7 +396,15 @@ function Studio() {
       const d = await api.draft(id);
       setSongState(null);
       setTiming(null);
-      await openDraft(toDraft(d.script, d.lang, d.topic, { id, voice: d.voice, rate: d.rate, music: d.music }), true);
+      await openDraft(
+        toDraft(d.script, d.lang, d.topic, {
+          id,
+          voice: d.voice,
+          rate: d.rate,
+          music: d.music,
+        }),
+        true,
+      );
       setSelectedVideo(null);
       setDetail(null);
       setPreviewView("scene");
@@ -346,7 +440,10 @@ function Studio() {
       if (id === draftId.current) await flush();
       const d = await api.draft(id);
       const { id: copy } = await api.createDraft({
-        script: { ...d.script, title: `${d.script.title || "Untitled draft"} (copy)` },
+        script: {
+          ...d.script,
+          title: `${d.script.title || "Untitled draft"} (copy)`,
+        },
         lang: d.lang,
         topic: d.topic,
         voice: d.voice,
@@ -370,10 +467,15 @@ function Studio() {
       toast((e as Error).message, "error");
       return;
     }
-    toast(isSong ? "Song deleted. Its music videos are still in Videos." : "Video deleted");
+    toast(
+      isSong
+        ? "Song deleted. Its music videos are still in Videos."
+        : "Video deleted",
+    );
     if (timing?.name === name) setTiming(null);
     if (isSong && detail?.name === name) setSongState(null);
-    if (selectedVideo === name || detail?.name === name) await selectVideo(null, false);
+    if (selectedVideo === name || detail?.name === name)
+      await selectVideo(null, false);
     await Promise.all([loadVideos(), loadDrafts()]);
   }
 
@@ -392,8 +494,14 @@ function Studio() {
                   ? `${j.summary ?? "Videos ready"}. They're in Videos; each episode is also a draft.`
                   : j.kind === "lyrics_sync"
                     ? "Lyrics synced. Play the song to check the timing, then make the music video."
-                    : j.kind === "long_video"
-                      ? "Storyboard ready. Open it to check every scene, swap what's wrong, then approve it to render."
+                    : j.kind === "long_video" && j.step < 7 // steps 1-5 make the storyboard, 6-7 render it
+                      ? "Storyboard ready. Check every scene, swap what's wrong, then approve it to render."
+                      : j.kind === "long_video"
+                        ? "Long video ready. The chapters, captions and credits are in its folder."
+                      : j.kind === "short" && j.step < 7 // steps 1-5 make the pre-flight report, 6-7 render it
+                        ? `${j.summary ?? "Pre-flight report ready"}. Check the hook score and the storyboard, then approve it to render.`
+                      : j.kind === "short"
+                        ? "Short ready. Its cover, metadata and pinned comment are in its folder."
                       : "Video ready. Your draft is still saved, so you can render another version.",
             "success",
           );
@@ -422,7 +530,9 @@ function Studio() {
           return;
         }
       } catch (e) {
-        setJob((j) => (j ? { ...j, status: "error", error: (e as Error).message } : j));
+        setJob((j) =>
+          j ? { ...j, status: "error", error: (e as Error).message } : j,
+        );
         return;
       }
       poll.current = setTimeout(tick, 1000);
@@ -439,15 +549,30 @@ function Studio() {
     setLibraryOpen(false);
   }
 
-  const rendering = job !== null && (job.status === "queued" || job.status === "running");
-  const activeIndex = draft ? Math.max(0, draft.scenes.findIndex((s) => s.uid === activeUid)) : 0;
+  const rendering =
+    job !== null && (job.status === "queued" || job.status === "running");
+  const activeIndex = draft
+    ? Math.max(
+        0,
+        draft.scenes.findIndex((s) => s.uid === activeUid),
+      )
+    : 0;
   const activeScene = draft ? (draft.scenes[activeIndex] ?? null) : null;
   // The lyric timing editor has its own player, monitor and music video options: the preview pane would only repeat
   // them (and play the song a second time), so it shows only while a job is running or has failed.
   const timingOpen = !draft && !song && !!timing;
   const hasPreview = timingOpen
     ? rendering || job?.status === "error"
-    : !!draft || !!song || rendering || job?.status === "error" || !!detail?.video || !!detail?.audio;
+    : !!draft ||
+      !!song ||
+      rendering ||
+      job?.status === "error" ||
+      !!detail?.video ||
+      !!detail?.audio;
+  // Script to Video: its storyboard (the engine's page, where footage is swapped and the render approved) fills the middle
+  // Shorts Mode: its pre-flight report (the engine's page, where the render is approved) fills the middle the same way
+  const storyboard =
+    !draft && !song && !timing && (detail?.kind === "long_video" || detail?.kind === "short") ? detail : null;
 
   const library = (
     <Library
@@ -455,7 +580,11 @@ function Studio() {
       onTab={setLibraryTab}
       drafts={drafts}
       videos={videos}
-      selectedDraft={draft?.id ?? timing?.name ?? (detail?.kind === "song" ? detail.name : null)}
+      selectedDraft={
+        draft?.id ??
+        timing?.name ??
+        (detail?.kind === "song" ? detail.name : null)
+      }
       selectedVideo={selectedVideo}
       onSelectDraft={(id) => {
         setView("studio");
@@ -492,8 +621,18 @@ function Studio() {
               options,
               edit: {
                 captions: draft.captions,
-                setCaptions: (patch) => setDraft((d) => ({ ...d, captions: { ...d.captions, ...patch } })),
-                patchScene: (uid, patch) => setDraft((d) => ({ ...d, scenes: d.scenes.map((s) => (s.uid === uid ? { ...s, ...patch(s) } : s)) })),
+                setCaptions: (patch) =>
+                  setDraft((d) => ({
+                    ...d,
+                    captions: { ...d.captions, ...patch },
+                  })),
+                patchScene: (uid, patch) =>
+                  setDraft((d) => ({
+                    ...d,
+                    scenes: d.scenes.map((s) =>
+                      s.uid === uid ? { ...s, ...patch(s) } : s,
+                    ),
+                  })),
               },
             }
           : null
@@ -509,8 +648,12 @@ function Studio() {
       view={previewView}
       onView={setPreviewView}
       onThumbnail={(summary) => {
-        setDetail((d) => (d && d.name === summary.name ? { ...d, ...summary } : d));
-        setVideos((vs) => vs?.map((v) => (v.name === summary.name ? summary : v)) ?? vs);
+        setDetail((d) =>
+          d && d.name === summary.name ? { ...d, ...summary } : d,
+        );
+        setVideos(
+          (vs) => vs?.map((v) => (v.name === summary.name ? summary : v)) ?? vs,
+        );
       }}
       onOpenTiming={async (name) => {
         try {
@@ -530,7 +673,14 @@ function Studio() {
         try {
           const { id } = await api.musicVideo(name, settings);
           setJobTitle(detail?.title ?? name);
-          setJob({ id, kind: "song_video", status: "queued", step: 0, log: [], title: detail?.title ?? name });
+          setJob({
+            id,
+            kind: "song_video",
+            status: "queued",
+            step: 0,
+            log: [],
+            title: detail?.title ?? name,
+          });
           setPreviewOpen(true);
           watch(id);
         } catch (e) {
@@ -542,7 +692,10 @@ function Studio() {
   );
   const preview = renderPreview("full");
   // the rendered video's export cards, in the draft editor's inspector
-  const exportDetail = detail?.video && detail.kind !== "song" && detail.kind !== "music_video" ? detail : null;
+  const exportDetail =
+    detail?.video && detail.kind !== "song" && detail.kind !== "music_video"
+      ? detail
+      : null;
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -560,23 +713,40 @@ function Studio() {
             } else if (editing) setLibraryInEditor((open) => !open);
             else setLibraryHidden((h) => !h);
           }}
-          onSettings={() => setView((v) => (v === "settings" ? "studio" : "settings"))}
-          onCampaigns={() => setView((v) => (v === "campaigns" ? "studio" : "campaigns"))}
-          onPreview={view === "studio" && sidePreview ? () => setPreviewOpen(true) : undefined}
+          onSettings={() =>
+            setView((v) => (v === "settings" ? "studio" : "settings"))
+          }
+          onCampaigns={() =>
+            setView((v) => (v === "campaigns" ? "studio" : "campaigns"))
+          }
+          onPreview={
+            view === "studio" && sidePreview
+              ? () => setPreviewOpen(true)
+              : undefined
+          }
         />
       </div>
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
           onOpenLibrary={() => setLibraryOpen(true)}
-          onOpenSettings={() => setView((v) => (v === "settings" ? "studio" : "settings"))}
-          onOpenCampaigns={() => setView((v) => (v === "campaigns" ? "studio" : "campaigns"))}
+          onOpenSettings={() =>
+            setView((v) => (v === "settings" ? "studio" : "settings"))
+          }
+          onOpenCampaigns={() =>
+            setView((v) => (v === "campaigns" ? "studio" : "campaigns"))
+          }
           onOpenPreview={() => setPreviewOpen(true)}
           showPreviewButton={view === "studio" && sidePreview}
-          setupNeeded={!!options && (!options.keys.anthropic || !options.keys.stock)}
+          setupNeeded={
+            !!options && (!options.keys.anthropic || !options.keys.stock)
+          }
         />
 
         {engineError && (
-          <div role="alert" className="flex items-center gap-2 border-b border-danger/30 bg-danger/[0.07] px-4 py-2.5 text-base text-danger">
+          <div
+            role="alert"
+            className="flex items-center gap-2 border-b border-danger/30 bg-danger/[0.07] px-4 py-2.5 text-base text-danger"
+          >
             <CircleAlert className="size-4 shrink-0" />
             {engineError}
           </div>
@@ -604,15 +774,25 @@ function Studio() {
         )}
         <div
           hidden={view !== "studio"}
-          style={{ "--lib-w": `${libraryPane.width}px`, "--prev-w": `${previewPane.width}px` } as CSSProperties}
+          style={
+            {
+              "--lib-w": `${libraryPane.width}px`,
+              "--prev-w": `${previewPane.width}px`,
+            } as CSSProperties
+          }
           className={`grid min-h-0 flex-1 grid-cols-1 ${
             !showLibrary
-              ? sidePreview ? "wide:grid-cols-[minmax(0,1fr)_var(--prev-w)]" : ""
+              ? sidePreview
+                ? "wide:grid-cols-[minmax(0,1fr)_var(--prev-w)]"
+                : ""
               : `lg:grid-cols-[var(--lib-w)_minmax(0,1fr)] ${sidePreview ? "wide:grid-cols-[var(--lib-w)_minmax(0,1fr)_var(--prev-w)]" : ""}`
           }`}
         >
           {showLibrary && (
-            <aside aria-label="Library" className="relative hidden min-h-0 border-r border-line bg-paper lg:block">
+            <aside
+              aria-label="Library"
+              className="relative hidden min-h-0 border-r border-line bg-paper lg:block"
+            >
               {library}
               <ResizeHandle
                 edge="right"
@@ -643,7 +823,14 @@ function Studio() {
                   try {
                     const { id } = await api.resyncLyrics(timing.name);
                     setJobTitle(timing.title);
-                    setJob({ id, kind: "lyrics_sync", status: "queued", step: 0, log: [], title: timing.title });
+                    setJob({
+                      id,
+                      kind: "lyrics_sync",
+                      status: "queued",
+                      step: 0,
+                      log: [],
+                      title: timing.title,
+                    });
                     setPreviewOpen(true);
                     watch(id);
                     return null;
@@ -656,7 +843,14 @@ function Studio() {
                     const { id } = await api.musicVideo(timing.name, settings);
                     setTiming((t) => (t ? { ...t, settings } : t));
                     setJobTitle(timing.title);
-                    setJob({ id, kind: "song_video", status: "queued", step: 0, log: [], title: timing.title });
+                    setJob({
+                      id,
+                      kind: "song_video",
+                      status: "queued",
+                      step: 0,
+                      log: [],
+                      title: timing.title,
+                    });
                     setPreviewOpen(true);
                     watch(id);
                     return null;
@@ -674,13 +868,29 @@ function Studio() {
                 options={options}
                 composing={rendering && job?.kind === "song"}
                 onBack={() => setSongState(null)}
-                onDelete={detail?.kind === "song" ? () => void deleteVideo(detail.name, true) : null}
+                onDelete={
+                  detail?.kind === "song"
+                    ? () => void deleteVideo(detail.name, true)
+                    : null
+                }
                 onCompose={async (stems) => {
                   try {
-                    const { id } = await api.composeSong({ song: song.song, topic: song.topic, lang: song.lang, stems });
+                    const { id } = await api.composeSong({
+                      song: song.song,
+                      topic: song.topic,
+                      lang: song.lang,
+                      stems,
+                    });
                     setSelectedVideo(null);
                     setJobTitle(song.song.title);
-                    setJob({ id, kind: "song", status: "queued", step: 0, log: [], title: song.song.title });
+                    setJob({
+                      id,
+                      kind: "song",
+                      status: "queued",
+                      step: 0,
+                      log: [],
+                      title: song.song.title,
+                    });
                     setPreviewOpen(true);
                     watch(id);
                     return null;
@@ -690,28 +900,77 @@ function Studio() {
                 }}
               />
             )}
-            {!draft && !song && !timing && (
+            {storyboard && (
+              <div className="flex h-full min-h-0 flex-col">
+                <div className="pane-header px-5">
+                  <h2 className="pane-title m-0 truncate">{storyboard.title}</h2>
+                  <Button variant="ghost" size="sm" onClick={() => void selectVideo(null, false)}>
+                    Close
+                  </Button>
+                </div>
+                <iframe
+                  key={`${storyboard.name}-${storyboard.video}`}
+                  title={`${storyboard.kind === "short" ? "Pre-flight" : "Storyboard"}: ${storyboard.title}`}
+                  src={outputUrl(storyboard.name, storyboard.kind === "short" ? "preflight.html" : "storyboard.html")}
+                  className="min-h-0 w-full flex-1 border-0 bg-paper"
+                />
+              </div>
+            )}
+            {!draft && !song && !timing && !storyboard && (
               <CreateForm
                 options={options}
                 onImportSong={(id, title) => {
                   setSelectedVideo(null);
                   setDetail(null);
                   setJobTitle(title);
-                  setJob({ id, kind: "lyrics_sync", status: "queued", step: 0, log: [], title });
+                  setJob({
+                    id,
+                    kind: "lyrics_sync",
+                    status: "queued",
+                    step: 0,
+                    log: [],
+                    title,
+                  });
                   setPreviewOpen(true);
                   watch(id);
                 }}
                 onExcelDrafts={async (made) => {
                   await loadDrafts();
                   setLibraryTab("drafts");
-                  toast(`Created ${made.length} draft${made.length === 1 ? "" : "s"}. Check each one's footage, then render.`, "success");
+                  toast(
+                    `Created ${made.length} draft${made.length === 1 ? "" : "s"}. Check each one's footage, then render.`,
+                    "success",
+                  );
                   if (made[0]) await selectDraft(made[0].id);
                 }}
                 onLongVideo={(id, title) => {
                   setSelectedVideo(null);
                   setDetail(null);
                   setJobTitle(title);
-                  setJob({ id, kind: "long_video", status: "queued", step: 0, log: [], title });
+                  setJob({
+                    id,
+                    kind: "long_video",
+                    status: "queued",
+                    step: 0,
+                    log: [],
+                    title,
+                  });
+                  setLibraryTab("videos");
+                  setPreviewOpen(true);
+                  watch(id);
+                }}
+                onShorts={(id, title) => {
+                  setSelectedVideo(null);
+                  setDetail(null);
+                  setJobTitle(title);
+                  setJob({
+                    id,
+                    kind: "short",
+                    status: "queued",
+                    step: 0,
+                    log: [],
+                    title,
+                  });
                   setLibraryTab("videos");
                   setPreviewOpen(true);
                   watch(id);
@@ -720,7 +979,14 @@ function Studio() {
                   setSelectedVideo(null);
                   setDetail(null);
                   setJobTitle(title);
-                  setJob({ id, kind: "excel", status: "queued", step: 0, log: [], title });
+                  setJob({
+                    id,
+                    kind: "excel",
+                    status: "queued",
+                    step: 0,
+                    log: [],
+                    title,
+                  });
                   setLibraryTab("videos");
                   setPreviewOpen(true);
                   watch(id);
@@ -729,7 +995,10 @@ function Studio() {
                   setSongState({ song: s, lang, topic });
                   setSelectedVideo(null);
                   setDetail(null);
-                  toast("Lyrics written. Check them, then compose the song.", "success");
+                  toast(
+                    "Lyrics written. Check them, then compose the song.",
+                    "success",
+                  );
                 }}
                 onScript={async (script, lang, topic, notice) => {
                   await openDraft(toDraft(script, lang, topic), false);
@@ -757,15 +1026,29 @@ function Studio() {
                     <ExportCards
                       detail={exportDetail}
                       onThumbnail={(summary) => {
-                        setDetail((d) => (d && d.name === summary.name ? { ...d, ...summary } : d));
-                        setVideos((vs) => vs?.map((v) => (v.name === summary.name ? summary : v)) ?? vs);
+                        setDetail((d) =>
+                          d && d.name === summary.name
+                            ? { ...d, ...summary }
+                            : d,
+                        );
+                        setVideos(
+                          (vs) =>
+                            vs?.map((v) =>
+                              v.name === summary.name ? summary : v,
+                            ) ?? vs,
+                        );
                       }}
                       onDeleteVideo={deleteVideo}
                       onOpenSettings={() => setView("settings")}
                     />
                   )
                 }
-                history={{ canUndo: historyFlags[0] === "1", canRedo: historyFlags[1] === "1", undo: () => step("undo"), redo: () => step("redo") }}
+                history={{
+                  canUndo: historyFlags[0] === "1",
+                  canRedo: historyFlags[1] === "1",
+                  undo: () => step("undo"),
+                  redo: () => step("redo"),
+                }}
                 onActive={(uid, seek = true) => {
                   setActiveUid(uid);
                   setPreviewView("scene");
@@ -779,10 +1062,22 @@ function Studio() {
                 onDeleteDraft={() => void deleteDraft()}
                 onRender={async (script, settings) => {
                   try {
-                    const { id } = await api.render({ script, topic: draft.topic, lang: draft.lang, ...settings, draft_id: draftId.current ?? "" });
+                    const { id } = await api.render({
+                      script,
+                      topic: draft.topic,
+                      lang: draft.lang,
+                      ...settings,
+                      draft_id: draftId.current ?? "",
+                    });
                     setSelectedVideo(null);
                     setJobTitle(script.title);
-                    setJob({ id, status: "queued", step: 0, log: [], title: script.title });
+                    setJob({
+                      id,
+                      status: "queued",
+                      step: 0,
+                      log: [],
+                      title: script.title,
+                    });
                     setPreviewOpen(true);
                     watch(id);
                     return null;
@@ -795,7 +1090,10 @@ function Studio() {
           </main>
 
           {sidePreview && (
-            <aside aria-label="Preview" className="relative hidden min-h-0 border-l border-line bg-paper wide:block">
+            <aside
+              aria-label="Preview"
+              className="relative hidden min-h-0 border-l border-line bg-paper wide:block"
+            >
               <div className="relative h-full overflow-y-auto">{preview}</div>
               <ResizeHandle
                 edge="left"
@@ -811,12 +1109,22 @@ function Studio() {
         </div>
 
         <div className="lg:hidden">
-          <Drawer open={libraryOpen} side="left" onClose={() => setLibraryOpen(false)} label="Library">
+          <Drawer
+            open={libraryOpen}
+            side="left"
+            onClose={() => setLibraryOpen(false)}
+            label="Library"
+          >
             {library}
           </Drawer>
         </div>
         <div className="wide:hidden">
-          <Drawer open={previewOpen && sidePreview && view === "studio"} side="right" onClose={() => setPreviewOpen(false)} label="Preview">
+          <Drawer
+            open={previewOpen && sidePreview && view === "studio"}
+            side="right"
+            onClose={() => setPreviewOpen(false)}
+            label="Preview"
+          >
             {preview}
           </Drawer>
         </div>

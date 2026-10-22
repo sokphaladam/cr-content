@@ -180,34 +180,50 @@ def _cached(key: str, fetch) -> list[dict]:
     return items
 
 
-def _pexels_file(files: list[dict], width: int) -> dict | None:
-    """The smallest landscape mp4 at least `width` wide, else the widest (a 4K file only slows the render down)."""
-    wide = [f for f in files if f.get("file_type") == "video/mp4" and (f.get("width") or 0) > (f.get("height") or 0)]
-    good = [f for f in wide if (f.get("width") or 0) >= width]
-    return min(good, key=lambda f: f["width"]) if good else max(wide, key=lambda f: f.get("width") or 0, default=None)
+def usable_width(item: dict, portrait: bool = False) -> float:
+    """How many of a match's pixels fill the frame's width: its width, or for a 9:16 frame the width left once a wider
+    picture is cropped to 9:16 (a 1920x1080 clip keeps 608 px; 4K keeps 1215)."""
+    w, h = item.get("width") or 0, item.get("height") or 0
+    return min(w, h * 9 / 16) if portrait and h else w
 
 
-def _pixabay_file(videos: dict, width: int) -> dict | None:
+def _pexels_file(files: list[dict], width: int, portrait: bool = False) -> dict | None:
+    """The smallest landscape mp4 at least `width` wide, else the widest (a 4K file only slows the render down).
+    portrait: any orientation, the smallest that still fills a `width`-wide 9:16 frame."""
+    wide = [f for f in files if f.get("file_type") == "video/mp4"
+            and (portrait or (f.get("width") or 0) > (f.get("height") or 0))]
+    good = [f for f in wide if usable_width(f, portrait) >= width]
+    return (min(good, key=lambda f: f["width"]) if good
+            else max(wide, key=lambda f: usable_width(f, portrait), default=None))
+
+
+def _pixabay_file(videos: dict, width: int, portrait: bool = False) -> dict | None:
     files = [f for f in (videos.get(s) or {} for s in ("tiny", "small", "medium", "large")) if f.get("url")]
-    good = [f for f in files if (f.get("width") or 0) >= width]
+    good = [f for f in files if usable_width(f, portrait) >= width]
     return good[0] if good else (files[-1] if files else None)
 
 
-def _pexels(query: str, kind: str, width: int) -> list[dict]:
+def _pexels(query: str, kind: str, width: int, portrait: bool = False) -> list[dict]:
     lic, lic_url = LICENCES["pexels"]
+    facing = "portrait" if portrait else "landscape"
     if kind == "video":
-        data = visuals._pexels(visuals.PEXELS_VIDEO_SEARCH, query=query, orientation="landscape", size="medium",
-                               per_page=8)
+        data = visuals._pexels(visuals.PEXELS_VIDEO_SEARCH, query=query, orientation=facing, size="medium",
+                               per_page=15 if portrait else 8)
         out = []
         for v in data.get("videos", []):
-            f = _pexels_file(v.get("video_files", []), width)
+            f = _pexels_file(v.get("video_files", []), width, portrait)
             if f:
+                mp4 = [x for x in v.get("video_files", []) if x.get("file_type") == "video/mp4" and x.get("width")]
+                small = min(mp4, key=lambda x: x["width"], default=f)
                 out.append({"source": "pexels", "id": v["id"], "kind": "video", "thumb": v.get("image", ""),
                             "page": v.get("url", ""), "author": (v.get("user") or {}).get("name", ""),
                             "duration": v.get("duration", 0), "width": f.get("width") or 0,
-                            "height": f.get("height") or 0, "url": f["link"], "licence": lic, "licence_url": lic_url})
+                            "height": f.get("height") or 0, "url": f["link"], "licence": lic, "licence_url": lic_url,
+                            # Pexels has no tags: its page name says what's in the clip ("cat-drinking-water")
+                            "tags": " ".join(re.findall(r"[a-z]+", (v.get("url") or "").lower().split("/video/")[-1])),
+                            "preview": small["link"]})
         return out
-    data = visuals._pexels(visuals.PEXELS_PHOTO_SEARCH, query=query, orientation="landscape", per_page=6)
+    data = visuals._pexels(visuals.PEXELS_PHOTO_SEARCH, query=query, orientation=facing, per_page=6)
     return [{"source": "pexels", "id": p["id"], "kind": "photo", "thumb": p["src"]["medium"], "page": p.get("url", ""),
              "author": p.get("photographer", ""), "width": p.get("width") or 0, "height": p.get("height") or 0,
              # the original, scaled on Pexels' side to what a 1080p frame with a slow zoom needs
@@ -215,28 +231,33 @@ def _pexels(query: str, kind: str, width: int) -> list[dict]:
              "licence": lic, "licence_url": lic_url} for p in data.get("photos", [])]
 
 
-def _pixabay(query: str, kind: str, width: int) -> list[dict]:
+def _pixabay(query: str, kind: str, width: int, portrait: bool = False) -> list[dict]:
+    """portrait: for a 9:16 frame: clips of any orientation (vertical ones fill it whole; a landscape one is cropped,
+    so it needs 4K to stay sharp), photos of any orientation."""
     lic, lic_url = LICENCES["pixabay"]
     if kind == "video":
         # the most-liked clips first (Pixabay's own ranking lists a lot of amateur footage), sharp enough for the frame
         data = visuals._pixabay(visuals.PIXABAY_VIDEOS, q=query, video_type="film", order="popular",
-                                min_width=round(width * 0.95), per_page=8)
+                                min_width=round(width * 0.95), per_page=20 if portrait else 8)
         out = []
         for h in data.get("hits", []):
-            f = _pixabay_file(h.get("videos", {}), width)
-            if f and (f.get("width") or 0) > (f.get("height") or 0):
+            f = _pixabay_file(h.get("videos", {}), width, portrait)
+            if f and (portrait or (f.get("width") or 0) > (f.get("height") or 0)):
                 out.append({"source": "pixabay", "id": h["id"], "kind": "video",
                             "thumb": f.get("thumbnail") or (h["videos"].get("medium") or {}).get("thumbnail", ""),
                             "page": h.get("pageURL", ""), "author": h.get("user", ""), "duration": h.get("duration", 0),
                             "width": f.get("width") or 0, "height": f.get("height") or 0, "url": f["url"],
-                            "licence": lic, "licence_url": lic_url})
+                            "licence": lic, "licence_url": lic_url, "tags": h.get("tags", ""),
+                            # a small copy to judge it by before downloading the full file
+                            "preview": (h["videos"].get("small") or h["videos"].get("medium") or f).get("url", "")})
         return out
-    data = visuals._pixabay(visuals.PIXABAY_PHOTOS, q=query, image_type="photo", orientation="horizontal",
-                            order="popular", min_width=width, per_page=6)
+    data = visuals._pixabay(visuals.PIXABAY_PHOTOS, q=query, image_type="photo",
+                            orientation="all" if portrait else "horizontal", order="popular", min_width=width,
+                            per_page=6)
     return [{"source": "pixabay", "id": p["id"], "kind": "photo", "thumb": p.get("webformatURL", ""),
              "page": p.get("pageURL", ""), "author": p.get("user", ""), "width": p.get("imageWidth") or 0,
              "height": p.get("imageHeight") or 0, "url": p.get("largeImageURL", ""), "licence": lic,
-             "licence_url": lic_url} for p in data.get("hits", [])]
+             "licence_url": lic_url, "tags": p.get("tags", "")} for p in data.get("hits", [])]
 
 
 def _commons(query: str) -> list[dict]:
@@ -246,18 +267,22 @@ def _commons(query: str) -> list[dict]:
             for c in commons.search(query, 6)]
 
 
-def search(query: str, sources: list[str], width: int, length: float, log=print) -> list[dict]:
+def search(query: str, sources: list[str], width: int, length: float, log=print, portrait: bool = False) -> list[dict]:
     """Matches for `query` from `sources`, best first: videos long enough for the scene and sharp enough for the
-    frame, then shorter ones (they loop), then photos (a slow zoom), Wikimedia photos last unless nothing else."""
+    frame, then shorter ones (they loop), then photos (a slow zoom), Wikimedia photos last unless nothing else.
+    portrait: for a 9:16 frame (Shorts)."""
+    tall = "|portrait2" if portrait else ""  # 2: results carry tags and a preview
     found = []
     for source in sources:
         try:
             if source == "pexels" and visuals.pexels_key():
                 for kind in ("video", "photo"):
-                    found += _cached(f"pexels|{kind}|{width}|{query}", lambda: _pexels(query, kind, width))
+                    found += _cached(f"pexels|{kind}|{width}{tall}|{query}",
+                                     lambda: _pexels(query, kind, width, portrait))
             elif source == "pixabay" and visuals.pixabay_key():
                 for kind in ("video", "photo"):
-                    found += _cached(f"pixabay-popular|{kind}|{width}|{query}", lambda: _pixabay(query, kind, width))
+                    found += _cached(f"pixabay-popular|{kind}|{width}{tall}|{query}",
+                                     lambda: _pixabay(query, kind, width, portrait))
             elif source == "commons":
                 found += _cached(f"commons|{query}", lambda: _commons(query))
             elif source in archives.SEARCHES:
@@ -266,14 +291,15 @@ def search(query: str, sources: list[str], width: int, length: float, log=print)
         except (requests.RequestException, ValueError, KeyError) as e:
             log(f"      ! {source} search for {query!r} failed ({type(e).__name__}: {str(e)[:100]})")
 
-    return sorted(found, key=lambda item: rank(item, sources, width, length))
+    return sorted(found, key=lambda item: rank(item, sources, width, length, portrait))
 
 
-def rank(item: dict, sources: list[str], width: int, length: float) -> tuple:
+def rank(item: dict, sources: list[str], width: int, length: float, portrait: bool = False) -> tuple:
     """Videos long enough for the scene first, then shorter ones (they loop), then photos (a slow zoom); within
     each, sharp enough for the frame first, then by the sources' order."""
     video = item["kind"] == "video"
-    soft = item["width"] < width * 0.95 and item["source"] in LICENCES  # the archives' sizes aren't known yet
+    # the archives' sizes aren't known yet
+    soft = usable_width(item, portrait) < width * 0.95 and item["source"] in LICENCES
     long_enough = item.get("duration", 0) >= length or "duration" not in item  # Archive clips are cut to length
     where = sources.index(item["source"]) if item["source"] in sources else len(sources)
     return (0 if video and long_enough else 1 if video else 2, soft, where)
@@ -381,8 +407,10 @@ def flags(entry: dict, length: float, size: tuple[int, int]) -> list[str]:
         out.append(f"may not show {what} ({c['check']}/10): {c.get('problem', '')}")
     if c["kind"] == "video" and c.get("duration") and c["duration"] < length:
         out.append(f"the clip is {c['duration']} s for a {length:.1f} s scene: it loops")
-    if c.get("width") and c["width"] < size[0] * 0.95 and c["source"] in LICENCES:
-        out.append(f"only {c['width']} px wide: soft at {size[0]}x{size[1]}")
+    portrait = size[1] > size[0]
+    if c.get("width") and usable_width(c, portrait) < size[0] * 0.95 and c["source"] in LICENCES:
+        out.append(f"only {usable_width(c, portrait):.0f} px wide{' once cropped to 9:16' if portrait else ''}: "
+                   f"soft at {size[0]}x{size[1]}")
     return out
 
 
@@ -391,6 +419,7 @@ def choose(script: Script, plans: list[dict], slots: list, media: Path, out: Pat
     file, page, author, licence, ...}. Thumbnails and cards go in out/ (the job's storyboard/ folder)."""
     fc = cfg["footage"]
     width, size = _size(cfg)[0], _size(cfg)
+    portrait = size[1] > size[0]  # a Short: footage of any orientation, sharp once cropped to 9:16
     out.mkdir(parents=True, exist_ok=True)
     used: set[str] = set()
     lock = threading.Lock()
@@ -440,14 +469,14 @@ def choose(script: Script, plans: list[dict], slots: list, media: Path, out: Pat
     def candidates(query: str, entry: dict, sources: list[str], length: float) -> list[dict]:
         """Matches for `query`, plus (when the scene names one particular subject) searches for just its name in the
         precise libraries (iNaturalist, Wikimedia, archives), spread across sources, unused ones only."""
-        found = search(query, sources, width, length, log)
+        found = search(query, sources, width, length, log, portrait)
         name = entry["subject"].split(":")[0].strip()
         precise = [s for s in sources if s not in LICENCES]
         if name and precise and name.lower() != query.lower():
-            found += search(name, precise, width, length, log)
+            found += search(name, precise, width, length, log, portrait)
         with lock:
             fresh = list({key(m): m for m in found if key(m) not in used}.values())
-        return spread(sorted(fresh, key=lambda m: rank(m, sources, width, length)))
+        return spread(sorted(fresh, key=lambda m: rank(m, sources, width, length, portrait)))
 
     def pictures_for(card: dict, kind_sources: list[str]) -> list[Path | None]:
         """A checked photo for each side of a versus card."""
@@ -455,7 +484,7 @@ def choose(script: Script, plans: list[dict], slots: list, media: Path, out: Pat
             return []
         pics = []
         for label in card.get("items", [])[:2]:
-            photos = [m for m in search(label, kind_sources, width, 1, log) if m["kind"] == "photo"]
+            photos = [m for m in search(label, kind_sources, width, 1, log, portrait) if m["kind"] == "photo"]
             got = None
             for item in photos[:2]:
                 try:
@@ -489,7 +518,7 @@ def choose(script: Script, plans: list[dict], slots: list, media: Path, out: Pat
             entry["chosen"] = make_card(entry, scene, out, cfg, script.lang,
                                         pictures=pictures_for(entry["card"], sources_for("archival", cfg)
                                                               if entry["card"].get("style") == "versus" else sources))
-            entry["alternatives"] = search(plan["query"], sources, width, slot.length, log)[:keep]
+            entry["alternatives"] = search(plan["query"], sources, width, slot.length, log, portrait)[:keep]
             _thumb(Path(entry["chosen"]["file"]), out / f"scene-{scene.n:02d}.jpg")
             return entry
 
@@ -582,8 +611,9 @@ def research(entry: dict, query: str, length: float, cfg: dict, taken: set[str],
     if not query:
         raise ValueError("Type some search words first.")
     kind = entry.get("kind", "footage")
+    size = _size(cfg)
     found = spread(search(query, sources_for("footage" if kind in ("graphic", "montage") else kind, cfg),
-                          _size(cfg)[0], length, log))
+                          size[0], length, log, size[1] > size[0]))
     entry["query"] = query
     entry["alternatives"] = [m for m in found if key(m) not in taken][:max(int(cfg["footage"]["alternatives"]) * 2, 4)]
     return entry

@@ -183,6 +183,8 @@ $('#approve').addEventListener('click', async () => {
   S.rendering = true; bar('Starting the render…');
   try {
     const { id } = await call('/approve');
+    // opened inside the app: it follows the render too and shows the video when it's done
+    if (parent !== window) parent.postMessage({ type: 'storyboard-render', id, job }, '*');
     S.approved = true; const p = $('#progress'); p.hidden = false;
     const tick = async () => {
       const j = await (await fetch(`/api/jobs/${id}`)).json();

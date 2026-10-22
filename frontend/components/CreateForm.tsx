@@ -1,11 +1,35 @@
 "use client";
 
-import { Clapperboard, ClipboardPaste, Music, PenLine, Sparkles, Upload } from "lucide-react";
+import {
+  Clapperboard,
+  ClipboardPaste,
+  Music,
+  PenLine,
+  Sparkles,
+  Upload,
+} from "lucide-react";
 import { useState } from "react";
-import { api, type Aspect, type Lang, type Options, type SongScript, type TopicIdea, type VideoScript } from "@/lib/api";
+import {
+  api,
+  type Aspect,
+  type Lang,
+  type Options,
+  type SongScript,
+  type TopicIdea,
+  type VideoScript,
+} from "@/lib/api";
 import { ExcelPlanForm } from "./ExcelPlanForm";
 import { OutlierFinder } from "./OutlierFinder";
-import { Button, DropZone, Field, FileInput, Message, Segmented, Tabs } from "./ui";
+import { ShortsForm } from "./ShortsForm";
+import {
+  Button,
+  DropZone,
+  Field,
+  FileInput,
+  Message,
+  Segmented,
+  Tabs,
+} from "./ui";
 
 const PLACEHOLDER: Record<Lang, string> = {
   en: "3 weird facts about octopuses",
@@ -24,19 +48,33 @@ const PASTE_EXAMPLE = [
   "…",
 ].join("\n");
 
-type Mode = "topic" | "paste" | "excel" | "song" | "long";
+type Mode = "topic" | "paste" | "excel" | "shorts" | "song" | "long";
 
-const LYRICS_EXAMPLE = ["[Verse 1]", "I walked along the river in the rain", "The city lights were calling out your name", "", "[Chorus]", "Stay with me tonight", "…"].join("\n");
+const LYRICS_EXAMPLE = [
+  "[Verse 1]",
+  "I walked along the river in the rain",
+  "The city lights were calling out your name",
+  "",
+  "[Chorus]",
+  "Stay with me tonight",
+  "…",
+].join("\n");
 
 /** Your own finished song: audio + lyrics in, then lyric timing runs as a job. */
-function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string) => void }) {
+function OwnSongForm({
+  onImported,
+}: {
+  onImported: (jobId: string, title: string) => void;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [lyrics, setLyrics] = useState("");
   const [lang, setLang] = useState<Lang>("en");
   const [aspect, setAspect] = useState<Aspect>("16:9");
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [msg, setMsg] = useState<{ text: string; error?: boolean }>({
+    text: "",
+  });
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -45,7 +83,13 @@ function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string
     setMsg({ text: "Uploading your song…" });
     try {
       const name = title.trim() || file.name.replace(/\.[^.]+$/, "");
-      const { id } = await api.importSong({ file, title: name, lyrics, lang, aspect });
+      const { id } = await api.importSong({
+        file,
+        title: name,
+        lyrics,
+        lang,
+        aspect,
+      });
       setMsg({ text: "" });
       onImported(id, name);
     } catch (err) {
@@ -66,14 +110,22 @@ function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string
           onFile={(f) => {
             setFile(f);
             setMsg({ text: "" });
-            if (!title) setTitle(f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "));
+            if (!title)
+              setTitle(f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "));
           }}
         />
       </Field>
 
       <div className="grid items-end gap-5 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
         <Field label="Title" htmlFor="own-title">
-          <input id="own-title" lang={lang} className="field-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Song title" />
+          <input
+            id="own-title"
+            lang={lang}
+            className="field-input"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Song title"
+          />
         </Field>
         <div className="grid gap-1.5">
           <span className="field-label">Language</span>
@@ -101,7 +153,11 @@ function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string
         </div>
       </div>
 
-      <Field label="Lyrics" hint="one sung line per row; [Verse] / [Chorus] headings optional" htmlFor="own-lyrics">
+      <Field
+        label="Lyrics"
+        hint="one sung line per row; [Verse] / [Chorus] headings optional"
+        htmlFor="own-lyrics"
+      >
         <textarea
           id="own-lyrics"
           rows={12}
@@ -114,12 +170,19 @@ function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string
         />
       </Field>
       <p className="m-0 text-base text-ink-soft">
-        The app listens to your song and lines each lyric up with the singing, then shows you the timing to check before it makes the video. Footage is
+        The app listens to your song and lines each lyric up with the singing,
+        then shows you the timing to check before it makes the video. Footage is
         picked for each part of the song and cut on the beat.
       </p>
 
       <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
-        <Button type="submit" variant="primary" loading={busy} disabled={!file || !lyrics.trim()} icon={<Upload className="size-4" />}>
+        <Button
+          type="submit"
+          variant="primary"
+          loading={busy}
+          disabled={!file || !lyrics.trim()}
+          icon={<Upload className="size-4" />}
+        >
           {busy ? "Uploading…" : "Upload and sync lyrics"}
         </Button>
       </div>
@@ -129,10 +192,16 @@ function OwnSongForm({ onImported }: { onImported: (jobId: string, title: string
 }
 
 /** A long 16:9 YouTube video from your script .md: the app builds the storyboard (voiceover, timing, footage) to check. */
-function LongVideoForm({ onStarted }: { onStarted: (jobId: string, title: string) => void }) {
+function LongVideoForm({
+  onStarted,
+}: {
+  onStarted: (jobId: string, title: string) => void;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [msg, setMsg] = useState<{ text: string; error?: boolean }>({
+    text: "",
+  });
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -152,7 +221,11 @@ function LongVideoForm({ onStarted }: { onStarted: (jobId: string, title: string
 
   return (
     <form onSubmit={submit} className="grid gap-5 card p-5 sm:p-6">
-      <Field label="Script (.md)" hint="a table with Time | Visual | On-screen Text | Voiceover" htmlFor="long-file">
+      <Field
+        label="Script (.md)"
+        hint="a table with Time | Visual | On-screen Text | Voiceover"
+        htmlFor="long-file"
+      >
         <FileInput
           id="long-file"
           accept=".md,.markdown,.txt,text/markdown,text/plain"
@@ -167,16 +240,28 @@ function LongVideoForm({ onStarted }: { onStarted: (jobId: string, title: string
       </Field>
       <div className="grid gap-1.5 text-base text-ink-soft">
         <p className="m-0">
-          The title goes on the first <code># </code> line. Each table row is a scene; a line like <code>#10 GREEN HERON</code> in On-screen Text makes it a title card.
-          Optional sections: <b>Thumbnail:</b>, <b>Title options</b>, <b>Description</b> (with a <code>Chapters:</code> line) and <b>Shorts</b>.
+          The title goes on the first <code># </code> line. Each table row is a
+          scene; a line like <code>#10 GREEN HERON</code> in On-screen Text
+          makes it a title card. Optional sections: <b>Thumbnail:</b>,{" "}
+          <b>Title options</b>, <b>Description</b> (with a{" "}
+          <code>Chapters:</code> line) and <b>Shorts</b>.
         </p>
         <p className="m-0">
-          The app records the voiceover, times every scene and picks stock footage or photos for each one, then stops at the storyboard so you can swap anything
-          wrong before it renders. To use your own clip for a scene, name it <code>scene-05.mp4</code> (or .jpg) in the script&apos;s media folder.
+          The app records the voiceover, times every scene and picks stock
+          footage or photos for each one, then stops at the storyboard so you
+          can swap anything wrong before it renders. To use your own clip for a
+          scene, name it <code>scene-05.mp4</code> (or .jpg) in the
+          script&apos;s media folder.
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
-        <Button type="submit" variant="primary" loading={busy} disabled={!file} icon={<Clapperboard className="size-4" />}>
+        <Button
+          type="submit"
+          variant="primary"
+          loading={busy}
+          disabled={!file}
+          icon={<Clapperboard className="size-4" />}
+        >
           {busy ? "Starting…" : "Build the storyboard"}
         </Button>
       </div>
@@ -193,14 +278,21 @@ export function CreateForm({
   onExcelDrafts,
   onExcelRender,
   onLongVideo,
+  onShorts,
 }: {
   options: Options | null;
-  onScript: (script: VideoScript, lang: Lang, topic: string, notice?: string) => void;
+  onScript: (
+    script: VideoScript,
+    lang: Lang,
+    topic: string,
+    notice?: string,
+  ) => void;
   onSong: (song: SongScript, lang: Lang, topic: string) => void;
   onImportSong: (jobId: string, title: string) => void;
   onExcelDrafts: (drafts: { ep: number; id: string; title: string }[]) => void;
   onExcelRender: (jobId: string, title: string) => void;
   onLongVideo: (jobId: string, title: string) => void;
+  onShorts: (jobId: string, title: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("topic");
   const [songSource, setSongSource] = useState<"own" | "ai">("own");
@@ -212,10 +304,14 @@ export function CreateForm({
   const [songSeconds, setSongSeconds] = useState(45);
   const [style, setStyle] = useState("");
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [msg, setMsg] = useState<{ text: string; error?: boolean }>({
+    text: "",
+  });
   const [pasted, setPasted] = useState("");
   const [importing, setImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [importMsg, setImportMsg] = useState<{ text: string; error?: boolean }>(
+    { text: "" },
+  );
 
   const [vocal, setVocal] = useState("");
   const [ideas, setIdeas] = useState<TopicIdea[] | null>(null);
@@ -240,9 +336,17 @@ export function CreateForm({
   async function writeSong(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
-    setMsg({ text: "Claude is writing your song. This usually takes 15–40 seconds." });
+    setMsg({
+      text: "Claude is writing your song. This usually takes 15–40 seconds.",
+    });
     try {
-      const song = await api.writeSong({ topic: topic.trim(), lang, seconds: songSeconds, style, vocal });
+      const song = await api.writeSong({
+        topic: topic.trim(),
+        lang,
+        seconds: songSeconds,
+        style,
+        vocal,
+      });
       onSong(song, lang, topic.trim());
     } catch (err) {
       setMsg({ text: (err as Error).message, error: true });
@@ -254,10 +358,23 @@ export function CreateForm({
   async function write(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
-    setMsg({ text: "Claude is writing your script. This usually takes 15–40 seconds." });
+    setMsg({
+      text: "Claude is writing your script. This usually takes 15–40 seconds.",
+    });
     try {
-      const script = await api.writeScript({ topic: topic.trim(), lang, scenes, seconds, style });
-      onScript(script, lang, topic.trim(), "Script written and saved as a draft. Check each scene, then render.");
+      const script = await api.writeScript({
+        topic: topic.trim(),
+        lang,
+        scenes,
+        seconds,
+        style,
+      });
+      onScript(
+        script,
+        lang,
+        topic.trim(),
+        "Script written and saved as a draft. Check each scene, then render.",
+      );
     } catch (err) {
       setMsg({ text: (err as Error).message, error: true });
     } finally {
@@ -268,7 +385,11 @@ export function CreateForm({
   async function importPasted(e: React.FormEvent) {
     e.preventDefault();
     setImporting(true);
-    setImportMsg({ text: options?.keys.anthropic ? "Claude is reading your script…" : "Reading your script…" });
+    setImportMsg({
+      text: options?.keys.anthropic
+        ? "Claude is reading your script…"
+        : "Reading your script…",
+    });
     try {
       const res = await api.importScript(pasted);
       const n = res.script.scenes.length;
@@ -291,7 +412,12 @@ export function CreateForm({
     onScript(
       {
         title: topic.trim(),
-        scenes: Array.from({ length: scenes }, () => ({ narration: "", visual_query: "", on_screen_text: "", media: "" })),
+        scenes: Array.from({ length: scenes }, () => ({
+          narration: "",
+          visual_query: "",
+          on_screen_text: "",
+          media: "",
+        })),
         caption: "",
         hashtags: [],
       },
@@ -306,7 +432,10 @@ export function CreateForm({
         <div className="grid gap-2">
           <h1 className="page-title m-0">Make a new video</h1>
           <p className="page-intro m-0">
-            Start from an idea and let Claude write the script, paste a script you already have, or upload a content plan in Excel. Every script becomes a draft you can edit. For a long YouTube video, upload its script .md.
+            Start from an idea and let Claude write the script, paste a script
+            you already have, or upload a content plan in Excel. Every script
+            becomes a draft you can edit. For a long YouTube video, upload its
+            script .md.
           </p>
         </div>
 
@@ -321,6 +450,7 @@ export function CreateForm({
             { value: "topic", label: "Start from a topic" },
             { value: "paste", label: "Paste a script" },
             { value: "excel", label: "Excel plan" },
+            { value: "shorts", label: "Shorts Mode" },
             { value: "song", label: "Music video" },
             { value: "long", label: "Long video" },
           ]}
@@ -338,7 +468,9 @@ export function CreateForm({
           />
         )}
 
-        {mode === "song" && songSource === "own" && <OwnSongForm onImported={onImportSong} />}
+        {mode === "song" && songSource === "own" && (
+          <OwnSongForm onImported={onImportSong} />
+        )}
 
         {mode === "song" && songSource === "ai" && (
           <form onSubmit={writeSong} className="grid gap-5 card p-5 sm:p-6">
@@ -368,30 +500,78 @@ export function CreateForm({
                   ]}
                 />
               </div>
-              <Field label={<>Length <output className="ml-1 font-semibold text-ink">{songSeconds} s</output></>} htmlFor="song-seconds">
-                <input id="song-seconds" type="range" min={15} max={120} step={5} value={songSeconds} onChange={(e) => setSongSeconds(+e.target.value)} className="h-10 w-full accent-cobalt" />
+              <Field
+                label={
+                  <>
+                    Length{" "}
+                    <output className="ml-1 font-semibold text-ink">
+                      {songSeconds} s
+                    </output>
+                  </>
+                }
+                htmlFor="song-seconds"
+              >
+                <input
+                  id="song-seconds"
+                  type="range"
+                  min={15}
+                  max={120}
+                  step={5}
+                  value={songSeconds}
+                  onChange={(e) => setSongSeconds(+e.target.value)}
+                  className="h-10 w-full accent-cobalt"
+                />
               </Field>
             </div>
 
             <div className="grid gap-5 sm:grid-cols-2">
-              <Field label="Genre and sound" hint="optional" htmlFor="song-style">
-                <input id="song-style" className="field-input" value={style} onChange={(e) => setStyle(e.target.value)} placeholder="Dreamy synth-pop, 80s drums" />
+              <Field
+                label="Genre and sound"
+                hint="optional"
+                htmlFor="song-style"
+              >
+                <input
+                  id="song-style"
+                  className="field-input"
+                  value={style}
+                  onChange={(e) => setStyle(e.target.value)}
+                  placeholder="Dreamy synth-pop, 80s drums"
+                />
               </Field>
               <Field label="Singer voice" hint="optional" htmlFor="song-vocal">
-                <input id="song-vocal" className="field-input" value={vocal} onChange={(e) => setVocal(e.target.value)} placeholder="Breathy female pop vocal" />
+                <input
+                  id="song-vocal"
+                  className="field-input"
+                  value={vocal}
+                  onChange={(e) => setVocal(e.target.value)}
+                  placeholder="Breathy female pop vocal"
+                />
               </Field>
             </div>
             <p className="m-0 text-base text-ink-soft">
-              Describe a sound, not a real singer. Names of real artists get turned into a description of their style, because ElevenLabs won&apos;t imitate real voices.
+              Describe a sound, not a real singer. Names of real artists get
+              turned into a description of their style, because ElevenLabs
+              won&apos;t imitate real voices.
             </p>
 
             <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
-              <Button type="submit" variant="primary" loading={busy} disabled={claudeMissing} icon={<Music className="size-4" />}>
+              <Button
+                type="submit"
+                variant="primary"
+                loading={busy}
+                disabled={claudeMissing}
+                icon={<Music className="size-4" />}
+              >
                 {busy ? "Writing…" : "Write lyrics with Claude"}
               </Button>
             </div>
             <Message
-              text={msg.text || (claudeMissing ? "Claude isn't connected, so it can't write lyrics yet. Add your key to .env and restart the engine." : "")}
+              text={
+                msg.text ||
+                (claudeMissing
+                  ? "Claude isn't connected, so it can't write lyrics yet. Add your key to .env and restart the engine."
+                  : "")
+              }
               error={msg.error}
             />
           </form>
@@ -422,20 +602,30 @@ export function CreateForm({
                 >
                   {ideas ? "More topic ideas" : "Suggest topics"}
                 </Button>
-                <span className="text-sm text-ink-soft">Mix formats to find which hook style breaks out.</span>
+                <span className="text-sm text-ink-soft">
+                  Mix formats to find which hook style breaks out.
+                </span>
               </div>
-              {ideasError && <p className="m-0 text-sm text-danger">{ideasError}</p>}
+              {ideasError && (
+                <p className="m-0 text-sm text-danger">{ideasError}</p>
+              )}
               {ideas && (
                 <ul className="m-0 grid list-none gap-1.5 p-0 sm:grid-cols-2">
                   {ideas.map((idea, i) => (
                     <li key={i}>
                       <button
                         type="button"
-                        onClick={() => setTopic(`${idea.topic}\nOpen with: "${idea.hook}"`)}
+                        onClick={() =>
+                          setTopic(`${idea.topic}\nOpen with: "${idea.hook}"`)
+                        }
                         className="grid h-full w-full cursor-pointer content-start gap-1 rounded-lg border border-line bg-panel p-2.5 text-left transition-colors hover:border-cobalt/60 hover:bg-cobalt/[0.04]"
                       >
-                        <span className="justify-self-start rounded bg-ink/[0.06] px-1.5 py-0.5 text-xs font-semibold text-ink-soft">{idea.format}</span>
-                        <span className="text-base font-semibold text-ink">{idea.topic}</span>
+                        <span className="justify-self-start rounded bg-ink/[0.06] px-1.5 py-0.5 text-xs font-semibold text-ink-soft">
+                          {idea.format}
+                        </span>
+                        <span className="text-base font-semibold text-ink">
+                          {idea.topic}
+                        </span>
                         <span lang={lang} className="text-sm text-ink-soft">
                           “{idea.hook}”
                         </span>
@@ -444,7 +634,12 @@ export function CreateForm({
                   ))}
                 </ul>
               )}
-              <OutlierFinder query={topic} lang={lang} disabled={claudeMissing} onRemake={setTopic} />
+              <OutlierFinder
+                query={topic}
+                lang={lang}
+                disabled={claudeMissing}
+                onRemake={setTopic}
+              />
             </Field>
 
             <div className="grid items-end gap-5 sm:grid-cols-[auto_1fr_1fr]">
@@ -460,37 +655,100 @@ export function CreateForm({
                   ]}
                 />
               </div>
-              <Field label={<>Length <output className="ml-1 font-semibold text-ink">{seconds} s</output></>} htmlFor="seconds">
-                <input id="seconds" type="range" min={10} max={90} step={5} value={seconds} onChange={(e) => setSeconds(+e.target.value)} className="h-10 w-full accent-cobalt" />
+              <Field
+                label={
+                  <>
+                    Length{" "}
+                    <output className="ml-1 font-semibold text-ink">
+                      {seconds} s
+                    </output>
+                  </>
+                }
+                htmlFor="seconds"
+              >
+                <input
+                  id="seconds"
+                  type="range"
+                  min={10}
+                  max={90}
+                  step={5}
+                  value={seconds}
+                  onChange={(e) => setSeconds(+e.target.value)}
+                  className="h-10 w-full accent-cobalt"
+                />
               </Field>
-              <Field label={<>Scenes <output className="ml-1 font-semibold text-ink">{scenes}</output></>} htmlFor="scenes">
-                <input id="scenes" type="range" min={3} max={10} value={scenes} onChange={(e) => setScenes(+e.target.value)} className="h-10 w-full accent-cobalt" />
+              <Field
+                label={
+                  <>
+                    Scenes{" "}
+                    <output className="ml-1 font-semibold text-ink">
+                      {scenes}
+                    </output>
+                  </>
+                }
+                htmlFor="scenes"
+              >
+                <input
+                  id="scenes"
+                  type="range"
+                  min={3}
+                  max={10}
+                  value={scenes}
+                  onChange={(e) => setScenes(+e.target.value)}
+                  className="h-10 w-full accent-cobalt"
+                />
               </Field>
             </div>
 
             <Field label="Tone or audience" hint="optional" htmlFor="style">
-              <input id="style" className="field-input" value={style} onChange={(e) => setStyle(e.target.value)} placeholder="Funny, for teenagers. Mention a local example." />
+              <input
+                id="style"
+                className="field-input"
+                value={style}
+                onChange={(e) => setStyle(e.target.value)}
+                placeholder="Funny, for teenagers. Mention a local example."
+              />
             </Field>
 
             <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
-              <Button type="submit" variant="primary" loading={busy} disabled={claudeMissing} icon={<Sparkles className="size-4" />}>
+              <Button
+                type="submit"
+                variant="primary"
+                loading={busy}
+                disabled={claudeMissing}
+                icon={<Sparkles className="size-4" />}
+              >
                 {busy ? "Writing…" : "Write script with Claude"}
               </Button>
-              <Button variant="ghost" onClick={blank} icon={<PenLine className="size-4" />}>
+              <Button
+                variant="ghost"
+                onClick={blank}
+                icon={<PenLine className="size-4" />}
+              >
                 Write it myself
               </Button>
             </div>
             <Message
               text={
                 msg.text ||
-                (claudeMissing ? "Claude isn't connected, so it can't write scripts yet. Use “Write it myself”, or add your key to .env and restart the engine." : "")
+                (claudeMissing
+                  ? "Claude isn't connected, so it can't write scripts yet. Use “Write it myself”, or add your key to .env and restart the engine."
+                  : "")
               }
               error={msg.error}
             />
           </form>
         )}
 
-        {mode === "excel" && <ExcelPlanForm claude={!!options?.keys.anthropic} onDrafts={onExcelDrafts} onRender={onExcelRender} />}
+        {mode === "excel" && (
+          <ExcelPlanForm
+            claude={!!options?.keys.anthropic}
+            onDrafts={onExcelDrafts}
+            onRender={onExcelRender}
+          />
+        )}
+
+        {mode === "shorts" && <ShortsForm onStarted={onShorts} />}
 
         {mode === "long" && <LongVideoForm onStarted={onLongVideo} />}
 
@@ -500,27 +758,36 @@ export function CreateForm({
               <DropZone
                 accept=".txt,.md,.markdown,text/plain,text/markdown"
                 label="Drop to paste its text"
-                onFiles={async (f) => setPasted((await f[0].text()).replace(/\r\n/g, "\n"))}
+                onFiles={async (f) =>
+                  setPasted((await f[0].text()).replace(/\r\n/g, "\n"))
+                }
                 onReject={(text) => setImportMsg({ text, error: true })}
                 className="grid"
               >
-              <textarea
-                id="pasted"
-                rows={14}
-                required
-                value={pasted}
-                onChange={(e) => setPasted(e.target.value)}
-                placeholder={PASTE_EXAMPLE}
-                className="field-input resize-y font-mono text-base leading-relaxed"
-              />
+                <textarea
+                  id="pasted"
+                  rows={14}
+                  required
+                  value={pasted}
+                  onChange={(e) => setPasted(e.target.value)}
+                  placeholder={PASTE_EXAMPLE}
+                  className="field-input resize-y font-mono text-base leading-relaxed"
+                />
               </DropZone>
             </Field>
             <p className="m-0 text-base text-ink-soft">
-              English or ខ្មែរ, any layout. Voiceover is kept word for word, visual notes become footage searches, and extra notes like production tips are ignored. Emoji in on-screen text are
-              kept and show in colour in the video.
+              English or ខ្មែរ, any layout. Voiceover is kept word for word,
+              visual notes become footage searches, and extra notes like
+              production tips are ignored. Emoji in on-screen text are kept and
+              show in colour in the video.
             </p>
             <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
-              <Button type="submit" variant="primary" loading={importing} icon={<ClipboardPaste className="size-4" />}>
+              <Button
+                type="submit"
+                variant="primary"
+                loading={importing}
+                icon={<ClipboardPaste className="size-4" />}
+              >
                 {importing ? "Importing…" : "Import script"}
               </Button>
             </div>

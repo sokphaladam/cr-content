@@ -95,14 +95,21 @@ def _pace_filter(W: int, H: int, impacts: list[float], cuts: list[float]) -> str
             f"eq=brightness='{flash}':eval=frame,setsar=1,format=yuv420p")
 
 
-def _cover(W: int, H: int) -> str:
-    return f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,fps={FPS},format=yuv420p"
+def _cover(W: int, H: int, focus: tuple[float, float] | None = None) -> str:
+    """Scale to cover W x H and crop to it: centred, or around `focus` (x, y as fractions of the picture) and kept
+    inside it."""
+    crop = f"crop={W}:{H}"
+    if focus:
+        crop += (f":x='min(max(iw*{focus[0]:.3f}-ow/2,0),iw-ow)'"
+                 f":y='min(max(ih*{focus[1]:.3f}-oh/2,0),ih-oh)'")
+    return f"scale={W}:{H}:force_original_aspect_ratio=increase,{crop},setsar=1,fps={FPS},format=yuv420p"
 
 
 def render_scene(footage: Path | None, voice: Path | None, length: float, out: Path, start: float = 0.0,
                  size: tuple[int, int] = (WIDTH, HEIGHT), look: str = "", drift: int = 0, layout: str = "fill",
                  footage2: Path | None = None, broll: list[tuple[Path, float, float]] = (),
-                 bright: bool = False, impacts: list[float] = (), cuts: list[float] = ()) -> None:
+                 bright: bool = False, impacts: list[float] = (), cuts: list[float] = (),
+                 focus: tuple[float, float] | None = None) -> None:
     """One scene: background cropped to `size` (9:16 by default) and looped/trimmed to the narration length.
 
     voice=None renders a silent track (music videos add the song in finalize); `start` skips into a video
@@ -111,9 +118,11 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
     pans a video clip right or left across the shot, like a camera move; 0 keeps it still.
     `layout`: fill (cropped to the frame), fit (the whole clip over a blurred copy of itself) or split (`footage`
     on top, `footage2` below). `broll`: (clip or photo, at, seconds) cutaways that cover the frame for a while.
+    `focus`: where the subject is in a video clip (x, y as fractions), so a fill crop keeps it in the frame instead
+    of cutting it off-centre.
     """
     W, H = size
-    fit = _cover(W, H)
+    fit = _cover(W, H, focus)
     if drift:
         # 6% bigger than the frame, then the crop window glides from one side to the other over the shot
         frames = max(round(length * FPS), 1)

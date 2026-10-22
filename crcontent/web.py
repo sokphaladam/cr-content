@@ -1164,7 +1164,7 @@ def _run_long_video(job_id: str, folder: Path) -> None:
     try:
         longform.render_video(folder, log=log)
         with jobs_lock:
-            job.update(status="done", step=longform.STEPS)
+            job.update(status="done", step=longform.STEPS, video=folder.name)
     except Exception as e:
         _fail(job, e)
 
@@ -1184,6 +1184,192 @@ def longform_approve(name: str):
         jobs[job_id] = {"id": job_id, "kind": "long_video", "status": "queued", "step": 5, "log": [],
                         "title": _summary(folder)["title"], "source": name}
     renderer.submit(_run_long_video, job_id, folder)
+    return {"id": job_id}
+
+
+# ---------- Shorts Mode (crcontent/shorts): a Short per episode, held to the channel's rules ----------
+# The pre-flight page (<job>/preflight.html, served under /media) approves the render through /api/shorts/<job>/approve.
+
+@app.post("/api/shorts/read")
+def shorts_read(file: UploadFile = File(...)):
+    """Upload a Shorts content plan and list its episodes (nothing is made yet)."""
+    from .shorts import plan
+
+    if Path(file.filename or "").suffix.lower() != ".xlsx":
+        raise HTTPException(400, "Use an Excel workbook (.xlsx). In Excel or Google Sheets: Save as / Download → .xlsx.")
+    dest = UPLOAD_DIR / f"plan-{uuid.uuid4().hex[:12]}.xlsx"
+    _save_upload(file, dest)
+    try:
+        episodes = plan.read(dest)
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(422, f"Couldn't read that workbook: {e}")
+    if not episodes:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(422, "No episodes found. The Scripts sheet needs rows under an 'Ep | Time | Visual | "
+                                 "On-screen Text | Voiceover' header.")
+    return {"file": dest.name, "name": file.filename, "episodes": [
+        {"ep": e.ep, "title": e.title, "beats": len(e.script.scenes), "status": e.status,
+         "posted": e.status.lower() == "posted", "loops": e.loop_marked} for e in episodes]}
+
+
+class ShortsRequest(BaseModel):
+    file: str
+    eps: list[int]
+
+
+def _run_shorts(job_id: str, episodes: list) -> None:
+    """Steps 1-5 (up to the pre-flight report) for each episode, one after another."""
+    from . import shorts
+
+    job = jobs[job_id]
+    log = _job_logger(job, shorts.STEPS)
+    with jobs_lock:
+        job["status"] = "running"
+    made, failed, ready = [], [], 0
+    for i, ep in enumerate(episodes, 1):
+        with jobs_lock:
+            job.update(step=0, title=f"Ep {ep.ep} ({i}/{len(episodes)}): {ep.title}")
+        try:
+            folder = shorts.make_job(ep, log=log)
+            made.append(folder.name)
+            ready += shorts.report_status(folder).get("state") == "ready"
+            with jobs_lock:
+                job.setdefault("video", folder.name)  # the first one opens when they're all ready
+        except Exception as err:  # keep going with the next episode
+            traceback.print_exc()
+            failed.append(ep.ep)
+            log(f"  ! Ep {ep.ep} failed: {str(err).strip().splitlines()[-1] if str(err).strip() else repr(err)}")
+    # honest: a report being built isn't the Short being ready (preflight.status)
+    summary = (f"{len(made)} pre-flight report{'s' if len(made) != 1 else ''} built: {ready} ready, "
+               f"{len(made) - ready} need{'s' if len(made) - ready == 1 else ''} work"
+               + (f"; failed: Ep {', '.join(map(str, failed))}" if failed else ""))
+    log(summary)
+    with jobs_lock:
+        if made:
+            job.update(status="done", step=5, summary=summary, videos=made)
+        else:
+            job.update(status="error", error=summary)
+
+
+@app.post("/api/shorts/make")
+def shorts_make(req: ShortsRequest):
+    """Voiceover, timing, footage and the pre-flight report for each chosen episode; renders wait for approval."""
+    from .shorts import plan
+
+    if not EXCEL_FILE.match(req.file) or not (UPLOAD_DIR / req.file).is_file():
+        raise HTTPException(404, "That spreadsheet is gone. Choose the file again.")
+    episodes = [e for e in plan.read(UPLOAD_DIR / req.file) if e.ep in set(req.eps)]
+    if not episodes:
+        raise HTTPException(400, "Pick at least one episode.")
+    job_id = uuid.uuid4().hex[:10]
+    title = episodes[0].title if len(episodes) == 1 else f"{len(episodes)} Shorts"
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "short", "status": "queued", "step": 0, "log": [], "title": title}
+    renderer.submit(_run_shorts, job_id, episodes)
+    return {"id": job_id}
+
+
+def _short_dir(name: str) -> Path:
+    from .shorts import is_short
+
+    folder = _video_dir(name)
+    if not is_short(folder):
+        raise HTTPException(404, "This isn't a Shorts Mode video.")
+    return folder
+
+
+def _run_short_render(job_id: str, folder: Path) -> None:
+    from . import shorts
+
+    job = jobs[job_id]
+    log = _job_logger(job, shorts.STEPS)
+    with jobs_lock:
+        job["status"] = "running"
+    try:
+        shorts.render_job(folder, log=log)
+        with jobs_lock:
+            job.update(status="done", step=shorts.STEPS, video=folder.name)
+        _auto_publish(folder, log)
+    except Exception as e:
+        _fail(job, e)
+
+
+class ShortsApply(BaseModel):
+    field: str  # "line" (beat 1's voiceover) or "text" (its on-screen hook)
+    value: str
+
+
+@app.post("/api/shorts/{name}/apply")
+def shorts_apply(name: str, req: ShortsApply):
+    """Use a suggested first line or on-screen hook in this Short: re-voiced, re-timed, every check run again."""
+    from . import shorts
+
+    folder = _short_dir(name)
+    _short_idle(name)
+    try:
+        report = shorts.apply_change(folder, req.field, req.value, log=lambda line: None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": report["status"]}
+
+
+def _short_idle(name: str) -> None:
+    with jobs_lock:
+        if any(j.get("kind") == "short" and j.get("source") == name and j["status"] in ("queued", "running")
+               for j in jobs.values()):
+            raise HTTPException(409, "It's rendering: changes have to wait until it's done.")
+
+
+@app.post("/api/shorts/{name}/beats/{n}/clip")
+def shorts_upload_clip(name: str, n: int, file: UploadFile = File(...)):
+    """Use your own clip or photo for beat `n`; the checks run again."""
+    from . import shorts
+
+    folder = _short_dir(name)
+    _short_idle(name)
+    tmp = UPLOAD_DIR / f"clip-{uuid.uuid4().hex[:12]}{Path(file.filename or '').suffix.lower()}"
+    _save_upload(file, tmp)
+    try:
+        report = shorts.use_own_clip(folder, n, tmp, file.filename or tmp.name, log=lambda line: None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"status": report["status"]}
+
+
+@app.delete("/api/shorts/{name}/beats/{n}/clip")
+def shorts_remove_clip(name: str, n: int):
+    """Beat `n` goes back to the stock pick your clip replaced; the checks run again."""
+    from . import shorts
+
+    folder = _short_dir(name)
+    _short_idle(name)
+    try:
+        report = shorts.remove_own_clip(folder, n, log=lambda line: None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": report["status"]}
+
+
+@app.post("/api/shorts/{name}/approve")
+def shorts_approve(name: str):
+    """Approve the pre-flight as it is now and render the Short (steps 6-7: render, cover and metadata)."""
+    from .longform import storyboard
+
+    folder = _short_dir(name)
+    with jobs_lock:
+        running = next((j["id"] for j in jobs.values() if j.get("kind") == "short" and j.get("source") == name
+                        and j["status"] in ("queued", "running")), None)
+    if running:
+        return {"id": running}
+    storyboard.approve(folder)
+    job_id = uuid.uuid4().hex[:10]
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "short", "status": "queued", "step": 5, "log": [],
+                        "title": _summary(folder)["title"], "source": name}
+    renderer.submit(_run_short_render, job_id, folder)
     return {"id": job_id}
 
 
@@ -1604,7 +1790,7 @@ def _summary(folder: Path) -> dict:
         "created": created,
         "kind": meta.get("kind", "video"),
         "source": meta.get("source", ""),  # "upload" = your own song
-        "aspect": meta.get("aspect", "9:16"),
+        "aspect": meta.get("aspect", "16:9" if meta.get("kind") == "long_video" else "9:16"),
         # music video: the song folder it was made from ("" once that song is deleted)
         "song_folder": meta.get("song", "") if meta.get("song") and (OUTPUT_DIR / meta["song"]).is_dir() else "",
         "video": (folder / "video.mp4").exists(),

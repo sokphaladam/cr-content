@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Download, Film, ImageIcon, ImageUp, ListMusic, ListVideo, Music, Sparkles, Trash2 } from "lucide-react";
+import { Check, Copy, Download, Film, ImageIcon, ImageUp, ListMusic, Music, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { API_BASE, api, fileUrl, outputUrl, type Job, type Lang, type MusicVideoSettings, type Options, type PostSuggestion, type Scene, type ThumbStyle, type ThumbSuggestion, type ThumbSuggestions, type VideoDetail, type VideoSummary } from "@/lib/api";
 import { isImagePath, relativeTime } from "@/lib/format";
@@ -17,6 +17,8 @@ const SONG_STEPS = ["Lyrics", "Compose", "Lyric timing"];
 const MUSIC_VIDEO_STEPS = ["Lyric timing", "Beats and footage", "Captions", "Final render"];
 const SYNC_STEPS = ["Read lyrics", "Lyric timing"];
 const LONG_STEPS = ["Read the script", "Voiceover", "Timing", "Footage", "Storyboard"]; // up to the storyboard to check
+// Shorts Mode: 1-5 build the pre-flight report to approve, 6-7 render the approved Short
+const SHORT_STEPS = ["Read the plan", "Voiceover", "Timing", "Footage", "Pre-flight", "Render", "Cover and metadata"];
 const stepsFor = (job: Job | null) =>
   job?.kind === "song"
     ? SONG_STEPS
@@ -26,7 +28,9 @@ const stepsFor = (job: Job | null) =>
         ? SYNC_STEPS
         : job?.kind === "long_video"
           ? LONG_STEPS
-          : STEPS;
+          : job?.kind === "short"
+            ? SHORT_STEPS
+            : STEPS;
 
 function SongPlayer({ detail }: { detail: VideoDetail }) {
   return (
@@ -965,18 +969,6 @@ export function PreviewPane({
         )}
         {showVideo && detail?.kind === "music_video" && (
           <HighlightsCard key={`highlights-${detail.name}`} detail={detail} onSelectVideo={onSelectVideo} onVideosChanged={onVideosChanged} />
-        )}
-        {!showProgress && detail?.kind === "long_video" && (
-          <section aria-label="Storyboard" className="grid gap-1.5 card p-3.5">
-            <a href={outputUrl(detail.name, "storyboard.html")} target="_blank" rel="noreferrer" className={buttonClass("secondary", "md", "gap-1.5")}>
-              <ListVideo className="size-4" aria-hidden /> Open the storyboard
-            </a>
-            <p className="m-0 text-sm text-ink-soft">
-              {detail.video
-                ? "Made from the approved storyboard. Swap footage there and approve again for a new render; the chapters, captions and credits are in this folder."
-                : "Not rendered yet: check every scene in the storyboard, swap what's wrong, then approve it to render."}
-            </p>
-          </section>
         )}
         {isSong && detail && (
           <SongCard key={`song-${detail.name}`} detail={detail} onDelete={onDeleteVideo} onMakeVideo={onMakeMusicVideo} onOpenTiming={onOpenTiming} onSelectVideo={onSelectVideo} />

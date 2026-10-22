@@ -164,13 +164,15 @@ HOOK_SIDE = 64  # px kept clear on each side of the hook's box (1080 wide)
 HOOK_TOP = 130  # the box never starts above this: the platforms' top bar
 
 
-def _hook_events(text: str, start: float, end: float, top: int, family: str, px: int, lang: str) -> list[str]:
+def _hook_events(text: str, start: float, end: float, top: int, family: str, px: int, lang: str,
+                 left: int = HOOK_SIDE, right: int = WIDTH - HOOK_SIDE) -> list[str]:
     """The hook: dark words on one tidy white rounded card (instead of the ragged per-line boxes BorderStyle 3
     draws), the same padding on every side, at most 2 lines (3 only when even a smaller size can't fit 2), a soft
-    shadow under the card. Top edge at `top`; fades in over its first 0.15 s."""
+    shadow under the card. Top edge at `top`; fades in over its first 0.15 s. The card stays between x = `left` and
+    `right` (Shorts keep it off the right side's buttons), centred between them."""
     words = text.split()
     pad_x, pad_y = round(px * 0.42), round(px * 0.26)
-    room = WIDTH - 2 * HOOK_SIDE - 2 * pad_x  # widest a line of text may be
+    room = right - left - 2 * pad_x  # widest a line of text may be
     size, rows, fits = px, [text], True
     for n in (1, 2, 3):
         for s in [px] + ([round(px * f) for f in (0.92, 0.84, 0.76, 0.68)] if n > 1 else []):
@@ -187,7 +189,7 @@ def _hook_events(text: str, start: float, end: float, top: int, family: str, px:
     w = min(max(_text_width(r, family, size, lang) for r in rows), room) + 2 * pad_x
     h = len(rows) * size + 2 * pad_y
     top = max(top, HOOK_TOP)
-    cx, cy = WIDTH // 2, round(top + h / 2)
+    cx, cy = (left + right) // 2, round(top + h / 2)
     t0, t1 = _ts(start), _ts(end)
     # a quick fade in (all three layers together), but never on the video's first frame: that's what the feed shows,
     # and the hook has to be readable on it
