@@ -127,11 +127,24 @@ function sceneEl(i) {
       try { replace(i, await call(`/scenes/${sc.n}/pick`, { key: altKey(a) })); } catch (err) { alert(err.message); busy(row, false); }
     } }, 'Use this'))));
   const q = h('input', { value: f.query, 'aria-label': `Search words for scene ${sc.n}`, disabled: !live });
+  const pick = h('input', { type: 'file', accept: 'video/*,image/*', hidden: true, onchange: async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    busy(row, true);
+    const form = new FormData(); form.append('file', file);
+    try {
+      const r = await fetch(api(`/scenes/${sc.n}/upload`), { method: 'POST', body: form });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      replace(i, data);
+    } catch (err) { alert(err.message); busy(row, false); }
+  } });
   const tools = h('div', { class: 'tools' }, q,
     h('button', { disabled: !live, onclick: async (e) => {
       busy(row, true); e.target.textContent = 'Searching…';
       try { replace(i, await call(`/scenes/${sc.n}/search`, { query: q.value })); } catch (err) { alert(err.message); busy(row, false); }
-    } }, 'Search again'));
+    } }, 'Search again'),
+    h('button', { disabled: !live, onclick: () => pick.click() }, 'Upload your own clip or photo'),
+    pick);
   const right = h('div', {},
     h('div', { class: 'head' }, h('span', { class: 'n' }, `#${sc.n}`),
       h('span', { class: 'time' }, `${clock(slot.start)}–${clock(slot.end)}`),
@@ -145,7 +158,7 @@ function sceneEl(i) {
     h('div', { class: 'visual' }, 'Visual: ', sc.visual),
     f.flags.length ? h('div', { class: 'flags' }, f.flags.map(t => h('div', {}, '⚠ ', t))) : null,
     f.alternatives.length ? alts : null, tools,
-    h('div', { class: 'hint' }, `Or put your own clip or photo in ${S.media}\\scene-${String(sc.n).padStart(2, '0')}.mp4 (.jpg, .png…) and press "Reload my files".`));
+    h('div', { class: 'hint' }, `Or drop a file in ${S.media}\\scene-${String(sc.n).padStart(2, '0')}.mp4 (.jpg, .png…) and press "Reload my files".`));
   row.append(left, right);
   return row;
 }

@@ -158,6 +158,32 @@ def search_footage(job: Path, n: int, query: str, log=print) -> dict:
     return entries[i]
 
 
+def use_own_file(job: Path, n: int, upload: Path, name: str) -> dict:
+    """Scene `n` uses the clip or photo `upload` (storyboard: "Upload your own"): saved as media/<script>/scene-NN.<ext>,
+    an earlier file of yours for that scene is set aside in removed/, not deleted. Returns the scene's new entry."""
+    import shutil
+    from datetime import datetime
+
+    from ..visuals import IMAGE_EXTS, VIDEO_EXTS
+    from . import footage
+
+    ext = Path(name).suffix.lower()
+    if ext not in (*VIDEO_EXTS, *IMAGE_EXTS):
+        raise ValueError(f"Use a video ({', '.join(sorted(VIDEO_EXTS))}) or a photo ({', '.join(sorted(IMAGE_EXTS))}).")
+    cfg, script, tl, entries = _load(job)
+    i = _index(script, n)
+    media = media_folder(script.slug, cfg)
+    media.mkdir(parents=True, exist_ok=True)
+    while old := footage.own_media(media, n):
+        (media / "removed").mkdir(exist_ok=True)
+        shutil.move(str(old), str(media / "removed" / f"{datetime.now():%Y%m%d-%H%M%S}-{old.name}"))
+    shutil.copy(upload, media / f"scene-{n:02d}{ext}")
+    entries[i]["chosen"]["file"] = ""  # so the reload below sees a new file even when it has the old one's name
+    footage.reload_own(entries, script, media, tl.slots, cfg, job / "storyboard")
+    _save(job, entries, cfg, script)
+    return entries[i]
+
+
 def reload_media(job: Path) -> tuple[list[dict], int]:
     """Use the files put in media/<script>/ since the storyboard was made (storyboard: "Reload my files")."""
     from . import footage

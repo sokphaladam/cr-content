@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from . import progress
 from .config import ROOT
 
 router = APIRouter()
@@ -72,15 +73,20 @@ def _run(job_id: str, argv: list[str], final_step: int) -> None:
 
     def log(line: str) -> None:
         with _lock:
+            report = progress.parse(line)
+            if report:  # a step's own progress: shown as the bar, not as log text
+                job.update(progress=report[0], detail=report[1])
+                return
             job["log"].append(line)
             if line.startswith("== "):
                 name = line[3:].strip()
                 if name in STEPS:
-                    job.update(step=STEPS.index(name), detail=name)
+                    job.update(step=STEPS.index(name), detail=name, progress=None)
 
     with _lock:
         job["status"] = "running"
     cap = _Capture(sys.stdout, threading.get_ident(), log)
+    progress.enabled = True
     try:
         with contextlib.redirect_stdout(cap):
             code = make_song.main(argv)
@@ -93,6 +99,8 @@ def _run(job_id: str, argv: list[str], final_step: int) -> None:
         traceback.print_exc()
         with _lock:
             job.update(status="error", error=str(e).strip().splitlines()[-1] if str(e).strip() else repr(e))
+    finally:
+        progress.enabled = False
 
 
 def _start(kind_title: str, slug: str, argv: list[str], final_step: int) -> str:

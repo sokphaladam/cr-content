@@ -1107,6 +1107,25 @@ def longform_reload(name: str):
     return {"footage": entries, "found": found}
 
 
+@app.post("/api/longform/{name}/scenes/{n}/upload")
+def longform_upload(name: str, n: int, file: UploadFile = File(...)):
+    """Scene `n` uses your own clip or photo (saved as scene-NN.<ext> in the script's media folder)."""
+    from . import longform
+
+    folder = _longform_dir(name)
+    _longform_busy(name)
+    tmp = UPLOAD_DIR / f"scene-{uuid.uuid4().hex[:12]}{Path(file.filename or '').suffix.lower()}"
+    _save_upload(file, tmp)
+    try:
+        return longform.use_own_file(folder, n, tmp, file.filename or tmp.name)
+    except KeyError as e:
+        raise HTTPException(404, str(e).strip("'\""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 LONG_SCRIPTS = ROOT / "scripts"  # uploaded script .md files; the file name picks its media/<name>/ folder
 
 

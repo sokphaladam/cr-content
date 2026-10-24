@@ -54,17 +54,66 @@ function useJob(id: string | null, onFinish: (job: Job) => void) {
   return id ? job : null;
 }
 
+const RENDER_STEPS = ["text", "checklist", "thumbnail", "video", "short", "instrumental"];
+
+const clock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+/** Seconds since the job first showed up here. */
+function useElapsed(running: boolean) {
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    const t0 = Date.now();
+    const t = setInterval(() => setSecs(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [running]);
+  return secs;
+}
+
 function JobStatus({ job }: { job: Job }) {
+  const elapsed = useElapsed(job.status !== "error");
   const current = [...job.log].reverse().find((l) => l.startsWith("== "))?.slice(3).trim() ?? "";
   const tail = job.log.filter((l) => !l.startsWith("== ")).slice(-4);
+  // timing is a job of its own; a render runs the other steps
+  const steps = current === "analyze" || !current ? ["analyze"] : RENDER_STEPS;
+  const at = Math.max(0, steps.indexOf(current));
+  // the render prints "40%" lines while it draws frames
+  const sub = [...job.log].reverse().map((l) => /^\s*(\d{1,3})%\s*$/.exec(l)?.[1]).find((m) => m !== undefined);
+  const stepFrac = job.progress ?? (sub !== undefined && current === "video" ? Math.min(1, Number(sub) / 100) : null);
+  const pct = Math.round(((at + (stepFrac ?? 0)) / steps.length) * 100);
+  const detail = job.detail && !(job.detail in STEP_LABEL) ? job.detail : "";
+  const slow = (current === "analyze" || !current) && !detail;
   return (
-    <div className="well grid gap-2 p-3 text-base" role="status">
+    <div className="well grid gap-3 p-3 text-base" role="status" aria-live="polite">
       {job.status === "error" ? (
         <p className="font-semibold text-danger">{job.error || "Something went wrong."}</p>
       ) : (
-        <p className="flex items-center gap-2 font-semibold">
-          <Spinner /> {STEP_LABEL[current] ?? "Starting"}… (the first run downloads the lyric-timing model, which takes a few minutes)
-        </p>
+        <>
+          <div className="flex items-center justify-between gap-3">
+            <p className="m-0 flex items-center gap-2 font-semibold">
+              <Spinner /> {STEP_LABEL[current] ?? "Starting"}…
+              {steps.length > 1 && <span className="font-normal text-ink-soft">step {at + 1} of {steps.length}</span>}
+            </p>
+            <span className="text-sm text-ink-soft tabular-nums">{stepFrac != null || steps.length > 1 ? `${pct}% · ` : ""}{clock(elapsed)}</span>
+          </div>
+          <div role="progressbar" aria-label="Progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
+            <div
+              className={`h-full rounded-full bg-cobalt transition-[width] duration-500 ${stepFrac == null && steps.length === 1 ? "w-1/3 animate-pulse" : ""}`}
+              style={stepFrac == null && steps.length === 1 ? undefined : { width: `${Math.max(pct, 3)}%` }}
+            />
+          </div>
+          {detail && <p className="m-0 text-sm text-ink-soft">{detail}</p>}
+          {steps.length > 1 && (
+            <ol className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-sm">
+              {steps.map((s, i) => (
+                <li key={s} className={i < at ? "text-ink-soft" : i === at ? "font-semibold" : "text-ink-soft/60"}>
+                  {i < at ? "✓ " : i === at ? "● " : "○ "}{STEP_LABEL[s]}
+                </li>
+              ))}
+            </ol>
+          )}
+          {slow && <p className="m-0 text-sm text-ink-soft">The first run downloads the lyric-timing model, which takes a few minutes. Later runs are much quicker.</p>}
+        </>
       )}
       {tail.length > 0 && <pre className="max-h-32 overflow-auto text-sm whitespace-pre-wrap text-ink-soft">{tail.join("\n")}</pre>}
     </div>

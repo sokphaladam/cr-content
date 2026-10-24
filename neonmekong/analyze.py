@@ -10,9 +10,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+from crcontent import progress
+
 from . import config, songjson
 from .suno import Suno
 
+DEMUCS_TO = 0.30  # share of the job's progress bar that vocal separation fills (the lyric timing follows, see crcontent.align)
 AUDIO_NAMES = ("audio.wav", "audio.mp3")
 RMS_HOP = 0.5  # seconds per energy sample
 
@@ -46,13 +49,21 @@ def separate_vocals(mix: Path, dest: Path, log=print) -> Path | None:
         return None
     device = "cuda" if torch.cuda.is_available() else "cpu"
     log(f"      separating the vocals with Demucs on {device} (first run downloads its model) ...")
+    progress.report(0.0, "Separating the vocals from the music")
     with tempfile.TemporaryDirectory() as tmp:
-        proc = subprocess.run([sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs", "-d", device,
-                               "-o", tmp, str(mix)], stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace")
+        proc = subprocess.Popen([sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs", "-d", device,
+                                 "-o", tmp, str(mix)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE)
+        err = ""
+        while chunk := proc.stderr.read1(4096):  # demucs draws a "42%|####" bar on stderr
+            err = (err + chunk.decode("utf-8", "replace"))[-2000:]
+            pct = re.findall(r"(\d{1,3})%\|", err)
+            if pct:
+                progress.report(DEMUCS_TO * min(100, int(pct[-1])) / 100, f"Separating the vocals from the music {pct[-1]}%")
+        proc.wait()
         found = next(Path(tmp).rglob("vocals.*"), None)
         if proc.returncode or not found:
-            log(f"      Demucs failed, aligning the full mix instead:\n{proc.stderr[-800:]}")
+            log(f"      Demucs failed, aligning the full mix instead:\n{err[-800:]}")
             return None
         subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(found), "-ar", "44100",
                         "-c:a", "pcm_s16le", str(dest)], stdin=subprocess.DEVNULL, check=True)
@@ -103,6 +114,7 @@ def measure(folder: Path, s: Suno, separate: bool = True) -> dict:
         raise FileNotFoundError(f"no audio.wav / audio.mp3 in {folder}")
     if vocals is None and separate:
         vocals = separate_vocals(mix, folder / "vocals.wav")   # never replaces an existing vocals.wav
+    progress.report(DEMUCS_TO, "Measuring the tempo and energy")
     out = audio_features(mix)
     out["lines"] = align_lines(vocals or mix, s, out["duration"])
     out["id3"] = read_id3(mix)
