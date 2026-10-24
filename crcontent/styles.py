@@ -177,7 +177,7 @@ def look_filter(name: str) -> str:
 
 
 # words in a song's mood, genre and video idea -> the look and lyric style they point to (a free, instant
-# suggestion; Claude's ideas and shot lists pick their own)
+# suggestion; Gemini's ideas and shot lists pick their own)
 LOOK_WORDS = {
     "film": ("nostalgic", "nostalgia", "retro", "vintage", "memory", "memories", "vhs", "hazy", "dreamy",
              "summer", "warm", "disco", "lofi", "lo-fi", "bittersweet", "polaroid", "90s", "80s", "70s"),

@@ -3,7 +3,7 @@
 plan.py (Scripts / Plan sheets -> ShortPlan) -> Script to Video's own steps at 9:16 (settings.py, shorts.json):
 voice per beat -> timing.py (the timeline from the real audio; hook and length rules) -> footage.py (your media, then
 Pixabay, then a placeholder card; the hook beat re-picked by hook.py for an animal in motion) -> preflight.py (the
-rule checks, Claude's hook judge ranked by analytics.py, a storyboard) ... you approve ... -> render.py (captions.py
+rule checks, Gemini's hook judge ranked by analytics.py, a storyboard) ... you approve ... -> render.py (captions.py
 text layer, the loop tail, -14 LUFS, NVENC/CPU) -> extras.py (cover.png, metadata.txt, post.txt).
 
 make_job() runs steps 1-5 for one episode and stops at the pre-flight report; render_job() only runs once it's
@@ -106,7 +106,7 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
     entries = json.loads((job / "footage.json").read_text(encoding="utf-8"))
     hook_pick = entries[0]["chosen"]
     if hook_pick["kind"] == "video" and hook_pick["source"] not in ("card", "placeholder"):
-        # keep the window Claude matched to the shot while the clip is long enough for the new length; only a clip
+        # keep the window Gemini matched to the shot while the clip is long enough for the new length; only a clip
         # too short for it gets a new window (the best for motion alone could miss what the shot needs: the water)
         from ..render import duration
 

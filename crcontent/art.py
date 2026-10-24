@@ -1,8 +1,8 @@
-"""Claude as art director: it draws scene backgrounds and designs complete covers as SVG, which resvg rasterizes.
+"""Gemini as art director: it draws scene backgrounds and designs complete covers as SVG, which resvg rasterizes.
 
 Backgrounds are full-bleed artwork with no text (render_scene gives them a slow push-in, like any photo), or animated
 with SMIL as a seamless looping clip (motion.py plays the animation frame by frame into an mp4). Covers are
-a whole layout around a photo of the video (gradients, panels, badges, the headline set in real type); Claude then
+a whole layout around a photo of the video (gradients, panels, badges, the headline set in real type); Gemini then
 looks at its own render once and fixes whatever reads badly at thumbnail size.
 """
 import base64
@@ -12,16 +12,16 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import anthropic
+from . import llm
 
-from .config import CACHE_DIR, CLAUDE_MODEL, LANGS
+from .config import CACHE_DIR, LLM_MODEL, LANGS
 from .script import make_client
 from .styles import available_fonts, font_dirs
 
 ART_CACHE = CACHE_DIR / "art"
-PHOTO = "PHOTO"  # href Claude gives the cover's photo; swapped for the real picture at render time
+PHOTO = "PHOTO"  # href Gemini gives the cover's photo; swapped for the real picture at render time
 
-# families resvg can find (system / user / assets fonts), offered to Claude for headlines
+# families resvg can find (system / user / assets fonts), offered to Gemini for headlines
 COVER_FONTS = {
     "en": ["Impact", "Arial Black", "Segoe UI Black", "Bahnschrift", "Georgia", "Trebuchet MS", "Verdana", "Arial"],
     "km": [],  # filled from styles.available_fonts("km") at call time
@@ -149,23 +149,21 @@ REVIEW_TASK = """This is your cover, rendered at thumbnail size. Check it hard, 
 If it is already good, reply with just OK. Otherwise reply with the complete corrected <svg> and nothing else."""
 
 
-def _client(client: anthropic.Anthropic | None) -> anthropic.Anthropic:
+def _client(client: llm.Client | None) -> llm.Client:
     return client or make_client()
 
 
-def _ask(client: anthropic.Anthropic, content: list[dict], max_tokens: int = 16000, effort: str = "medium",
+def _ask(client: llm.Client, content: list[dict], max_tokens: int = 16000, effort: str = "medium",
          system: str = ART_SYSTEM) -> str:
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=max_tokens,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": effort},
         system=system,
         messages=[{"role": "user", "content": content}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to draw this.")
+        raise RuntimeError("Gemini declined to draw this.")
     return "".join(b.text for b in response.content if b.type == "text")
 
 
@@ -173,11 +171,11 @@ _SVG = re.compile(r"<svg\b.*</svg>", re.S | re.I)
 
 
 def clean_svg(reply: str) -> str:
-    """The <svg> in Claude's reply, with anything that could reach outside the picture removed: scripts, foreign
+    """The <svg> in Gemini's reply, with anything that could reach outside the picture removed: scripts, foreign
     objects, and links to anything but its own elements, inline data, or the photo placeholder."""
     match = _SVG.search(reply)
     if not match:
-        raise RuntimeError("Claude's reply had no SVG in it.")
+        raise RuntimeError("Gemini's reply had no SVG in it.")
     svg = match.group(0)
     svg = re.sub(r"<(script|foreignObject)\b.*?</\1\s*>|<(script|foreignObject)\b[^>]*/>", "", svg, flags=re.S | re.I)
     svg = re.sub(r"@import[^;]*;", "", svg)
@@ -238,8 +236,8 @@ def _jpeg_block(data: bytes) -> dict:
 
 # ---------- backgrounds ----------
 
-def background(subject: str, size: tuple[int, int], client: anthropic.Anthropic | None = None) -> Path:
-    """Claude-drawn artwork for `subject` (the scene's narration, search words, the song's mood...), as a PNG at
+def background(subject: str, size: tuple[int, int], client: llm.Client | None = None) -> Path:
+    """Gemini-drawn artwork for `subject` (the scene's narration, search words, the song's mood...), as a PNG at
     `size`. The same subject and size come back from the cache instead of being drawn again."""
     subject = subject.strip()[:1500]
     if not subject:
@@ -259,9 +257,9 @@ def background(subject: str, size: tuple[int, int], client: anthropic.Anthropic 
     return rasterize(svg, (W * 2, H * 2), out)
 
 
-def motion_background(subject: str, size: tuple[int, int], client: anthropic.Anthropic | None = None,
+def motion_background(subject: str, size: tuple[int, int], client: llm.Client | None = None,
                       log=print) -> Path:
-    """Claude-animated artwork for `subject`, as an mp4 at `size` that loops seamlessly every MOTION_LOOP_SEC (scenes
+    """Gemini-animated artwork for `subject`, as an mp4 at `size` that loops seamlessly every MOTION_LOOP_SEC (scenes
     loop video clips to their length). Cached like background(); the SVG is kept next to it."""
     from . import motion
 
@@ -283,11 +281,11 @@ def motion_background(subject: str, size: tuple[int, int], client: anthropic.Ant
 
 
 def try_background(subject: str, size: tuple[int, int], log=print) -> Path | None:
-    """background(), or None when Claude can't draw right now (no key, no credits, offline)."""
+    """background(), or None when Gemini can't draw right now (no key, no credits, offline)."""
     try:
         return background(subject, size)
     except Exception as e:
-        log(f"      ! Claude art unavailable: {type(e).__name__}: {str(e)[:160]}")
+        log(f"      ! Gemini art unavailable: {type(e).__name__}: {str(e)[:160]}")
         return None
 
 
@@ -299,7 +297,7 @@ def _cover_fonts(lang: str) -> list[str]:
 
 def design_cover(photo_jpeg: bytes, text: str, emphasis: str, about: str, lang: str, size: tuple[int, int],
                  kind: str = "video", direction: str = "", base_svg: str = "",
-                 client: anthropic.Anthropic | None = None) -> str:
+                 client: llm.Client | None = None) -> str:
     """An SVG cover template (photo slot href="PHOTO") for the headline `text` around this photo. `direction`: an
     art direction for this cover; `base_svg`: an earlier design to keep while changing only the headline."""
     W, H = size
@@ -328,8 +326,8 @@ def design_cover(photo_jpeg: bytes, text: str, emphasis: str, about: str, lang: 
 
 
 def review_cover(svg: str, photo: Path, size: tuple[int, int], workdir: Path,
-                 client: anthropic.Anthropic | None = None) -> str:
-    """Claude looks at its rendered cover once and returns a fixed SVG, or the same one when it's already good."""
+                 client: llm.Client | None = None) -> str:
+    """Gemini looks at its rendered cover once and returns a fixed SVG, or the same one when it's already good."""
     preview = workdir / f"review-{hashlib.sha1(svg.encode()).hexdigest()[:10]}.png"
     W, H = size
     scale = 540 / max(W, H)

@@ -31,7 +31,7 @@ DEFAULTS: dict = {
     "visual": {"parts": {"motion": 0.25, "sharpness": 0.25, "colour": 0.20, "faces": 0.15, "cuts": 0.15},
                "samples_per_second": 2},
     "hook": {"window_seconds": 2.0, "parts": {"line": 0.6, "drop": 0.4}},
-    "ai_judge": {"enabled": True, "candidates": 5, "frames": 4},
+    "ai_judge": {"enabled": False, "candidates": 5, "frames": 4},
     "covers": {"per_clip": 3, "samples": 24},
     "render": {"encoder": "auto", "source": "auto"},  # encoder: auto | nvenc | cpu; source: auto | clean | video
 }

@@ -1,12 +1,12 @@
-"""Generate a short-video script with Claude as validated, structured JSON."""
+"""Generate a short-video script with Gemini as validated, structured JSON."""
 import json
 import os
 from pathlib import Path
 
-import anthropic
+from . import llm
 from pydantic import BaseModel, Field
 
-from .config import CLAUDE_MODEL, LANGS
+from .config import LLM_MODEL, LANGS
 from .styles import CaptionStyle
 
 LAYOUTS = ("fill", "fit", "split")  # footage fills the frame / whole clip over a blurred copy / two clips stacked
@@ -85,7 +85,7 @@ class VideoScript(BaseModel):
     art_style: str = ""
     art_bible: str = ""
     # the real subject the pictures must get right ("peacock mantis shrimp: green and orange body, eyes on stalks..."),
-    # checked by Claude on every picture that shows it; and what the image model must not draw instead
+    # checked by Gemini on every picture that shows it; and what the image model must not draw instead
     art_subject: str = ""
     art_avoid: str = ""
 
@@ -165,11 +165,9 @@ Field rules:
   0-2 emoji.
 - hashtags: 4-7 tags without the # sign, mixing broad, topic and niche tags; never fyp, viral, foryou or trending."""
 
-def make_client() -> anthropic.Anthropic:
-    """Claude client; adds the workspace header for org-level keys that aren't scoped to a workspace."""
-    workspace = os.getenv("ANTHROPIC_WORKSPACE_ID", "").strip()
-    headers = {"anthropic-workspace-id": workspace} if workspace else None
-    return anthropic.Anthropic(default_headers=headers)
+def make_client() -> llm.Client:
+    """Gemini client (key: GEMINI_API_KEY, model: LLM_MODEL; see llm.py)."""
+    return llm.make_client()
 
 
 KHMER_NOTE = """
@@ -178,7 +176,7 @@ because the captions are timed per space-separated phrase; never leave a phrase 
 
 
 def generate_script(topic: str, lang: str = "en", scenes: int = 4, seconds: int = 20,
-                    style: str = "", client: anthropic.Anthropic | None = None) -> VideoScript:
+                    style: str = "", client: llm.Client | None = None) -> VideoScript:
     profile = LANGS[lang]
     client = client or make_client()
     unit = "phrases" if lang == "km" else "words"
@@ -198,16 +196,14 @@ def generate_script(topic: str, lang: str = "en", scenes: int = 4, seconds: int 
     messages = [{"role": "user", "content": prompt}]
     for attempt in range(2):
         response = client.beta.messages.create(
-            model=CLAUDE_MODEL,
+            model=LLM_MODEL,
             max_tokens=16000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
             output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
             system=system,
             messages=messages,
         )
         if response.stop_reason == "refusal":
-            raise RuntimeError(f"Claude declined this topic: {response.stop_details}")
+            raise RuntimeError(f"Gemini declined this topic: {response.stop_details}")
         if response.stop_reason == "max_tokens":
             raise RuntimeError("Script generation was cut off (max_tokens); try fewer scenes.")
 
@@ -232,8 +228,8 @@ IDEAS_SCHEMA = {
 }
 
 
-def suggest_queries(narration: str, current: str = "", client: anthropic.Anthropic | None = None) -> list[str]:
-    """Ask Claude for stock-footage search ideas that fit one scene's narration."""
+def suggest_queries(narration: str, current: str = "", client: llm.Client | None = None) -> list[str]:
+    """Ask Gemini for stock-footage search ideas that fit one scene's narration."""
     client = client or make_client()
     prompt = (
         f"Scene narration (may be in Khmer or English):\n{narration}\n\n"
@@ -243,15 +239,13 @@ def suggest_queries(narration: str, current: str = "", client: anthropic.Anthrop
         "Only things a stock site realistically has; no text, logos, or specific famous people."
     )
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=2000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": IDEAS_SCHEMA}},
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to suggest footage for this scene.")
+        raise RuntimeError("Gemini declined to suggest footage for this scene.")
     text = next(b.text for b in response.content if b.type == "text")
     return [q.strip() for q in json.loads(text)["queries"] if q.strip()][:6]
 
@@ -274,7 +268,7 @@ TOPIC_FORMATS = ["payoff-first claim (\"If your X does THIS, it means...\")", "r
                  "quiz: guess before the end"]
 
 
-def suggest_topics(niche: str, lang: str, recent: list[str], client: anthropic.Anthropic | None = None) -> list[dict]:
+def suggest_topics(niche: str, lang: str, recent: list[str], client: llm.Client | None = None) -> list[dict]:
     """Ideas for the next Shorts in a niche, in a mix of formats, none a near-repeat of the channel's recent titles.
     Each: {format, topic (what to give the script writer), hook (the opening line, payoff first)}."""
     client = client or make_client()
@@ -293,15 +287,13 @@ def suggest_topics(niche: str, lang: str, recent: list[str], client: anthropic.A
         " (states the claim immediately, under 12 words)."
     )
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=4000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": TOPICS_SCHEMA}},
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to suggest topics for this niche.")
+        raise RuntimeError("Gemini declined to suggest topics for this niche.")
     text = next(b.text for b in response.content if b.type == "text")
     return [t for t in json.loads(text)["topics"] if t["topic"].strip()][:8]
 
@@ -327,7 +319,7 @@ TRANSLATE_SCHEMA = {
 }
 
 
-def translate_script(script: VideoScript, target: str, client: anthropic.Anthropic | None = None) -> VideoScript:
+def translate_script(script: VideoScript, target: str, client: llm.Client | None = None) -> VideoScript:
     """Translate the spoken/visible text into another language, keeping scene order, footage and media."""
     profile = LANGS[target]
     client = client or make_client()
@@ -347,17 +339,15 @@ def translate_script(script: VideoScript, target: str, client: anthropic.Anthrop
         + (KHMER_NOTE if target == "km" else "")
     )
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=16000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": TRANSLATE_SCHEMA}},
         system=system,
         messages=[{"role": "user", "content":
                    f"Target language: {profile.name}\n\nScript (JSON):\n{json.dumps(source, ensure_ascii=False, indent=2)}"}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to translate this script.")
+        raise RuntimeError("Gemini declined to translate this script.")
     if response.stop_reason == "max_tokens":
         raise RuntimeError("The translation was cut off; try a shorter script.")
     data = json.loads(next(b.text for b in response.content if b.type == "text"))

@@ -29,7 +29,7 @@ export function HighlightsCard({ detail, onSelectVideo, onVideosChanged }: {
   const [report, setReport] = useState<HighlightsReport | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
-  const [judge, setJudge] = useState(true);
+  const [judge, setJudge] = useState(false);
   const [artist, setArtist] = useState(savedArtist);
   const [starting, setStarting] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -135,7 +135,7 @@ export function HighlightsCard({ detail, onSelectVideo, onVideosChanged }: {
           </label>
           <label className="flex items-center gap-2 text-sm font-semibold">
             <input type="checkbox" className="size-4 accent-cobalt" checked={judge} onChange={(e) => setJudge(e.target.checked)} />
-            Claude picks the order and writes hooks and captions
+            Gemini picks the order and writes hooks and captions
           </label>
           <Button variant={report ? "secondary" : "primary"} icon={<Scissors className="size-4" />} loading={starting} onClick={start}>
             {report ? "Find highlights again" : "Find highlights"}

@@ -145,7 +145,7 @@ function Pick<T extends string>({ label, value, options, onChange }: { label: st
 
 const IDEA_MAX = 12000; // crcontent/web.py IDEA_MAX
 
-/** Idea, footage look and lyric style for a music video. `name` is the song's folder (for Claude's idea suggestions). */
+/** Idea, footage look and lyric style for a music video. `name` is the song's folder (for Gemini's idea suggestions). */
 export function MusicVideoOptions({
   name,
   lang,
@@ -327,7 +327,7 @@ export function MusicVideoOptions({
         {value.art_style && !artBlocker(art.status, value.art_style) && (
           <>
             <p className="m-0 text-sm text-ink-soft">
-              Claude plans a picture story from the lyrics, then each one is drawn on your GPU (about 40 seconds each) and cut on the beat with 3D
+              Gemini plans a picture story from the lyrics, then each one is drawn on your GPU (about 40 seconds each) and cut on the beat with 3D
               camera moves, zoom punches and flashes. A chorus sung again shows its pictures again, from new camera angles.
             </p>
             <div className="mt-1 grid justify-items-start gap-1">
@@ -387,7 +387,7 @@ export function MusicVideoOptions({
                   <code className="block text-sm break-words whitespace-pre-wrap text-ink">{suggested.prompt}</code>
                   <span className="text-xs text-ink-soft">
                     From your idea, the title and the lyrics: the character, one object that says what the song is about, its mood. Paste it into the
-                    picture below and press Redraw (free, no Claude), or let Plan pictures write one.
+                    picture below and press Redraw (free, no Gemini), or let Plan pictures write one.
                   </span>
                 </div>
               )}

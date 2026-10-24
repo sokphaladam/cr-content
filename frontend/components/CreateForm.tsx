@@ -331,13 +331,13 @@ export function CreateForm({
     }
   }
 
-  const claudeMissing = options !== null && !options.keys.anthropic;
+  const claudeMissing = options !== null && !options.keys.ai;
 
   async function writeSong(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setMsg({
-      text: "Claude is writing your song. This usually takes 15–40 seconds.",
+      text: "Gemini is writing your song. This usually takes 15–40 seconds.",
     });
     try {
       const song = await api.writeSong({
@@ -359,7 +359,7 @@ export function CreateForm({
     e.preventDefault();
     setBusy(true);
     setMsg({
-      text: "Claude is writing your script. This usually takes 15–40 seconds.",
+      text: "Gemini is writing your script. This usually takes 15–40 seconds.",
     });
     try {
       const script = await api.writeScript({
@@ -386,8 +386,8 @@ export function CreateForm({
     e.preventDefault();
     setImporting(true);
     setImportMsg({
-      text: options?.keys.anthropic
-        ? "Claude is reading your script…"
+      text: options?.keys.ai
+        ? "Gemini is reading your script…"
         : "Reading your script…",
     });
     try {
@@ -399,7 +399,7 @@ export function CreateForm({
         res.script.title,
         res.method === "claude"
           ? `Imported ${n} scenes. Voiceover kept word for word; footage searches come from your visual notes.`
-          : `Imported ${n} scenes with the basic reader (Claude wasn't available). Check the footage searches.`,
+          : `Imported ${n} scenes with the basic reader (Gemini wasn't available). Check the footage searches.`,
       );
     } catch (err) {
       setImportMsg({ text: (err as Error).message, error: true });
@@ -432,7 +432,7 @@ export function CreateForm({
         <div className="grid gap-2">
           <h1 className="page-title m-0">Make a new video</h1>
           <p className="page-intro m-0">
-            Start from an idea and let Claude write the script, paste a script
+            Start from an idea and let Gemini write the script, paste a script
             you already have, or upload a content plan in Excel. Every script
             becomes a draft you can edit. For a long YouTube video, upload its
             script .md.
@@ -562,14 +562,14 @@ export function CreateForm({
                 disabled={claudeMissing}
                 icon={<Music className="size-4" />}
               >
-                {busy ? "Writing…" : "Write lyrics with Claude"}
+                {busy ? "Writing…" : "Write lyrics with Gemini"}
               </Button>
             </div>
             <Message
               text={
                 msg.text ||
                 (claudeMissing
-                  ? "Claude isn't connected, so it can't write lyrics yet. Add your key to .env and restart the engine."
+                  ? "Gemini isn't connected, so it can't write lyrics yet. Add your key to .env and restart the engine."
                   : "")
               }
               error={msg.error}
@@ -598,7 +598,7 @@ export function CreateForm({
                   disabled={claudeMissing}
                   icon={<Sparkles className="size-3.5" />}
                   onClick={suggestTopics}
-                  title="Claude suggests topics in different formats (rankings, myth vs fact, which one is...), avoiding your recent titles. What you typed above is taken as your niche."
+                  title="Gemini suggests topics in different formats (rankings, myth vs fact, which one is...), avoiding your recent titles. What you typed above is taken as your niche."
                 >
                   {ideas ? "More topic ideas" : "Suggest topics"}
                 </Button>
@@ -718,7 +718,7 @@ export function CreateForm({
                 disabled={claudeMissing}
                 icon={<Sparkles className="size-4" />}
               >
-                {busy ? "Writing…" : "Write script with Claude"}
+                {busy ? "Writing…" : "Write script with Gemini"}
               </Button>
               <Button
                 variant="ghost"
@@ -732,7 +732,7 @@ export function CreateForm({
               text={
                 msg.text ||
                 (claudeMissing
-                  ? "Claude isn't connected, so it can't write scripts yet. Use “Write it myself”, or add your key to .env and restart the engine."
+                  ? "Gemini isn't connected, so it can't write scripts yet. Use “Write it myself”, or add your key to .env and restart the engine."
                   : "")
               }
               error={msg.error}
@@ -742,7 +742,7 @@ export function CreateForm({
 
         {mode === "excel" && (
           <ExcelPlanForm
-            claude={!!options?.keys.anthropic}
+            claude={!!options?.keys.ai}
             onDrafts={onExcelDrafts}
             onRender={onExcelRender}
           />

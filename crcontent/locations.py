@@ -1,6 +1,6 @@
 """Where the app keeps its files, chosen in Settings and remembered in <APP_HOME>/locations.json:
 
-  data folder     drafts, uploads, cache, assets, campaigns, keys (.env, accounts.json), the upload schedule
+  data folder     drafts, uploads, cache, assets, campaigns, songs (lyric videos), keys (.env, accounts.json), the upload schedule
   videos folder   finished videos, one folder per video ("" = <data folder>/output)
 
 APP_HOME is the per-user app folder (the same one the desktop app keeps engine.log in), so dev runs, the installed
@@ -31,7 +31,7 @@ def _app_home() -> Path:
 APP_HOME = _app_home()
 FILE = APP_HOME / "locations.json"
 # What the data folder holds (paths saved in drafts are relative to it, so these move together).
-DATA_ENTRIES = ("drafts", "uploads", "cache", "assets", "campaigns", ".env", "accounts.json", "schedule.json")
+DATA_ENTRIES = ("drafts", "uploads", "cache", "assets", "campaigns", "songs", ".env", "accounts.json", "schedule.json")
 OUTPUT = "output"  # the videos folder inside the data folder, unless another one is chosen
 VIDEO_FOLDER = re.compile(r"^\d{8}-\d{6}-")  # a finished video's folder name (pipeline.py: <stamp>-<lang>-<slug>)
 KEEP = {".gitkeep"}  # the project's placeholder files stay in the repo

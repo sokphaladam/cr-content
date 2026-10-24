@@ -42,7 +42,7 @@ export function ExcelPlanForm({
   async function makeDrafts() {
     if (!plan) return;
     setBusy("drafts");
-    setMsg({ text: claude ? "Claude is picking footage searches for every scene…" : "Creating drafts…" });
+    setMsg({ text: claude ? "Gemini is picking footage searches for every scene…" : "Creating drafts…" });
     try {
       const { drafts } = await api.excelDrafts(plan.file, eps);
       setMsg({ text: "" });

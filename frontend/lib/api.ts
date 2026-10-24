@@ -171,7 +171,7 @@ export interface VideoScript {
   pinned_comment?: string; // to paste under the video and pin
   art_style?: ArtStyle | ""; // "" = stock footage; else every scene without chosen media is drawn in this look
   art_bible?: string; // the director's notes (characters, world, palette) that keep the pictures consistent
-  art_subject?: string; // the real subject every picture must get right ("name: visible features"), checked by Claude
+  art_subject?: string; // the real subject every picture must get right ("name: visible features"), checked by Gemini
   art_avoid?: string; // what the image model must not draw instead (look-alikes)
 }
 
@@ -233,7 +233,7 @@ export interface SongDirection {
   bible: string;
   sections: DirectedSection[];
   notes: string[]; // what can't be done literally, and what is done instead
-  look?: Look | ""; // Claude's suggestions when it was made (applied to the settings then)
+  look?: Look | ""; // Gemini's suggestions when it was made (applied to the settings then)
   lyric_preset?: LyricPreset | "";
   lyric_font?: string;
 }
@@ -261,7 +261,7 @@ export interface StyleCatalog {
 export type PicturePace = "fewer" | "normal" | "more" | "cover";
 export type PictureFit = "fit" | "fill"; // a cover picture: the whole character on its colour, or filling the screen
 
-/** One planned picture of a music video (crcontent/pipeline.py song_slots + Claude's prompt). */
+/** One planned picture of a music video (crcontent/pipeline.py song_slots + Gemini's prompt). */
 export interface SongArtSlot {
   section: string;
   lyrics: string; // what is sung while it's on screen
@@ -301,7 +301,7 @@ export interface MusicVideoSettings {
   picture_fit?: PictureFit; // a cover picture: fit (whole) or fill (the whole screen); undefined = the song's last choice
 }
 
-/** The look and lyric style that fit a song, from its mood, genre and the idea (instant, no Claude call). */
+/** The look and lyric style that fit a song, from its mood, genre and the idea (instant, no Gemini call). */
 export interface StyleSuggestion {
   look: Look;
   lyric_preset: LyricPreset;
@@ -320,7 +320,7 @@ export interface Options {
   langs: Record<Lang, { name: string; voices: string[] }>;
   music: string[];
   music_use?: Record<string, MusicUse>; // each track's licence for monetized videos (missing on an older engine)
-  keys: { anthropic: boolean; stock: "" | "pexels" | "pixabay"; elevenlabs: boolean; jamendo?: boolean };
+  keys: { ai: boolean; stock: "" | "pexels" | "pixabay"; elevenlabs: boolean; jamendo?: boolean };
   styles?: StyleCatalog; // missing on an older engine
   captions?: { presets: Record<string, Partial<CaptionStyle> & { label: string }> };
 }
@@ -329,7 +329,7 @@ export type Aspect = "16:9" | "9:16";
 
 export interface Job {
   id: string;
-  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short";
+  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short" | "lyric_video";
   status: "queued" | "running" | "done" | "error";
   step: number;
   progress?: number | null; // how far the current step is, 0..1 (null/absent: no measure for it)
@@ -346,6 +346,7 @@ export interface Job {
   comment?: CommentState | null; // publish (youtube): how posting the video's comment went
   thumbnail?: ThumbnailState | null; // publish (youtube): how setting the cover as its thumbnail went
   channel_name?: string; // publish (youtube): the channel it went to
+  slug?: string; // lyric_video: the song folder
 }
 
 export type Platform = "youtube" | "tiktok" | "facebook" | "instagram";
@@ -433,7 +434,7 @@ export type PublishAccounts = Record<Platform, PublishAccount> & {
   youtube_categories?: Record<string, string>; // id -> name (missing on an older engine)
 };
 
-export type ServiceKey = "ANTHROPIC_API_KEY" | "ANTHROPIC_WORKSPACE_ID" | "PIXABAY_API_KEY" | "PEXELS_API_KEY" | "ELEVENLABS_API_KEY" | "JAMENDO_CLIENT_ID" | "YOUTUBE_API_KEY";
+export type ServiceKey = "GEMINI_API_KEY" | "PIXABAY_API_KEY" | "PEXELS_API_KEY" | "ELEVENLABS_API_KEY" | "JAMENDO_CLIENT_ID" | "YOUTUBE_API_KEY";
 
 /** A free instrumental track on Jamendo (crcontent/music.py search()). */
 export interface MusicResult {
@@ -622,7 +623,7 @@ export interface VideoDetail extends VideoSummary {
 /** One Smart Highlights candidate (crcontent/highlights report.json). Files are inside the source video's folder. */
 export interface HighlightCandidate {
   candidate: number;
-  final_rank: number; // 1 = the pick (Claude's order when the judge ran, else the score's)
+  final_rank: number; // 1 = the pick (Gemini's order when the judge ran, else the score's)
   score_rank: number;
   start: number; // seconds into the source video
   end: number;
@@ -643,7 +644,7 @@ export interface HighlightCandidate {
 
 export interface HighlightsReport {
   title: string;
-  judge: boolean; // Claude ranked them
+  judge: boolean; // Gemini ranked them
   chosen: number[]; // candidate numbers that were rendered
   candidates: HighlightCandidate[]; // in final order
   page: string; // report.html, inside the video's folder
@@ -657,7 +658,7 @@ export interface PostSuggestion {
   hashtags: string[];
 }
 
-export type ThumbStyle = "bold" | "box" | "stacked" | "designed" | "magazine"; // designed: a full layout Claude draws; magazine: a one-cover video's character in front of huge words
+export type ThumbStyle = "bold" | "box" | "stacked" | "designed" | "magazine"; // designed: a full layout Gemini draws; magazine: a one-cover video's character in front of huge words
 
 export interface ThumbSuggestion {
   text: string;
@@ -671,7 +672,7 @@ export interface ThumbSuggestion {
 
 export interface ThumbSuggestions {
   items: ThumbSuggestion[];
-  note: string; // set when Claude wasn't available and headlines came from the script
+  note: string; // set when Gemini wasn't available and headlines came from the script
   idea?: string; // the cover idea they were made for
 }
 
@@ -800,7 +801,7 @@ export async function pickFolder(title: string, start?: string): Promise<string 
 export class ApiError extends Error {}
 
 // Quick calls give up after this long, so a request lost while the engine restarts can't hang the UI.
-// Claude, upload and render calls pass `timeout: 0` (no limit).
+// Gemini, upload and render calls pass `timeout: 0` (no limit).
 const TIMEOUT_MS = 15_000;
 
 async function request<T>(path: string, init: RequestInit & { json?: unknown; timeout?: number } = {}): Promise<T> {
@@ -833,7 +834,7 @@ async function request<T>(path: string, init: RequestInit & { json?: unknown; ti
 /** URL for a project-relative file (uploads/..., cache/...) or an output folder file. */
 export const fileUrl = (projectPath: string) =>
   `${API_BASE}/${projectPath.split("/").map(encodeURIComponent).join("/")}`;
-/** "Review packaging": Claude's scores for the title, thumbnail and opening, and stronger versions of each. */
+/** "Review packaging": Gemini's scores for the title, thumbnail and opening, and stronger versions of each. */
 export interface PackagingReview {
   title: { score: number; verdict: string };
   thumbnail: { score: number; verdict: string };
@@ -846,7 +847,7 @@ export interface PackagingReview {
   current_title: string;
 }
 
-/** A YouTube video with far more views than its channel has subscribers, and Claude's remake plan for it. */
+/** A YouTube video with far more views than its channel has subscribers, and Gemini's remake plan for it. */
 export interface Outlier {
   id: string;
   url: string;
@@ -874,6 +875,32 @@ export interface TopicIdea {
   hook: string; // the opening line, payoff first
 }
 
+/** Lyric video tab (songs/<slug>/, made by the neonmekong pipeline). */
+export interface LyricSong {
+  slug: string;
+  title: string;
+  analyzed: boolean;
+  rendered: boolean;
+}
+export interface LyricSongDetail {
+  slug: string;
+  title: string;
+  analyzed: boolean;
+  song: Record<"title" | "genre" | "mood_phrase" | "scene_theme" | "subscribe_line" | "plan" | "generated_on" | "playlist", string>;
+  chorus: { start: number | null; end: number | null };
+  bpm: number | null;
+  duration: number | null;
+  vocal_start: number | null;
+  palette: string[];
+  warnings: string[];
+  lyrics: string;
+  files: string[];
+  upload_text: string;
+  has_instrumental: boolean;
+}
+export const songFileUrl = (slug: string, file: string, bust = "") =>
+  `${API_BASE}/songs/${encodeURIComponent(slug)}/${file}${bust ? `?v=${bust}` : ""}`;
+
 export const outputUrl = (folder: string, file: string) =>
   `${API_BASE}/media/${encodeURIComponent(folder)}/${file}`;
 
@@ -884,7 +911,7 @@ export const api = {
   /** Ideas for the next Shorts in a mix of hook formats, none a near-repeat of the library's recent titles. */
   topicIdeas: (niche: string, lang: Lang) =>
     request<{ topics: TopicIdea[] }>("/api/topic-ideas", { method: "POST", json: { niche, lang }, timeout: 0 }),
-  /** Proven ideas, weakly packaged: YouTube videos about `query` with 5x+ views per subscriber, judged by Claude. */
+  /** Proven ideas, weakly packaged: YouTube videos about `query` with 5x+ views per subscriber, judged by Gemini. */
   outliers: (query: string, lang: Lang, length: "short" | "long" | "any") =>
     request<{ videos: Outlier[]; found: number; note?: string }>("/api/outliers", { method: "POST", json: { query, lang, length }, timeout: 0 }),
   importScript: (text: string) =>
@@ -992,10 +1019,25 @@ export const api = {
     request<{ id: string; updated: string }>(`/api/drafts/${encodeURIComponent(id)}`, { method: "PUT", json: d }),
   deleteDraft: (id: string) => request<unknown>(`/api/drafts/${encodeURIComponent(id)}`, { method: "DELETE" }),
   job: (id: string) => request<Job>(`/api/jobs/${id}`),
+  lyricSongs: () => request<LyricSong[]>("/api/lyricvideo"),
+  lyricSong: (slug: string) => request<LyricSongDetail>(`/api/lyricvideo/${slug}`),
+  createLyricSong: (audio: File, lyrics: string, title: string, style: string) => {
+    const form = new FormData();
+    form.append("audio", audio);
+    form.append("lyrics", lyrics);
+    form.append("title", title);
+    form.append("style", style);
+    return request<{ slug: string; job: string }>("/api/lyricvideo", { method: "POST", body: form, timeout: 0 });
+  },
+  editLyricSong: (slug: string, body: { song: Partial<LyricSongDetail["song"]>; chorus_start?: number; chorus_end?: number }) =>
+    request<LyricSongDetail>(`/api/lyricvideo/${slug}`, { method: "PUT", json: body }),
+  renderLyricSong: (slug: string, body: { draft: boolean; ai: "template" | "gemini"; no_video: boolean }) =>
+    request<{ job: string }>(`/api/lyricvideo/${slug}/render`, { method: "POST", json: body }),
+  reanalyzeLyricSong: (slug: string) => request<{ job: string }>(`/api/lyricvideo/${slug}/reanalyze`, { method: "POST" }),
   videos: () => request<VideoSummary[]>("/api/videos"),
   video: (name: string) => request<VideoDetail>(`/api/videos/${encodeURIComponent(name)}`),
   makeThumbnail: (name: string, cover: { text: string; at: number; style: ThumbStyle; emphasis: string; image: string; design?: string }) =>
-    // a designed cover may ask Claude for a new layout, which takes a minute or two
+    // a designed cover may ask Gemini for a new layout, which takes a minute or two
     request<VideoSummary>(`/api/videos/${encodeURIComponent(name)}/thumbnail`, { method: "POST", json: cover, timeout: cover.style === "designed" ? 0 : 60_000 }),
   suggestThumbnails: (name: string, idea = "") =>
     request<ThumbSuggestions>(`/api/videos/${encodeURIComponent(name)}/thumbnail/suggest`, { method: "POST", json: { idea }, timeout: 0 }),

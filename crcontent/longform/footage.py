@@ -1,17 +1,17 @@
 """Footage for every scene, in this order:
 a) your own file: <media_dir>/<script>/scene-XX.mp4 (or .mov / .jpg / .png ...), used as it is
-b) what the scene is, as Claude reads the script (any topic: wildlife, history, science, places...):
+b) what the scene is, as Gemini reads the script (any topic: wildlife, history, science, places...):
    - footage: everyday real-world shots, from the stock libraries (Pexels, Pixabay) and Wikimedia Commons
    - species: one particular living thing, from stock video and iNaturalist / Wikimedia photos of that species
    - archival: history, people, artworks, events, space: Internet Archive film and newsreels, NASA, Wikimedia
      Commons, The Met (all public domain or freely licensed)
    - graphic: a comparison, list, logo sting or end screen, drawn by the app (cards.py): no library has those
    - montage: quick cuts of the video's own footage from other scenes (a cold open, a recap)
-   searched with words Claude writes from the Visual column ("Slow-motion catch" under #10 GREEN HERON becomes
+   searched with words Gemini writes from the Visual column ("Slow-motion catch" under #10 GREEN HERON becomes
    "green heron catching fish"); each scene keeps a few alternatives for the storyboard to swap to
 c) nothing that really shows the scene: a card with its on-screen text, flagged in the storyboard
 
-Searches are loose (a "raven" search shows crows, rooks, any black bird; "logo animation" a glowing heart), so Claude
+Searches are loose (a "raven" search shows crows, rooks, any black bird; "logo animation" a glowing heart), so Gemini
 looks at every pick: under PASS the next match is tried, and a pick under MIN_SHOW is never used, whatever the
 libraries had. Every downloaded file keeps its source page, author and licence (credits.txt).
 """
@@ -27,7 +27,7 @@ import requests
 
 from .. import commons, visuals
 from . import archives, cards
-from ..config import CACHE_DIR, CLAUDE_MODEL
+from ..config import CACHE_DIR, LLM_MODEL
 from ..importer import STOPWORDS
 from ..render import duration, run
 from ..visuals import IMAGE_EXTS, VIDEO_EXTS
@@ -35,7 +35,7 @@ from .parse import Scene, Script
 
 SEARCH_CACHE = CACHE_DIR / "stock-search"
 SEARCH_TTL = 7 * 24 * 3600  # stock searches are kept a week (Pexels allows 200 requests an hour)
-PASS = 7                    # Claude's 0-10 score for "this shows the subject"; under it the pick is flagged
+PASS = 7                    # Gemini's 0-10 score for "this shows the subject"; under it the pick is flagged
 MIN_SHOW = 5                # under it a pick is never used (a man on a rock for "brain comparison"): a card instead
 CHECK_TRIES = 4             # matches downloaded and checked at most per search before keeping the best
 LICENCES = {
@@ -82,7 +82,7 @@ def _subjects(script: Script) -> list[str]:
 
 
 def local_query(scene: Scene, subject: str) -> str:
-    """Search words without Claude: the scene's subject plus the Visual column's first content words."""
+    """Search words without Gemini: the scene's subject plus the Visual column's first content words."""
     words = [w for w in re.findall(r"[A-Za-z']+", scene.visual.lower())
              if w not in STOPWORDS and len(w) > 2 and w not in ("montage", "graphic", "close", "shot", "footage")]
     head = subject.lower()
@@ -96,7 +96,7 @@ MONTAGE_WORDS = re.compile(r"\b(montage|recap)\b", re.I)
 
 
 def local_kind(scene: Scene) -> str:
-    """The scene's kind from the Visual column's words alone (no Claude)."""
+    """The scene's kind from the Visual column's words alone (no Gemini)."""
     if MONTAGE_WORDS.search(scene.visual):
         return "montage"
     return "graphic" if GRAPHIC_WORDS.search(scene.visual) else "footage"
@@ -110,7 +110,7 @@ def local_card(scene: Scene) -> dict:
 
 
 def plan_queries(script: Script, log=print) -> list[dict]:
-    """[{scene, query, alt_query, subject, kind, card}] per scene: Claude's plan, or a local one without it."""
+    """[{scene, query, alt_query, subject, kind, card}] per scene: Gemini's plan, or a local one without it."""
     subjects = _subjects(script)
     fallback = [{"scene": s.n, "query": local_query(s, subj), "alt_query": subj.lower() or local_query(s, ""),
                  "subject": subj.lower(), "kind": local_kind(s), "card": local_card(s)}
@@ -152,19 +152,17 @@ def plan_queries(script: Script, log=print) -> list[dict]:
         from ..script import make_client
 
         response = make_client().beta.messages.create(
-            model=CLAUDE_MODEL,
+            model=LLM_MODEL,
             max_tokens=16000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
             output_config={"effort": "low", "format": {"type": "json_schema", "schema": PLAN_SCHEMA}},
             messages=[{"role": "user", "content": task}],
         )
         if response.stop_reason == "refusal":
-            raise RuntimeError("Claude declined")
+            raise RuntimeError("Gemini declined")
         got = {p["scene"]: p for p in json.loads(next(b.text for b in response.content if b.type == "text"))["scenes"]}
         return [{**f, **got[f["scene"]]} if f["scene"] in got else f for f in fallback]
     except Exception as e:  # no key or offline: words from the Visual column
-        log(f"      ! couldn't plan search words with Claude ({type(e).__name__}: {str(e)[:120]}); using the Visual column")
+        log(f"      ! couldn't plan search words with Gemini ({type(e).__name__}: {str(e)[:120]}); using the Visual column")
         return fallback
 
 
@@ -355,7 +353,7 @@ def target(entry: dict, scene: Scene) -> str:
 
 
 def check(path: Path, subject: str, visual: str) -> tuple[int, str]:
-    """Claude's 0-10 verdict on whether `path` shows `subject` (cached next to the file)."""
+    """Gemini's 0-10 verdict on whether `path` shows `subject` (cached next to the file)."""
     from ..pipeline import _verdict
 
     return _verdict(path, subject, f"stock footage for: {visual}")

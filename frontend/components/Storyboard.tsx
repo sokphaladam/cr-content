@@ -430,7 +430,7 @@ export function Storyboard({
   const [planning, setPlanning] = useState(false);
   const [drawingAll, setDrawingAll] = useState<string>(""); // "2/6" while drawing every scene
 
-  /** Claude writes a picture prompt, camera move and effects for every scene (all at once, so they match). */
+  /** Gemini writes a picture prompt, camera move and effects for every scene (all at once, so they match). */
   async function planPictures(replace: boolean, quiet = false) {
     if (!draft.art_style) return null;
     setPlanning(true);
@@ -468,11 +468,11 @@ export function Storyboard({
     }
   }
 
-  /** The draft as it will be drawn: planned first (when it never was and Claude is connected), so every picture
+  /** The draft as it will be drawn: planned first (when it never was and Gemini is connected), so every picture
    *  gets a real prompt, and the video's subject is checked in each picture and drawn from a real photo. */
   async function plannedDraft() {
-    if (draft.art_bible || !options.keys.anthropic) return draft;
-    toast("Planning the pictures first (Claude)…", "info");
+    if (draft.art_bible || !options.keys.ai) return draft;
+    toast("Planning the pictures first (Gemini)…", "info");
     const plan = await planPictures(false, true);
     return plan ? { ...draft, ...plan } : null;
   }
@@ -641,8 +641,8 @@ export function Storyboard({
             variant="secondary"
             icon={<Wand2 className="size-3.5" />}
             loading={planning}
-            disabled={!options.keys.anthropic}
-            title="Claude plans one consistent look, then a picture, camera move and effects for every scene"
+            disabled={!options.keys.ai}
+            title="Gemini plans one consistent look, then a picture, camera move and effects for every scene"
             onClick={() => planPictures(draft.scenes.some((s) => s.art_prompt))}
           >
             {draft.scenes.some((s) => s.art_prompt) ? "Re-plan pictures" : "Plan pictures"}

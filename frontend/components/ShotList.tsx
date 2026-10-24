@@ -80,8 +80,8 @@ function TapeControls({ id, row, onChange }: { id: string; row: DirectedSection;
 }
 
 /**
- * Your idea as a shot list: Claude reads the concept and writes what each section of the song shows and how fast it
- * cuts (one Claude call), plus the characters every picture shares. Everything is editable; the pictures, the cuts
+ * Your idea as a shot list: Gemini reads the concept and writes what each section of the song shows and how fast it
+ * cuts (one Gemini call), plus the characters every picture shares. Everything is editable; the pictures, the cuts
  * and the footage then follow it.
  */
 export function ShotList({
@@ -109,7 +109,7 @@ export function ShotList({
 
   async function direct() {
     setBusy(true);
-    setMessage({ text: "Claude is turning your idea into a shot list… about 30 seconds." });
+    setMessage({ text: "Gemini is turning your idea into a shot list… about 30 seconds." });
     try {
       const d = await api.directIdea(name, idea);
       onChange(d);
@@ -144,7 +144,7 @@ export function ShotList({
           icon={<Clapperboard className="size-3.5" />}
           loading={busy}
           disabled={!ready}
-          title="Claude turns your idea into a scene and cutting pace for every part of the song (one Claude call)"
+          title="Gemini turns your idea into a scene and cutting pace for every part of the song (one Gemini call)"
           onClick={direct}
         >
           {current ? "Direct again" : "Direct my idea"}

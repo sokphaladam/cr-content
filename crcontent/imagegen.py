@@ -37,8 +37,10 @@ STYLES: dict[str, dict] = {
         # quality tags first: the text encoder reads only ~75 tokens, and whatever comes after that is dropped
         "prefix": "masterpiece, high score, great score, absurdres, ",
         "suffix": ", anime screencap, cinematic lighting",
-        "negative": "lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, "
-                    "worst quality, low quality, low score, bad score, average score, signature, watermark, username, "
+        # hand faults first: the text encoder reads only ~75 tokens, and the end of a long negative is dropped
+        "negative": "lowres, bad anatomy, bad hands, mutated hands, poorly drawn hands, extra fingers, fused fingers, "
+                    "missing finger, extra digits, fewer digits, long fingers, text, error, cropped, "
+                    "worst quality, low quality, low score, bad score, average score, signature, watermark, "
                     "blurry, jpeg artifacts, logo, letters",
         "steps": 20, "cfg": 5.0, "scheduler": "euler_a",
     },
@@ -48,7 +50,8 @@ STYLES: dict[str, dict] = {
         "variant": "fp16",
         "prefix": "cinematic film still, ",
         "suffix": ", shot on 35mm, shallow depth of field, dramatic lighting, color graded, highly detailed, 8k",
-        "negative": "(worst quality, low quality, illustration, 3d, 2d, painting, cartoons, sketch), text, watermark, "
+        "negative": "(worst quality, low quality, illustration, 3d, 2d, painting, cartoons, sketch), bad hands, "
+                    "mutated hands, extra fingers, fused fingers, missing fingers, text, watermark, "
                     "logo, letters, signature, deformed, disfigured, bad anatomy, extra limbs, blurry, open mouth",
         "steps": 20, "cfg": 4.5, "scheduler": "dpmpp_2m_karras",
     },

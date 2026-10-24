@@ -1,6 +1,6 @@
 """Render a Short: 1080x1920, 30 fps, H.264 + AAC at -14 LUFS (NVENC, CPU fallback), hard cuts.
 
-Every beat is its clip cropped to 9:16 around the animal (the hook's own 2 s window, where Claude placed the animal),
+Every beat is its clip cropped to 9:16 around the animal (the hook's own 2 s window, where Gemini placed the animal),
 then rule 3's loop tail: the last rules.loop_tail seconds cut back to the hook clip, ending on the very frame the
 Short opens with, so when YouTube loops it the motion carries straight on into the first line. The voice, the music
 bed (your tracks, no fade-out: a fade would mark the loop) and the text layer (captions.py) go on top.

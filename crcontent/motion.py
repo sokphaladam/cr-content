@@ -1,6 +1,6 @@
 """Animated SVG -> seamless looping video clip.
 
-resvg only draws still pictures, so the SMIL animation in Claude's SVG (<animate>, <animateTransform>, <set>) is
+resvg only draws still pictures, so the SMIL animation in Gemini's SVG (<animate>, <animateTransform>, <set>) is
 played here: for every frame each animated attribute is computed at that moment and written into a static copy of
 the SVG, which resvg rasterizes (in worker processes: resvg holds the GIL). FFmpeg then joins the frames, adding
 moving film grain, which would be far too slow to draw per frame with feTurbulence.
@@ -144,7 +144,7 @@ class Player:
         try:
             self.root = ET.fromstring(svg)
         except ET.ParseError as e:
-            raise RuntimeError(f"Claude's animated SVG isn't valid XML: {e}") from e
+            raise RuntimeError(f"Gemini's animated SVG isn't valid XML: {e}") from e
         parents = {child: parent for parent in self.root.iter() for child in parent}
         ids = {el.get("id"): el for el in self.root.iter() if el.get("id")}
         self.animations: list[Animation] = []
@@ -258,7 +258,7 @@ def render_loop(svg: str, size: tuple[int, int], out: Path, loop: float = 6.0, f
     than `budget` seconds, frames are drawn smaller (down to half size) and scaled up, which soft artwork hides."""
     player = Player(svg, loop)
     if not player.animations:
-        raise RuntimeError("Claude's design came back without any animation. Try again.")
+        raise RuntimeError("Gemini's design came back without any animation. Try again.")
     W, H = size
     count = round(loop * fps)
     workers = max(1, min((os.cpu_count() or 2) - 2, 10))

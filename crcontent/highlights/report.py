@@ -1,7 +1,7 @@
 """The Smart Highlights report: one self-contained HTML page (next to report.json) to compare the candidates.
 
 The song's timeline (sections, the combined score curve, where each candidate sits), then one card per candidate in
-final order: timecodes, score breakdown, Claude's reason, hook text, caption, lyrics, covers and the rendered clip.
+final order: timecodes, score breakdown, Gemini's reason, hook text, caption, lyrics, covers and the rendered clip.
 It opens straight from disk (file://); covers and clips are linked by relative paths.
 """
 import html
@@ -111,7 +111,7 @@ def _card(e: dict, data: dict, out: Path) -> str:
         f'</div></div><span class="num">{e["parts"].get(key, 0):.2f}</span>'
         for key, label in PARTS if key in e["parts"])
     ai = e.get("ai") or {}
-    reason = (f'<div class="label">Claude\'s reason</div><div class="reason">{_e(ai["reason"])}</div>' if ai else
+    reason = (f'<div class="label">Gemini\'s reason</div><div class="reason">{_e(ai["reason"])}</div>' if ai else
               f'<div class="reason nopick">Ranked by score (the AI judge was off or unavailable).</div>')
     hook = f'<div class="label">On-screen hook</div><div class="hooktext">{_e(e["hook_text"])}</div>' if ai else ""
     caption = (f'<div class="label">Caption</div><div class="caption"><span>{_e(e["caption"])}</span>'
@@ -130,7 +130,7 @@ def _card(e: dict, data: dict, out: Path) -> str:
     else:
         media = '<p class="nopick">Not rendered (only the top picks are).</p>'
     snap = f'starts on a {e["starts_on"]}, ends on a {e["ends_on"]}'
-    order = f'score rank {e["score_rank"]}' + (f' · Claude rank {ai["rank"]}' if ai else "")
+    order = f'score rank {e["score_rank"]}' + (f' · Gemini rank {ai["rank"]}' if ai else "")
     if e["parts"].get("repeat_penalty"):
         order += f' · −{e["parts"]["repeat_penalty"] * 100:.0f}% in the score for sharing lyrics with a higher-scoring pick'
     return f"""
@@ -154,7 +154,7 @@ def write(data: dict, out: Path) -> Path:
     who = f" — {_e(data['artist'])}" if data.get("artist") else ""
     methods = " · ".join(x for x in (f"structure: {data['structure_method']}", f"lyrics: {data['timing']}",
                                      f"visual: {data['visual_method'] or 'off'}",
-                                     f"AI judge: {'Claude' if data['judge'] else 'off'}") if x)
+                                     f"AI judge: {'Gemini' if data['judge'] else 'off'}") if x)
     weights = ", ".join(f"{k} {v}" for k, v in data["weights"].items())
     legend = "".join(f'<span><i style="background:{c}"></i>{n}</span>' for n, c in
                      (("Chorus", "var(--chorus)"), ("Pre-chorus", "var(--pre)"), ("Verse", "var(--verse)"),

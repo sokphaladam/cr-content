@@ -1,4 +1,4 @@
-"""The pre-flight report, before anything renders: the rule checks, Claude's hook judge, the loop check and a
+"""The pre-flight report, before anything renders: the rule checks, Gemini's hook judge, the loop check and a
 storyboard (one frame per beat, as the Short frames it, with how its footage was searched). preflight.json holds it
 all; preflight.html shows it (it opens from disk; served by the engine it can also apply a suggestion and approve).
 
@@ -34,8 +34,8 @@ def loop_line(ep, loop: dict) -> dict:
     detail = f"\"{loop['joined']}\""
     if not loop["natural"]:
         detail += f": {loop['problem'] or 'not one natural sentence'}"
-    elif loop["by"] != "Claude":
-        detail += " (only checked for repeated words: Claude isn't available)"
+    elif loop["by"] != "Gemini":
+        detail += " (only checked for repeated words: Gemini isn't available)"
     if not ep.loop_marked:
         detail += " (no [loops] marker in the sheet)"
     return {"check": "loop line", "ok": loop["natural"], "detail": detail}
@@ -89,7 +89,7 @@ def status(report: dict) -> dict:
         reasons.insert(0, f"hook judge {j['score']}/10 (needs {JUDGE_READY} or more)")
     state = "needs work" if reasons else "ready" if j else "not judged"
     if not j:
-        reasons.append("the hook judge needs Claude (ANTHROPIC_API_KEY in Settings)")
+        reasons.append("the hook judge needs Gemini (GEMINI_API_KEY in Settings)")
     return {"state": state, "reasons": reasons}
 
 
@@ -329,7 +329,7 @@ def page(job: Path, ep, tl, entries: list[dict], report: dict, frames: list[str]
                            + (f"<div class=\"stat\">The judge on it: {fix['score']}/10. {e(fix['reason'])}</div>"
                               if fix.get("score") is not None else "") + "</div>")
     else:
-        judge_html = "<p class=\"hint\">The hook judge needs Claude (ANTHROPIC_API_KEY in Settings).</p>"
+        judge_html = "<p class=\"hint\">The hook judge needs Gemini (GEMINI_API_KEY in Settings).</p>"
     lp = report["loop"]
     loop_html = f"<p>\"{e(lp['joined'])}\"</p>"
     if not lp["natural"]:

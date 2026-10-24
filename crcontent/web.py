@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
-import anthropic
+from . import llm
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import addons, art, campaigns, drafts, locations, music, packaging, publish, schedule, sheet, voiceover
+from . import addons, art, campaigns, drafts, locations, lyricvideo, music, packaging, publish, schedule, sheet, voiceover
 from .config import ASSETS_DIR, CACHE_DIR, CODE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT, SCENE_PAD_SEC, frame_size
 from .lyrics import SongScript, generate_song, suggest_video_ideas
 from .align import lines_from_json, load_lines, save_lines
@@ -72,6 +72,8 @@ renderer = ThreadPoolExecutor(max_workers=1)  # FFmpeg is heavy: render one vide
 uploader = ThreadPoolExecutor(max_workers=1)  # uploads to YouTube/TikTok, separate so renders don't wait on them
 jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
+lyricvideo.bind(jobs, jobs_lock, renderer)
+app.include_router(lyricvideo.router)
 
 
 class ScriptRequest(BaseModel):
@@ -112,7 +114,7 @@ def options():
         # each track's licence for monetized videos: ok / nc (non-commercial) / nd (no derivatives) / unknown
         "music_use": {p.name: music.track_use(p) for p in music_dir.glob("*.mp3")} if music_dir.exists() else {},
         "keys": {
-            "anthropic": bool(os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-ant-")),
+            "ai": bool(os.getenv("GEMINI_API_KEY", "").strip()),
             "stock": stock_source(),
             "elevenlabs": bool(elevenlabs_key()),
             "jamendo": bool(music.jamendo_key()),
@@ -122,22 +124,19 @@ def options():
     }
 
 
-def _claude_error(e: Exception) -> HTTPException:
-    if isinstance(e, anthropic.BadRequestError) and "credit balance" in str(e.message):
-        return HTTPException(402, "Your Claude account has no API credits. Add credits at "
-                                  "platform.claude.com → Settings → Billing, then try again (no restart needed).")
-    if isinstance(e, anthropic.BadRequestError) and "workspace" in str(e.message):
-        return HTTPException(400, "Your Claude key isn't tied to a workspace. Either add ANTHROPIC_WORKSPACE_ID=wrkspc_... "
-                                  "to .env, or create a new key inside a workspace in the Claude Console. Then restart the app.")
-    if isinstance(e, anthropic.AuthenticationError):
-        return HTTPException(401, "Claude rejected the API key. Put a valid key (starts with sk-ant-) "
-                                  "in ANTHROPIC_API_KEY in .env, then restart the app.")
-    if isinstance(e, anthropic.RateLimitError):
-        return HTTPException(429, "Claude rate limit reached. Wait a minute and try again.")
-    if isinstance(e, anthropic.APIConnectionError):
-        return HTTPException(502, "Couldn't reach the Claude API. Check your internet connection.")
-    if isinstance(e, anthropic.APIStatusError):
-        return HTTPException(502, f"Claude API error {e.status_code}: {e.message}")
+def _llm_error(e: Exception) -> HTTPException:
+    if isinstance(e, llm.AuthenticationError):
+        return HTTPException(401, "Gemini rejected the API key. Put a valid key in Settings (get one free at "
+                                  "aistudio.google.com/apikey), then try again.")
+    if isinstance(e, llm.RateLimitError):
+        return HTTPException(429, "Gemini rate limit or free quota reached. Wait a minute and try again, "
+                                  "or use a paid key.")
+    if isinstance(e, llm.APIConnectionError):
+        return HTTPException(502, "Couldn't reach the Gemini API. Check your internet connection.")
+    if isinstance(e, llm.BadRequestError):
+        return HTTPException(400, f"Gemini rejected the request: {e.message}")
+    if isinstance(e, llm.APIStatusError):
+        return HTTPException(502, f"Gemini API error {e.status_code}: {e.message}")
     return HTTPException(422, str(e))
 
 
@@ -150,8 +149,8 @@ def write_script(req: ScriptRequest):
     try:
         script = generate_script(req.topic.strip(), lang=req.lang, scenes=req.scenes,
                                  seconds=req.seconds, style=req.style)
-    except (anthropic.APIError, RuntimeError) as e:
-        raise _claude_error(e)
+    except (llm.APIError, RuntimeError) as e:
+        raise _llm_error(e)
     return script.model_dump()
 
 
@@ -176,11 +175,11 @@ def _media_info(path: Path) -> dict:
 @app.post("/api/ideas")
 def ideas(req: IdeasRequest):
     if not req.narration.strip():
-        raise HTTPException(400, "Write the scene's narration first, so Claude knows what to look for.")
+        raise HTTPException(400, "Write the scene's narration first, so Gemini knows what to look for.")
     try:
         return {"queries": suggest_queries(req.narration, req.current)}
-    except (anthropic.APIError, RuntimeError) as e:
-        raise _claude_error(e)
+    except (llm.APIError, RuntimeError) as e:
+        raise _llm_error(e)
 
 
 class TopicIdeasRequest(BaseModel):
@@ -196,8 +195,8 @@ def topic_ideas(req: TopicIdeasRequest):
     lang = req.lang if req.lang in LANGS else "en"
     try:
         return {"topics": suggest_topics(req.niche.strip()[:300], lang, list(dict.fromkeys(recent))[:60])}
-    except (anthropic.APIError, RuntimeError) as e:
-        raise _claude_error(e)
+    except (llm.APIError, RuntimeError) as e:
+        raise _llm_error(e)
 
 
 @app.get("/api/footage")
@@ -236,7 +235,7 @@ class DesignRequest(BaseModel):
 
 @app.post("/api/footage/design")
 def design_footage(req: DesignRequest):
-    """Claude draws a background for the scene (artwork, no text); it's used like a photo, with a slow zoom. Animated,
+    """Gemini draws a background for the scene (artwork, no text); it's used like a photo, with a slow zoom. Animated,
     it comes back as a looping video clip instead."""
     subject = "\n".join(t.strip() for t in (req.prompt or "", req.narration or "") if t.strip())
     if not subject:
@@ -244,8 +243,8 @@ def design_footage(req: DesignRequest):
     try:
         make = art.motion_background if req.animate else art.background
         return _media_info(make(subject, frame_size(req.aspect)))
-    except (anthropic.APIError, RuntimeError) as e:
-        raise _claude_error(e)
+    except (llm.APIError, RuntimeError) as e:
+        raise _llm_error(e)
 
 
 # ---------- AI scene art (Stable Diffusion XL on this computer's GPU) ----------
@@ -375,7 +374,7 @@ class ArtCheckRequest(BaseModel):
 
 @app.post("/api/art/check")
 def art_check(req: ArtCheckRequest):
-    """How well a picture you drew shows the video's real subject (Claude's check, kept with the picture, so each
+    """How well a picture you drew shows the video's real subject (Gemini's check, kept with the picture, so each
     one is only ever checked once). score is null when the picture isn't meant to show the subject."""
     from .pipeline import _verdict
 
@@ -385,8 +384,8 @@ def art_check(req: ArtCheckRequest):
         return {"score": None, "problem": ""}
     try:
         score, problem = _verdict(path, req.subject.strip(), req.prompt)
-    except anthropic.APIError as e:
-        raise _claude_error(e)
+    except llm.APIError as e:
+        raise _llm_error(e)
     return {"score": score, "problem": problem}
 
 
@@ -397,7 +396,7 @@ class RealSubjectRequest(BaseModel):
 
 @app.post("/api/art/real")
 def art_real(req: RealSubjectRequest):
-    """Real footage or a real photo of the subject (a stock clip, else Wikimedia Commons), checked by Claude, for a
+    """Real footage or a real photo of the subject (a stock clip, else Wikimedia Commons), checked by Gemini, for a
     scene whose AI picture can't get the subject right."""
     from .pipeline import real_subject_media
 
@@ -406,8 +405,8 @@ def art_real(req: RealSubjectRequest):
     used = {str(ROOT / m) for m in req.exclude}
     try:
         path = real_subject_media(req.subject.strip(), used, log=print)
-    except anthropic.APIError as e:
-        raise _claude_error(e)
+    except llm.APIError as e:
+        raise _llm_error(e)
     if not path:
         raise HTTPException(404, f"No stock clip or Wikimedia Commons photo clearly shows a {req.subject.split(':')[0].strip()}. "
                                  "Upload your own clip or photo for this scene.")
@@ -423,7 +422,7 @@ class ArtPlanRequest(BaseModel):
 
 @app.post("/api/art/plan")
 def art_plan(req: ArtPlanRequest):
-    """Claude plans a picture prompt, camera move and effects for each scene (keeping your own prompts unless
+    """Gemini plans a picture prompt, camera move and effects for each scene (keeping your own prompts unless
     `replace`); returns the script with them filled in."""
     from .pipeline import plan_scene_art
 
@@ -436,8 +435,8 @@ def art_plan(req: ArtPlanRequest):
         script.art_bible = script.art_subject = script.art_avoid = ""
     try:
         plan_scene_art(script, log=lambda _: None)
-    except (anthropic.APIError, RuntimeError) as e:
-        raise _claude_error(e)
+    except (llm.APIError, RuntimeError) as e:
+        raise _llm_error(e)
     return script.model_dump()
 
 
@@ -622,9 +621,9 @@ class ImportRequest(BaseModel):
 
 @app.post("/api/import")
 def import_pasted(req: ImportRequest):
-    """Pasted free-form script -> structured script (Claude, or the basic parser as a fallback)."""
+    """Pasted free-form script -> structured script (Gemini, or the basic parser as a fallback)."""
     try:
-        script, lang, method = import_script(req.text, req.lang, use_claude=bool(os.getenv("ANTHROPIC_API_KEY")))
+        script, lang, method = import_script(req.text, req.lang, use_claude=bool(os.getenv("GEMINI_API_KEY")))
     except ValueError as e:
         raise HTTPException(422, str(e))
     return {"script": script.model_dump(), "lang": lang, "method": method}
@@ -643,8 +642,8 @@ def translate(req: TranslateRequest):
         raise HTTPException(400, "Write some narration first, then translate.")
     try:
         return translate_script(req.script, req.target).model_dump()
-    except (anthropic.APIError, RuntimeError) as e:
-        raise _claude_error(e)
+    except (llm.APIError, RuntimeError) as e:
+        raise _llm_error(e)
 
 
 # ---------- Excel content plan (one video per episode, see sheet.py) ----------
@@ -696,7 +695,7 @@ class ExcelRequest(BaseModel):
 
 @app.post("/api/excel/drafts")
 def excel_drafts(req: ExcelRequest):
-    """One draft per chosen episode, footage searches planned by Claude, to check and render one by one."""
+    """One draft per chosen episode, footage searches planned by Gemini, to check and render one by one."""
     episodes = _plan_episodes(req.file, req.eps)
     sheet.plan_all(episodes, log=lambda line: None)
     return {"drafts": [{"ep": e.ep, "id": _new_draft(e), "title": e.script.title} for e in episodes]}
@@ -791,7 +790,7 @@ def render(req: RenderRequest):
     return {"id": job_id}
 
 
-# ---------- Songs (Claude lyrics -> ElevenLabs Music) ----------
+# ---------- Songs (Gemini lyrics -> ElevenLabs Music) ----------
 
 class SongWriteRequest(BaseModel):
     topic: str
@@ -817,8 +816,8 @@ def write_song(req: SongWriteRequest):
     try:
         song = generate_song(req.topic.strip(), lang=req.lang, seconds=max(10, min(180, req.seconds)),
                              style=req.style, vocal=req.vocal)
-    except (anthropic.APIError, RuntimeError) as e:
-        raise _claude_error(e)
+    except (llm.APIError, RuntimeError) as e:
+        raise _llm_error(e)
     return song.model_dump()
 
 
@@ -885,9 +884,9 @@ class DirectRequest(BaseModel):
 
 @app.post("/api/videos/{name}/direct")
 def direct_video_idea(name: str, req: DirectRequest):
-    """Claude turns your concept into a shot list for the song: a scene and cutting pace per section, the recurring
+    """Gemini turns your concept into a shot list for the song: a scene and cutting pace per section, the recurring
     characters, a matching colour grade and lyric style, and notes on what can't be done literally. Saved with the
-    song (one Claude call); edit it in the app before planning pictures or rendering."""
+    song (one Gemini call); edit it in the app before planning pictures or rendering."""
     from . import director
     from .styles import LOOKS, PRESETS, available_fonts
 
@@ -904,8 +903,8 @@ def direct_video_idea(name: str, req: DirectRequest):
             song.title, song.mood, song.genre, [{"name": s.name, "lyrics": s.lyrics} for s in song.sections], idea,
             {k: v["label"] for k, v in LOOKS.items()}, {k: v["label"] for k, v in PRESETS.items()},
             available_fonts(meta.get("lang", "en")))
-    except (anthropic.APIError, RuntimeError) as e:
-        raise _claude_error(e)
+    except (llm.APIError, RuntimeError) as e:
+        raise _llm_error(e)
     direction = {"idea": idea, **direction}
     _save_direction(folder, direction)
     return direction
@@ -1415,7 +1414,7 @@ class ArtPlanSongRequest(BaseModel):
 
 @app.post("/api/videos/{name}/art-plan")
 def new_art_plan(name: str, req: ArtPlanSongRequest):
-    """Claude plans the music video's pictures (one call, a few cents); nothing is drawn or rendered yet."""
+    """Gemini plans the music video's pictures (one call, a few cents); nothing is drawn or rendered yet."""
     from .pipeline import PICTURE_PACES, plan_song_pictures
 
     folder = _video_dir(name)
@@ -1438,8 +1437,8 @@ def new_art_plan(name: str, req: ArtPlanSongRequest):
     try:
         plan = plan_song_pictures(folder, req.style, req.pictures if req.pictures in PICTURE_PACES else "normal",
                                   req.idea[:IDEA_MAX], req.bible[:2000], log=lambda _: None, direction=direction)
-    except anthropic.APIError as e:
-        raise _claude_error(e)
+    except llm.APIError as e:
+        raise _llm_error(e)
     except RuntimeError as e:
         raise HTTPException(400, str(e))
     return _plan_view(folder, plan)
@@ -1528,7 +1527,7 @@ class StyleSuggestionRequest(BaseModel):
 @app.post("/api/videos/{name}/style-suggestion")
 def style_suggestion(name: str, req: StyleSuggestionRequest):
     """The footage look and lyric style that fit the song (its mood, genre and your idea), and a starter prompt for
-    its cover picture: instant and free, no Claude call. {"look", "lyric_preset", "reason", "prompt"}."""
+    its cover picture: instant and free, no Gemini call. {"look", "lyric_preset", "reason", "prompt"}."""
     from .styles import suggest_style
 
     folder = _video_dir(name)
@@ -1545,14 +1544,14 @@ def style_suggestion(name: str, req: StyleSuggestionRequest):
 
 @app.post("/api/videos/{name}/video-ideas")
 def video_ideas(name: str):
-    """Claude pitches a few music video concepts for the song, each with a matching look and lyric style."""
+    """Gemini pitches a few music video concepts for the song, each with a matching look and lyric style."""
     folder = _video_dir(name)
     if not (folder / "song.json").exists():
         raise HTTPException(400, "This isn't a song.")
     try:
         return {"ideas": suggest_video_ideas(SongScript.load(folder / "song.json"), _summary(folder)["lang"])}
-    except (anthropic.APIError, RuntimeError) as e:
-        raise _claude_error(e)
+    except (llm.APIError, RuntimeError) as e:
+        raise _llm_error(e)
 
 
 # ---------- Your own songs (upload mp3 + lyrics -> lyric timing -> music video) ----------
@@ -1881,8 +1880,8 @@ def video_thumbnail(name: str, req: ThumbnailRequest):
     try:
         make_thumbnail(folder, req.text[:120], req.at, lang,
                        req.style if req.style in COVER_STYLES else "bold", req.emphasis[:60], image, design)
-    except anthropic.APIError as e:  # a designed cover needs Claude
-        raise _claude_error(e)
+    except llm.APIError as e:  # a designed cover needs Gemini
+        raise _llm_error(e)
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(500, f"Couldn't make the thumbnail: {str(e).strip().splitlines()[-1]}")
@@ -1895,7 +1894,7 @@ class ThumbnailIdeaRequest(BaseModel):
 
 @app.post("/api/videos/{name}/thumbnail/suggest")
 def video_thumbnail_suggest(name: str, req: ThumbnailIdeaRequest | None = None):
-    """Cover ideas to pick from: Claude looks at the best frames and writes headlines, following your idea for the
+    """Cover ideas to pick from: Gemini looks at the best frames and writes headlines, following your idea for the
     cover when you give one (a picture the video doesn't have comes from stock photos)."""
     folder = _video_dir(name)
     if not (folder / "video.mp4").exists():
@@ -1918,8 +1917,8 @@ def video_post_suggest(name: str, req: PostIdeaRequest | None = None):
     folder = _video_dir(name)
     try:
         items = suggest_posts(folder, _summary(folder)["lang"], idea=(req.idea if req else "")[:600])
-    except anthropic.APIError as e:
-        raise _claude_error(e)
+    except llm.APIError as e:
+        raise _llm_error(e)
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(500, f"Couldn't suggest post text: {str(e).strip().splitlines()[-1]}")
@@ -1928,12 +1927,12 @@ def video_post_suggest(name: str, req: PostIdeaRequest | None = None):
 
 @app.post("/api/videos/{name}/packaging")
 def video_packaging(name: str):
-    """Claude scores the title, thumbnail and opening together and writes stronger ones."""
+    """Gemini scores the title, thumbnail and opening together and writes stronger ones."""
     folder = _video_dir(name)
     try:
         return packaging.review(folder, _summary(folder)["lang"])
-    except (anthropic.APIError, RuntimeError) as e:
-        raise _claude_error(e)
+    except (llm.APIError, RuntimeError) as e:
+        raise _llm_error(e)
 
 
 class OutliersRequest(BaseModel):
@@ -1961,9 +1960,9 @@ def outliers(req: OutliersRequest):
     try:
         return {"videos": packaging.judge_outliers(found, lang, "long YouTube video" if length == "long" else "short"),
                 "found": len(found)}
-    except (anthropic.APIError, RuntimeError) as e:  # still show the numbers without Claude's verdicts
+    except (llm.APIError, RuntimeError) as e:  # still show the numbers without Gemini's verdicts
         print(f"  ! outlier verdicts: {type(e).__name__}: {e}")
-        return {"videos": found[:10], "found": len(found), "note": "Claude was unavailable, so there are no verdicts."}
+        return {"videos": found[:10], "found": len(found), "note": "Gemini was unavailable, so there are no verdicts."}
 
 
 class TitleRequest(BaseModel):
@@ -2048,13 +2047,13 @@ class CampaignReadRequest(BaseModel):
 
 @app.post("/api/campaigns")
 def campaign_create(req: CampaignReadRequest):
-    """Read a campaign (brief, requirements, reference links) from the pasted Whop page with Claude."""
+    """Read a campaign (brief, requirements, reference links) from the pasted Whop page with Gemini."""
     try:
         c = campaigns.read_campaign(req.text[:80_000], req.url.strip()[:500])
     except ValueError as e:
         raise HTTPException(400, str(e))
-    except anthropic.APIError as e:
-        raise _claude_error(e)
+    except llm.APIError as e:
+        raise _llm_error(e)
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(500, f"Couldn't read the campaign: {str(e).strip().splitlines()[-1]}")
@@ -2175,10 +2174,10 @@ def _run_clips(job_id: str, campaign_id: str, req: ClipRequest) -> None:
         job["status"] = "running"
     try:
         c = campaigns.load(campaign_id)
-        log(f"[1/2] Claude is picking {req.count} moments that fit the brief…")
+        log(f"[1/2] Gemini is picking {req.count} moments that fit the brief…")
         plans = campaigns.plan_clips(c, req.count, req.idea)
         if not plans:
-            raise RuntimeError("Claude found no moments that fit the campaign's rules in these videos.")
+            raise RuntimeError("Gemini found no moments that fit the campaign's rules in these videos.")
         made = []
         for i, plan in enumerate(plans, 1):
             log(f"[2/2] Cutting clip {i} of {len(plans)}: {plan.title}")
@@ -2199,8 +2198,8 @@ def _run_clips(job_id: str, campaign_id: str, req: ClipRequest) -> None:
                 job.update(status="done", step=2, summary=summary)
             else:
                 job.update(status="error", error="No clip could be made. See the log.")
-    except anthropic.APIError as e:
-        _fail(job, RuntimeError(_claude_error(e).detail))
+    except llm.APIError as e:
+        _fail(job, RuntimeError(_llm_error(e).detail))
     except Exception as e:
         _fail(job, e)
 
@@ -2246,8 +2245,7 @@ def campaign_schedule(campaign_id: str, req: CampaignScheduleRequest):
 # ---------- Settings (API keys, saved to <ROOT>/.env and applied right away) ----------
 
 SERVICE_KEYS = {
-    "ANTHROPIC_API_KEY": "Claude",
-    "ANTHROPIC_WORKSPACE_ID": "Claude workspace",
+    "GEMINI_API_KEY": "Gemini",
     "PIXABAY_API_KEY": "Pixabay",
     "PEXELS_API_KEY": "Pexels",
     "ELEVENLABS_API_KEY": "ElevenLabs",
@@ -2758,6 +2756,8 @@ def delete_video(name: str):
     return {"deleted": name}
 
 
+lyricvideo.SONGS_DIR.mkdir(exist_ok=True)
+app.mount("/songs", StaticFiles(directory=lyricvideo.SONGS_DIR), name="songs")  # the lyric video tab's files
 app.mount("/media", StaticFiles(directory=OUTPUT_DIR), name="media")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.mount("/cache", StaticFiles(directory=CACHE_DIR), name="cache")

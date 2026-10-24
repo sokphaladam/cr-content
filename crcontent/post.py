@@ -1,10 +1,10 @@
-"""Post text ideas: several polished title + description + hashtag packages for a finished video, from Claude."""
+"""Post text ideas: several polished title + description + hashtag packages for a finished video, from Gemini."""
 import json
 from pathlib import Path
 
-import anthropic
+from . import llm
 
-from .config import CLAUDE_MODEL, LANGS
+from .config import LLM_MODEL, LANGS
 from .script import VideoScript, make_client
 
 AI_CREDIT = "Music and vocals are AI-generated."
@@ -104,7 +104,7 @@ def _context(job: Path) -> dict:
 
 
 def suggest_posts(job: Path, lang: str, count: int = 5, idea: str = "",
-                  client: anthropic.Anthropic | None = None) -> list[dict]:
+                  client: llm.Client | None = None) -> list[dict]:
     """`count` post packages (angle, title, description, hashtags) for the video in `job`."""
     profile = LANGS.get(lang, LANGS["en"])
     client = client or make_client()
@@ -119,16 +119,14 @@ def suggest_posts(job: Path, lang: str, count: int = 5, idea: str = "",
     if journey():
         system += "\n\n" + JOURNEY_RULE.format(note=journey())
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=6000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": POSTS_SCHEMA}},
         system=system,
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to write post text for this video.")
+        raise RuntimeError("Gemini declined to write post text for this video.")
     options = json.loads(next(b.text for b in response.content if b.type == "text"))["options"]
     out = []
     for o in options:

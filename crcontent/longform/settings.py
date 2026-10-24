@@ -34,7 +34,7 @@ DEFAULTS: dict = {
             "archival": ["archive", "nasa", "commons", "met"],
         },
         "alternatives": 4,           # matches kept per scene for the storyboard to swap between
-        "check_subject": True,       # Claude looks at each pick and flags footage that doesn't show the named animal
+        "check_subject": True,       # Gemini looks at each pick and flags footage that doesn't show the named animal
     },
     "render": {
         "width": 1920, "height": 1080, "fps": 30,

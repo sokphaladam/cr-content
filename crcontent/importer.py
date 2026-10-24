@@ -1,14 +1,14 @@
 """Turn a pasted, free-form script (e.g. from a chat assistant) into a VideoScript.
 
-Claude handles any layout; a basic parser covers the common
-"[0–3s] Hook / Visual: / On-screen text: / Voiceover:" layout when Claude isn't available.
+Gemini handles any layout; a basic parser covers the common
+"[0–3s] Hook / Visual: / On-screen text: / Voiceover:" layout when Gemini isn't available.
 """
 import json
 import re
 
-import anthropic
+from . import llm
 
-from .config import CLAUDE_MODEL, LANGS
+from .config import LLM_MODEL, LANGS
 from .script import KHMER_NOTE, SCHEMA, Scene, VideoScript, make_client
 
 KHMER_CHARS = re.compile(r"[ក-៿]")
@@ -47,30 +47,28 @@ Rules:
 - hashtags: from the script if present, otherwise 5-8 fitting tags; no # sign."""
 
 
-def import_with_claude(text: str, lang: str, client: anthropic.Anthropic | None = None) -> VideoScript:
+def import_with_claude(text: str, lang: str, client: llm.Client | None = None) -> VideoScript:
     client = client or make_client()
     system = IMPORT_SYSTEM + (
         "\n- The script is in Khmer. You may add normal spaces between phrases (every 2-5 words) so captions can be "
         "timed, but do not change any words." if lang == "km" else ""
     )
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=16000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": SCHEMA}},
         system=system,
         messages=[{"role": "user", "content": f"Script language: {LANGS[lang].name}\n\n<script>\n{text}\n</script>"}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to convert this script.")
+        raise RuntimeError("Gemini declined to convert this script.")
     if response.stop_reason == "max_tokens":
         raise RuntimeError("The script is too long to convert in one go; split it into parts.")
     data = json.loads(next(b.text for b in response.content if b.type == "text"))
     return _clean(VideoScript.model_validate(data))
 
 
-# ---------- Basic parser (no Claude needed) ----------
+# ---------- Basic parser (no Gemini needed) ----------
 
 FIELD = re.compile(r"^\s*(?:[-*•]\s*)?\**\s*(visual|b-?roll|footage|on[- ]?screen(?: text)?|text overlay|text|"
                    r"voice ?over|vo|narration|script|caption|hashtags?|title)\s*\**\s*[:：]\s*(.*)$", re.I)
@@ -131,7 +129,7 @@ def parse_basic(text: str) -> VideoScript:
     scenes = [s for s in scenes if s["narration"] or s["text"]]
     if not scenes:
         raise ValueError("Couldn't find any scenes. Label lines with “Voiceover:”, “Visual:” and “On-screen text:”, "
-                         "or connect Claude to import scripts in any format.")
+                         "or connect Gemini to import scripts in any format.")
     return _clean(VideoScript(
         title=title or strip_emoji(scenes[0]["text"]) or "Imported script",
         scenes=[Scene(narration=s["narration"].strip('"“”') or strip_emoji(s["text"]),
@@ -160,6 +158,6 @@ def import_script(text: str, lang: str = "auto", use_claude: bool = True) -> tup
     if use_claude:
         try:
             return import_with_claude(text, lang), lang, "claude"
-        except (anthropic.APIError, RuntimeError):
+        except (llm.APIError, RuntimeError):
             pass  # fall back to the basic parser below
     return parse_basic(text), lang, "basic"

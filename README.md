@@ -3,7 +3,7 @@
 Topic in → ready-to-post 9:16 video out (TikTok, Reels, YouTube Shorts), in English or Khmer.
 
 ```
-topic → Claude script → Edge TTS voiceover → Pexels footage → FFmpeg (captions + music) → video.mp4 + post.txt
+topic → Gemini script → Edge TTS voiceover → Pexels footage → FFmpeg (captions + music) → video.mp4 + post.txt
 ```
 
 ## Setup
@@ -15,7 +15,7 @@ python -m venv .venv
 
 Requires FFmpeg on PATH. In the app, open **Settings** (bottom of the left rail) to add or replace these keys;
 they're saved to `.env` in the data folder (created from `.env.example` on first run) and apply right away. Keys:
-- `ANTHROPIC_API_KEY`: Claude writes the scripts. Not needed with `--script`.
+- `GEMINI_API_KEY`: Gemini writes the scripts. Not needed with `--script`.
 - `PIXABAY_API_KEY` (or `PEXELS_API_KEY`): free stock footage. Without one you get animated gradient backgrounds, or clips from `assets/footage/`. Pixabay key: sign up, then see https://pixabay.com/api/docs/
 
 ## Desktop app (Tauri)
@@ -139,15 +139,15 @@ video is never changed). Rendering keeps the draft, and the video's `meta.json` 
 .venv\Scripts\python app.py --reload   # dev mode: auto-restarts when you edit code
 ```
 
-Write a topic, let Claude draft the script, edit scenes in the storyboard, pick voice/speed/music,
+Write a topic, let Gemini draft the script, edit scenes in the storyboard, pick voice/speed/music,
 then render and watch progress live.
 
 Each scene's background can be:
-- **Auto**: footage found from the scene's search words (Pixabay/Pexels); when none is found, Claude draws the scene
-  (gradient only when Claude is unavailable too)
-- **Find footage**: search stock videos or photos and click one; **Ask Claude for ideas** suggests better search words;
-  **Design with Claude** draws an original background from the search words and narration (no text, calm middle
-  band for the captions, slow zoom like a photo; cached in `cache/art/`); **Animate** has Claude design a moving
+- **Auto**: footage found from the scene's search words (Pixabay/Pexels); when none is found, Gemini draws the scene
+  (gradient only when Gemini is unavailable too)
+- **Find footage**: search stock videos or photos and click one; **Ask Gemini for ideas** suggests better search words;
+  **Design with Gemini** draws an original background from the search words and narration (no text, calm middle
+  band for the captions, slow zoom like a photo; cached in `cache/art/`); **Animate** has Gemini design a moving
   background instead (drifting light, particles, parallax) that becomes a seamless 6-second looping clip, about two
   minutes
 - **Upload video or photo**: your own clip or image (photos get a slow zoom)
@@ -194,22 +194,22 @@ photo over the footage for a while; **Add text** puts extra text on screen (size
 **Paste a script** (on the start screen) imports a script written anywhere, e.g. from a chat assistant:
 `Title:` / `[0–3s] Hook` / `Visual:` / `On-screen text:` / `Voiceover:` blocks, or any other layout. Voiceover
 is kept word for word, visual notes become footage searches, emojis are removed from on-screen text, and
-production tips or chat text are ignored. Claude does the conversion; without Claude a basic reader handles
+production tips or chat text are ignored. Gemini does the conversion; without Gemini a basic reader handles
 the `Visual / On-screen text / Voiceover` layout. CLI: `python make.py --import script.txt`.
 
 **Translate to ខ្មែរ / English** (top of the storyboard) rewrites the title, narration, headlines, caption
-and hashtags in the other language with Claude, keeping every scene's background. Render it as a new video;
+and hashtags in the other language with Gemini, keeping every scene's background. Render it as a new video;
 the original stays in the library.
 
 **Thumbnail → Suggest covers** (on any rendered video, music videos included) scores frames for sharpness, colour,
-contrast and exposure, then shows Claude the best ones: it picks the frames and writes 4 short click-worthy headlines
+contrast and exposure, then shows Gemini the best ones: it picks the frames and writes 4 short click-worthy headlines
 (numbers, questions, bold claims) in different styles (Bold / Box / Stacked) with the key word highlighted. Write a
 **Cover idea** first ("a silhouette against a neon city, the headline asks a question") and the covers follow it; a
 picture the video doesn't contain comes from stock photos instead. Click one to use it, then fine-tune the headline,
-highlighted word, style or frame, or **Use my own photo** as the background. Without Claude the headlines come from
+highlighted word, style or frame, or **Use my own photo** as the background. Without Gemini the headlines come from
 the script.
 
-With Claude every suggestion is also **Designed**: Claude lays out the whole cover around the frame as SVG (colour
+With Gemini every suggestion is also **Designed**: Gemini lays out the whole cover around the frame as SVG (colour
 grade, panels, badges, arrows, the headline in real type), renders it, looks at the result once and fixes anything
 that's cut off or hard to read. Pick the **Designed** style yourself to get one for your own headline and frame;
 changing the words keeps the design, changing the frame or photo re-renders instantly. New renders also
@@ -248,10 +248,10 @@ One video per episode. The workbook needs a **Scripts** sheet with a header row 
 On-screen Text | Voiceover` (one row per scene). Optional sheets add the rest: a plan sheet (`Ep | Animal | Hook |
 YouTube Title | … | Music / Mood | Key Visual | Status`), **Descriptions** (`Ep | Title | Description | Hashtags`)
 and **Fact Check** (`Ep | … | Note`). Sheets are found by their headers, not their names. The voiceover is spoken
-word for word; Claude turns each Visual description into a stock-footage search (without Claude, keywords from it).
+word for word; Gemini turns each Visual description into a stock-footage search (without Gemini, keywords from it).
 Sound cues in brackets, like `(Chainsaw sound)`, aren't spoken, and a scene that is only a cue becomes a silent
 beat as long as its Time span (add the sound effect yourself). **Music / Mood** picks the background track:
-with Music on random, Claude chooses the `assets/music` file that fits the mood (without Claude, a file whose name
+with Music on random, Gemini chooses the `assets/music` file that fits the mood (without Gemini, a file whose name
 shares the most words with it, e.g. `warm-piano.mp3` for "Warm, soft piano"); when nothing in the library fits and a
 Jamendo client ID is set, a matching free track is fetched from Jamendo. **Key Visual** is the shot the video is built
 around: its scene gets the most precise footage search, the other scenes keep a matching look, and the cover is
@@ -285,9 +285,9 @@ Background music: drop royalty-free `.mp3` files into `assets/music/` (one is pi
 Have a finished song? **New video → Music video → Use my song**: pick the mp3 (or wav/m4a/flac), paste the lyrics
 (one sung line per row, `[Verse]` / `[Chorus]` headings optional), choose **16:9** (YouTube) or **9:16**, and upload.
 Other `[square bracket]` lines, like `[Soft synth swell]` or `[Drums drop out]`, are sound notes: they're never shown
-as lyrics, and Claude reads them when picking footage.
+as lyrics, and Gemini reads them when picking footage.
 
-1. Claude reads the lyrics and picks a stock-footage search for each part of the song (without Claude: general scenery).
+1. Gemini reads the lyrics and picks a stock-footage search for each part of the song (without Gemini: general scenery).
 2. Whisper times every lyric from what's actually sung. Demucs strips the music first so the words are heard
    clearly; the song is transcribed in short overlapping chunks (one long pass often stops halfway), and the heard
    words are matched to your lyrics in order, allowing for mishearings, so a repeated chorus lines up with the
@@ -302,8 +302,8 @@ as lyrics, and Claude reads them when picking footage.
 4. **Make music video**: footage cut on the beat (tempo detected from the song), karaoke lyrics (16:9 shows the next
    line dimmed underneath), the whole song as the soundtrack. Full-length songs take several minutes.
    Optionally write a **Video idea** first ("a woman driving through neon Tokyo at night, rain on the windshield"),
-   or press **Suggest ideas** for Claude's concepts (each with a matching look and lyric style): Claude plans the
-   footage search for every section around it (without Claude, the idea's words are searched).
+   or press **Suggest ideas** for Gemini's concepts (each with a matching look and lyric style): Gemini plans the
+   footage search for every section around it (without Gemini, the idea's words are searched).
    **Footage look** puts one colour grade over every clip (Natural, Cinematic, Warm film, Moody, Vibrant, Black &
    white) plus a slow camera drift, so stock clips look like one film. **Lyrics style** picks a preset (Classic, Neon,
    Bold pop, Cinematic, Minimal, Boxed) with a live preview; **Customize** changes the font, colours, effect (karaoke,
@@ -319,7 +319,7 @@ The first sync downloads the Whisper and Demucs models (about 2 GB, once).
 
 ## AI songs and music videos
 
-Claude writes original lyrics, ElevenLabs Music composes and sings them, and the song becomes a vertical music video
+Gemini writes original lyrics, ElevenLabs Music composes and sings them, and the song becomes a vertical music video
 with footage cut on the beat and karaoke lyrics. ElevenLabs reports when it sang each word (`timestamps.json` in the
 song folder); the lyrics are timed from those straight after composing, matched letter by letter so ad-libs and
 different word splits (Khmer too) don't matter. That timing is exact and the same every time; listening with Whisper
@@ -351,8 +351,8 @@ Picks the most attractive 15–30 s of a finished music video, renders the best 
 writes a report to compare them.
 
 **In the app**: open a music video and press **Find highlights** on the **Smart Highlights** card, under the video
-(optionally with an artist name for the covers, and with or without Claude's judging). It takes a few minutes, and you
-can keep working meanwhile. The card then lists the picks in order, each with its covers, Claude's hook and reason, a caption to
+(optionally with an artist name for the covers, and with or without Gemini's judging). It takes a few minutes, and you
+can keep working meanwhile. The card then lists the picks in order, each with its covers, Gemini's hook and reason, a caption to
 copy and **Open clip**, plus a link to the full report. The clips are added to Videos and aren't auto-uploaded: they're
 alternatives to choose from. Run it again any time; earlier clips stay.
 
@@ -364,7 +364,7 @@ alternatives to choose from. Run it again any time; earlier clips stay.
 .venv\Scripts\python make.py --highlights song.mp4 --lyrics lyrics.txt --title "Replay" --artist "Your name"
 ```
 
-Add `--no-judge` to skip Claude this time, `--no-render` to analyse and report only, and `--artist` to put a name on
+Add `--no-judge` to skip Gemini this time, `--no-render` to analyse and report only, and `--artist` to put a name on
 the covers. On a short-studio music video folder, the lyrics, their word timing (`lyrics.json`, including your
 hand corrections) and the song's sections come from the folder itself. For any other video, pass its lyrics: they're
 forced-aligned to the audio with stable-ts (vocals isolated with Demucs first). Plain transcription isn't used,
@@ -384,9 +384,9 @@ How a clip is chosen (`crcontent/highlights/`):
    word. The end goes to the next bar or beat after the last word, before the next line. A hook bonus goes to clips
    whose first 2 s hold a strong line or a beat drop. The top picks never overlap, and a clip that repeats the lyrics
    of one already picked (the same chorus again) is marked down a little.
-5. **AI judge** (`judge.py`, optional): Claude looks at the top 5 (lyrics plus 4 frames each) and ranks them by
+5. **AI judge** (`judge.py`, optional): Gemini looks at the top 5 (lyrics plus 4 frames each) and ranks them by
    hook strength, with a reason, an on-screen hook (8 words at most) and an Instagram / Shorts caption. Uses
-   `ANTHROPIC_API_KEY` from `.env`. Without it, or with the judge off, the score ranking stands.
+   `GEMINI_API_KEY` from `.env`. Without it, or with the judge off, the score ranking stands.
 6. **Covers** (`covers.py`): each clip's frames are scored for sharpness, face size, open eyes, contrast, colour and
    rule of thirds. The best 3 become 1080×1920 covers with the title in big letters, kept out of the bottom 20% and
    right 15% (the apps' buttons and captions). Khmer and English, even mixed in one title, each get their own heavy
@@ -397,8 +397,8 @@ How a clip is chosen (`crcontent/highlights/`):
    picture is shown whole over a blurred fill, so its burned-in lyrics stay readable.
 
 Each clip is a normal Library video, `output/<time>-<lang>-hl<rank>-<title>/` (`video.mp4`, `thumbnail.jpg`,
-`post.txt` with Claude's caption, `meta.json`), ready for the Upload card. Analysis and covers go to the source video's
-`highlights/` folder: `report.html` (open it in a browser: song timeline, score breakdown, Claude's reason, hook,
+`post.txt` with Gemini's caption, `meta.json`), ready for the Upload card. Analysis and covers go to the source video's
+`highlights/` folder: `report.html` (open it in a browser: song timeline, score breakdown, Gemini's reason, hook,
 caption with a copy button, covers and the clip for every candidate), `report.json`, `structure.json`,
 `visual.json` and `candidate_<n>/cover_<k>.jpg`.
 
@@ -437,7 +437,7 @@ The steps (`crcontent/longform/`):
    8–15 min, or chapters YouTube won't accept (under 10 s, fewer than 3), is flagged.
 4. **Footage** (`footage.py`), for each scene in this order:
    1. Your own file, `media/<script>/scene-XX.mp4` (or .mov, .jpg, .png...).
-   2. What the scene is, as Claude reads the script (any topic, not only wildlife). Each kind is searched in the
+   2. What the scene is, as Gemini reads the script (any topic, not only wildlife). Each kind is searched in the
       libraries that suit it:
       - **footage** (everyday shots): Pexels and Pixabay (most popular, full-HD clips first), then Wikimedia
         Commons.
@@ -449,11 +449,11 @@ The steps (`crcontent/longform/`):
       - **graphic** (a comparison, a list, a logo sting, an end screen): a card drawn by the app (`cards.py`).
       - **montage** (a cold open, a recap): quick cuts of the footage picked for the other scenes.
 
-      The search words come from the Visual column; Claude names the subject of each section, so "Slow-motion catch"
+      The search words come from the Visual column; Gemini names the subject of each section, so "Slow-motion catch"
       under #10 GREEN HERON searches "green heron catching fish".
    3. Nothing good enough: a card with the scene's on-screen text, flagged.
 
-   Claude looks at each pick. Under 7/10 it tries the next match, spread across the libraries, then the broader
+   Gemini looks at each pick. Under 7/10 it tries the next match, spread across the libraries, then the broader
    search words. A pick under 5/10 is never used, whatever the libraries had: the scene gets a card and a flag
    instead. Each scene keeps a few alternatives. Every file's source page, author and licence is saved
    (`footage.json`).
@@ -483,7 +483,7 @@ Everything lands in `output/<time>-<lang>-<title>/`: `video.mp4` and the files a
 - `voice`: the engine, and the voices per language.
 - `timing.pad_seconds`.
 - `footage`: `media_dir`, `sources` and their order (for everyday footage), `by_kind` (the libraries for species
-  and archival scenes), `alternatives`, and `check_subject` (Claude's check).
+  and archival scenes), `alternatives`, and `check_subject` (Gemini's check).
 - `render`: size, `crossfade`, `look` (`natural`, `cinematic`, `film`, `moody`, `vibrant` or `mono`), `encoder`
   (`auto`, `nvenc` or `cpu`), `captions`, and how long title cards and lower thirds stay up.
 - `music`: `dir` and `volume`.
@@ -510,7 +510,7 @@ Description + hashtags | Pinned comment`. The voiceover is spoken word for word;
 1. **Hook**: the first beat shows the animal in motion under a big hook text, and its line ends within 2 s. The hook
    clip is picked on its own (`hook.py`): each candidate is scanned for the animal's own motion (optical flow with
    the camera's pan or zoom taken out, so slow zooms and still close-ups are rejected), sharpness and brightness, its
-   best 2 s found, and Claude checks those frames for the right animal, real movement, and no logo, text or intro.
+   best 2 s found, and Gemini checks those frames for the right animal, real movement, and no logo, text or intro.
    Rejected clips are listed with the reason.
 2. **Length**: 22–30 s from the real TTS audio (not the sheet's times; each beat lasts as long as its speech). Over
    30 s, the report names the beat to cut (never the hook or the loop line).
@@ -519,13 +519,13 @@ Description + hashtags | Pinned comment`. The voiceover is spoken word for word;
 4. **Title**: no hashtags; any found move to the description.
 
 **Footage**, per beat: your file `media\<plan>-epNN\scene-XX.mp4` (or .mov / .jpg...), then Pixabay (vertical
-clips, or 4K ones that stay sharp cropped to 9:16), checked by Claude. Stock rarely has the exact action ("cat drops
+clips, or 4K ones that stay sharp cropped to 9:16), checked by Gemini. Stock rarely has the exact action ("cat drops
 a toy mouse"), so a beat nothing matches gets a checked general shot of the episode's animal (flagged), and only
 when there's none, a placeholder card (flagged). The 9:16 crop is centred on the animal.
 
 **The pre-flight report** (`preflight.html`) lists the checks (hook beat, length, loop line, loop shot, hook shot,
-title, placeholders), **Claude's hook judge** (a 1–10 score with its reasons, 3 stronger first lines and 3 stronger
-on-screen hooks), and the storyboard: one frame per beat with its text, voiceover, source, Claude's score and
+title, placeholders), **Gemini's hook judge** (a 1–10 score with its reasons, 3 stronger first lines and 3 stronger
+on-screen hooks), and the storyboard: one frame per beat with its text, voiceover, source, Gemini's score and
 anything flagged. Nothing renders until `--approve`; a re-run needs approving again.
 
 **Each Short's folder**: `video.mp4` (1080×1920, 30 fps, H.264 + AAC, −14 LUFS, NVENC with CPU fallback),
@@ -585,13 +585,13 @@ Keys and tokens are kept in `accounts.json` (in the data folder, never committed
 
 **Campaigns** in the left rail turns a paid clipping campaign into ready-to-post clips:
 
-1. **Add**: open the campaign on Whop, copy the whole page and paste it (plus its link). Claude pulls out the
+1. **Add**: open the campaign on Whop, copy the whole page and paste it (plus its link). Gemini pulls out the
    brief, the content requirements (length, required hashtags, accounts to tag, phrases the caption must include,
    ad disclosure, rules and don'ts) and the links to the reference materials. Everything stays editable.
 2. **Reference materials**: links are downloaded with yt-dlp (YouTube, single Drive/Dropbox files, direct video
    links); folders can't be, so download those files and add them. **Prepare** downloads and transcribes them
    with Whisper (`pip install -r requirements-music.txt`).
-3. **Make clips**: Claude reads the transcripts and picks the strongest moments that fit the brief. Each becomes
+3. **Make clips**: Gemini reads the transcripts and picks the strongest moments that fit the brief. Each becomes
    a 9:16 clip (whole picture over a blurred fill, or cropped), with captions, an on-screen hook and post text
    that carries every required hashtag, mention, phrase and disclosure. Clips also appear in Videos.
 4. **Post**: upload or schedule each clip, or **Schedule new** to spread all unposted clips over your posting
@@ -608,25 +608,37 @@ out when you open it. The queue is kept in `schedule.json`, campaigns in `campai
 
 | Module | Job |
 |---|---|
-| `crcontent/script.py` | Claude prompt + JSON schema for hook, scenes, caption and hashtags |
+| `crcontent/script.py` | Gemini prompt + JSON schema for hook, scenes, caption and hashtags |
 | `crcontent/sheet.py` | Reads an Excel content plan into one script per episode (`make.py --excel`) |
 | `crcontent/tts.py` | Edge TTS voiceover with word timings |
 | `crcontent/visuals.py` | Pexels search/download (cached), local footage, gradient fallback |
-| `crcontent/art.py` | Claude as art director: SVG backgrounds and designed covers, rendered with resvg |
-| `crcontent/motion.py` | Plays Claude's SMIL-animated SVG frame by frame into a looping mp4 (resvg + FFmpeg) |
+| `crcontent/art.py` | Gemini as art director: SVG backgrounds and designed covers, rendered with resvg |
+| `crcontent/motion.py` | Plays Gemini's SMIL-animated SVG frame by frame into a looping mp4 (resvg + FFmpeg) |
 | `crcontent/captions.py` | Word-highlight `.ass` captions and scene headlines |
 | `crcontent/render.py` | FFmpeg scene clips, concat, burn-in, music ducking |
-| `crcontent/lyrics.py` | Claude prompt + schema for original songs (sections, lyrics, sound) |
+| `crcontent/lyrics.py` | Gemini prompt + schema for original songs (sections, lyrics, sound) |
 | `crcontent/song.py` | ElevenLabs Music: compose + vocal/instrumental stems |
 | `crcontent/align.py` | Lyric timing (stable-ts forced alignment + repair of stray words, even-spacing fallback) |
 | `crcontent/beats.py` | Beat detection and beat-synced shot plan |
-| `crcontent/campaigns.py` | Campaigns: read the brief and requirements (Claude), download and transcribe references, pick and cut clips |
+| `crcontent/campaigns.py` | Campaigns: read the brief and requirements (Gemini), download and transcribe references, pick and cut clips |
 | `crcontent/schedule.py` | Scheduled uploads queue and posting-time slots |
 | `crcontent/publish.py` | YouTube / TikTok sign-in (OAuth + PKCE) and uploads, auto-upload settings |
 | `crcontent/web.py` + `web/` | FastAPI backend and the browser UI |
 | `crcontent/highlights/` | Smart Highlights: best Shorts / Reels clips of a music video |
 | `crcontent/longform/` | Script to Video: long 16:9 YouTube video from a script `.md`, with a storyboard to approve |
 | `crcontent/config.py` | Voices, fonts, sizes per language |
+| `crcontent/llm.py` | Gemini client behind one call shape (`GEMINI_API_KEY`; model from `LLM_MODEL`, default `gemini-flash-lite-latest`) |
+
+## Fewer Gemini calls
+
+The heavy, optional checks are off or reduced by default (set them back if you want the extra checking):
+
+| What | Default | To change it |
+|---|---|---|
+| Shorts: Gemini looks at candidate clips (one image call each) | every beat (kept: checking only the hook let wrong animals through) | `shorts.json` → `footage.check`: `"all"`, `"hook"` or `"off"`. Beats it skips take the first clip tagged with the animal, so clips of look-alike animals can slip in. |
+| Music video: Gemini checks each AI picture (and a real photo is fetched as a reference) | off | `PICTURE_CHECK=1` in `.env` |
+| Smart Highlights: Gemini judge | off (tick it on the Highlights card) | `highlights.json` → `ai_judge.enabled` for the command line |
+| Shorts analytics: hook-style tags | keyword rules | `shorts.json` → `analytics.ai_tags`: `true` |
 
 ## Roadmap ideas
 

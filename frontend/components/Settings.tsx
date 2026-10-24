@@ -14,14 +14,7 @@ export const PLATFORMS: Platform[] = ["youtube", "tiktok", "facebook", "instagra
 const META: Platform[] = ["facebook", "instagram"];
 
 const SERVICES: { key: ServiceKey; name: string; does: string; url: string; optional?: boolean }[] = [
-  { key: "ANTHROPIC_API_KEY", name: "Claude", does: "Writes scripts, lyrics, titles, descriptions and cover ideas.", url: "https://platform.claude.com/settings/keys" },
-  {
-    key: "ANTHROPIC_WORKSPACE_ID",
-    name: "Claude workspace ID",
-    does: "Only for an organization key that isn't scoped to a workspace.",
-    url: "https://platform.claude.com/settings/workspaces",
-    optional: true,
-  },
+  { key: "GEMINI_API_KEY", name: "Gemini", does: "Writes scripts, lyrics, titles, descriptions and cover ideas. Has a free tier.", url: "https://aistudio.google.com/apikey" },
   { key: "PIXABAY_API_KEY", name: "Pixabay", does: "Free stock footage and photos for your scenes.", url: "https://pixabay.com/api/docs/" },
   { key: "PEXELS_API_KEY", name: "Pexels", does: "A second stock footage library, used when Pixabay isn't set.", url: "https://www.pexels.com/api/", optional: true },
   { key: "ELEVENLABS_API_KEY", name: "ElevenLabs", does: "Composes AI songs. Needs Music API access.", url: "https://elevenlabs.io/app/settings/api-keys" },
@@ -1131,7 +1124,7 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
           {platform === "youtube" && (
             <label className="flex items-center gap-2 text-base font-semibold sm:col-span-3">
               <input type="checkbox" checked={a.comment ?? true} onChange={(e) => change({ comment: e.target.checked })} className="size-4 accent-cobalt" />
-              Post Claude&apos;s fact-check comment after upload (a comment you write is always posted)
+              Post Gemini&apos;s fact-check comment after upload (a comment you write is always posted)
             </label>
           )}
         </div>
@@ -1210,7 +1203,7 @@ function UploadQueue() {
   );
 }
 
-/** Settings: the keys for Claude and the media services, the channels videos upload to, and where files are kept. */
+/** Settings: the keys for Gemini and the media services, the channels videos upload to, and where files are kept. */
 export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
   const [keys, setKeys] = useState<ServiceKeys | null>(null);
   const [accounts, setAccounts] = useState<PublishAccounts | null>(null);
@@ -1268,7 +1261,7 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
           <Section
             id="journey"
             title="Your journey"
-            intro="Viewers stick with a channel they feel they're growing with. Say where you are, and Claude works one honest line about it into each description it writes, never into the video itself."
+            intro="Viewers stick with a channel they feel they're growing with. Say where you are, and Gemini works one honest line about it into each description it writes, never into the video itself."
           >
             <JourneyRow />
           </Section>

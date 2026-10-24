@@ -13,7 +13,7 @@ function length(seconds: number) {
 }
 
 /** Proven ideas, weakly packaged: YouTube videos with 5x+ more views than their channel's subscribers, judged by
- * Claude for a weak title, thumbnail or execution. "Make it better" hands the remake plan to the script writer. */
+ * Gemini for a weak title, thumbnail or execution. "Make it better" hands the remake plan to the script writer. */
 export function OutlierFinder({ query, lang, disabled, onRemake }: { query: string; lang: Lang; disabled: boolean; onRemake: (topic: string) => void }) {
   const [kind, setKind] = useState<"short" | "long">("short");
   const [videos, setVideos] = useState<Outlier[] | null>(null);
@@ -45,7 +45,7 @@ export function OutlierFinder({ query, lang, disabled, onRemake }: { query: stri
           disabled={disabled || !query.trim()}
           icon={<Search className="size-3.5" />}
           onClick={find}
-          title="Searches YouTube for videos about your topic that got at least 5 views per channel subscriber, then Claude spots the ones with a strong idea but weak packaging."
+          title="Searches YouTube for videos about your topic that got at least 5 views per channel subscriber, then Gemini spots the ones with a strong idea but weak packaging."
         >
           Find outliers to remake
         </Button>
@@ -59,7 +59,7 @@ export function OutlierFinder({ query, lang, disabled, onRemake }: { query: stri
           ]}
         />
       </div>
-      {busy && <p className="m-0 text-sm text-ink-soft">Searching YouTube, then Claude judges each title and thumbnail. This takes about a minute.</p>}
+      {busy && <p className="m-0 text-sm text-ink-soft">Searching YouTube, then Gemini judges each title and thumbnail. This takes about a minute.</p>}
       {error && <p className="m-0 text-sm text-danger">{error}</p>}
       {note && <p className="m-0 text-sm text-ink-soft">{note}</p>}
       {videos && videos.length > 0 && (

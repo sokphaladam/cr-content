@@ -8,7 +8,7 @@ subject's own motion, as a distance (fine detail like fur can't fake it). So:
 - static: neither moves -> rejected
 - dark (fades, night shots) or soft -> rejected
 Every window of the beat's length is scored (own motion, sharpness, exposure; never across a cut or in the first
-fade-in). The best window then goes to Claude with the planned shot (match.py), and judged() applies what it saw:
+fade-in). The best window then goes to Gemini with the planned shot (match.py), and judged() applies what it saw:
 the wrong animal, no movement, a logo or an intro rejects it. Clips that fail are listed with the reason.
 """
 import math
@@ -55,7 +55,7 @@ class Scan:
     bright: float = 0.0
     score: float = 0.0
     reject: str = ""           # why the clip can't open the Short ("" = it can)
-    check: dict = field(default_factory=dict)  # Claude's look at the window
+    check: dict = field(default_factory=dict)  # Gemini's look at the window
 
     def to_json(self) -> dict:
         return {k: round(v, 3) if isinstance(v, float) else v for k, v in asdict(self).items()}
@@ -169,7 +169,7 @@ def scan(path: Path, beat: float) -> Scan:
 
 
 def judged(s: Scan, check: dict) -> Scan:
-    """`s` with Claude's look at its window applied (match.check): the wrong animal, one that doesn't move, a logo or
+    """`s` with Gemini's look at its window applied (match.check): the wrong animal, one that doesn't move, a logo or
     an intro rejects it. (How well it shows the planned shot is its match score, weighed by the picker.)"""
     s.check = check
     if s.reject:
@@ -181,5 +181,5 @@ def judged(s: Scan, check: dict) -> Scan:
     elif check.get("intro_or_title"):
         s.reject = "an intro, title card or fade"
     elif check.get("in_motion") is False:
-        s.reject = f"the animal doesn't move in the frames Claude saw ({check.get('seen', '')})"
+        s.reject = f"the animal doesn't move in the frames Gemini saw ({check.get('seen', '')})"
     return s

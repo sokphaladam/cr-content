@@ -543,7 +543,7 @@ def render_shot(image: Path, length: float, out: Path, *, size: tuple[int, int] 
     colour split with "chromatic". impacts: seconds to HIT (pacing.impacts): a hard zoom punch, a shake, a white
     flash, a colour split and a shockwave ring from the subject. cuts: seconds to cut to a new framing of the
     picture (punch-ins on the subject at different sizes), so a held picture still changes every 1-2 s. focus: where
-    the subject is (-1..1 grid units; from Claude's check of the picture), else it's found from the depth map.
+    the subject is (-1..1 grid units; from Gemini's check of the picture), else it's found from the depth map.
     voice: the shot's audio (silent without). look: a colour grade (styles.LOOKS).
     parallax: strength of the 3D moves (0 = flat).
     tape: an old-tape treatment (TAPES); wear: 0..1, how worn that tape is; frame: "4:3" shows the shot as a home

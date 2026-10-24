@@ -6,7 +6,7 @@ watch (%). Columns are found by their names, the "Total" row is skipped.
 
 Each video is matched to an episode of a content plan by title (the plan's new and old titles; emoji, hashtags and
 punctuation ignored) and tagged:
-- hook style (HOOK_STYLES): Claude reads the title (and the matched episode's first line), with keyword rules as
+- hook style (HOOK_STYLES): Gemini reads the title (and the matched episode's first line), with keyword rules as
   the fallback ("your cat" -> "your cat + hidden meaning", ...)
 - length: a bucket from Duration
 - animal / topic
@@ -21,7 +21,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from ..config import CLAUDE_MODEL, ROOT
+from ..config import LLM_MODEL, ROOT
 from ..importer import strip_emoji
 
 PATH = ROOT / "shorts-analytics.json"
@@ -136,7 +136,7 @@ def length_bucket(seconds: float) -> str:
 
 
 def rule_style(title: str, first_line: str = "") -> str:
-    """The hook style from keywords alone (no Claude)."""
+    """The hook style from keywords alone (no Gemini)."""
     t = f"{title} {first_line}".lower()
     if re.search(r"\byour (cat|kitten)\b", t):
         return "your cat + hidden meaning"
@@ -154,20 +154,29 @@ def rule_style(title: str, first_line: str = "") -> str:
     return "question" if "?" in title else "other"
 
 
-def tag(videos: list[Video], log=print) -> None:
-    """hook_style, length and animal for every video: Claude in one call, keyword rules without it."""
+class _NoAI(Exception):
+    """Keyword rules were asked for: skip the Gemini call."""
+
+
+def tag(videos: list[Video], log=print, ai: bool | None = None) -> None:
+    """hook_style, length and animal for every video: keyword rules, or Gemini in one call when `ai` (default:
+    shorts.json "analytics.ai_tags") is on."""
     for v in videos:
         v.length = length_bucket(v.seconds)
+    if ai is None:
+        from . import settings
+
+        ai = bool(settings.load().get("analytics", {}).get("ai_tags", False))
     try:
+        if not ai:
+            raise _NoAI
         from ..script import make_client
 
         listing = "\n".join(f"{k}. {v.title}" + (f"  (first line: {v.first_line})" if v.first_line else "")
                             for k, v in enumerate(videos, 1))
         response = make_client().beta.messages.create(
-            model=CLAUDE_MODEL,
+            model=LLM_MODEL,
             max_tokens=8000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
             output_config={"effort": "low", "format": {"type": "json_schema", "schema": TAG_SCHEMA}},
             messages=[{"role": "user", "content": (
                 "These are YouTube Shorts from an animal-facts channel. Tag each one's hook style (how the title and "
@@ -184,8 +193,10 @@ def tag(videos: list[Video], log=print) -> None:
             if k in got:
                 v.hook_style = got[k]["hook_style"]
                 v.animal = v.animal or got[k]["animal"].strip().lower()
+    except _NoAI:
+        pass
     except Exception as e:
-        log(f"  ! couldn't tag with Claude ({type(e).__name__}); hook styles from keywords")
+        log(f"  ! couldn't tag with Gemini ({type(e).__name__}); hook styles from keywords")
     for v in videos:
         v.hook_style = v.hook_style or rule_style(v.title, v.first_line)
         v.animal = (v.animal or "").split(":")[0].strip().lower()
