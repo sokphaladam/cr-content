@@ -63,6 +63,11 @@ def capped(data: dict, key_objects: list[str]) -> dict:
     return {**data, "score": score, "missing": missing}
 
 
+def evidence(m: dict) -> dict:
+    """What the judge saw of the key objects, kept with the clip so the pre-flight can show it: {objects_seen, missing}."""
+    return {"objects_seen": list(m.get("objects_seen", [])), "missing": list(m.get("missing", []))}
+
+
 def unchecked() -> dict:
     """The result for a clip Gemini was not asked about (shorts.json footage.check): it passes, centred."""
     return {"score": PASS, "objects_seen": [], "missing": [], "animal": True, "in_motion": None,

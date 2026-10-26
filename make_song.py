@@ -110,7 +110,7 @@ def cmd_thumbnail(args) -> int:
 def cmd_hook(args) -> int:
     from neonmekong import hook
     try:
-        hook.run(Path(args.song), force=args.force)
+        hook.run(Path(args.song), force=True)
     except (FileNotFoundError, RuntimeError) as e:
         print(e)
         return 1
@@ -125,12 +125,10 @@ def cmd_video(args) -> int:
         print(f"need song.json and lyrics.lrc in {folder} (run analyze first)")
         return 1
     data = songjson.load(sj)
-    options = [args.hook]
-    if args.hook in ("auto", "both"):
-        late = (data.get("vocal_start") or 0) > hook.LATE_VOCAL
-        options = ["trim", "preview"] if late else ["full"]
-    if any(o in ("trim", "preview") for o in options) and not (folder / "out" / "hook" / "hook.json").exists():
-        hook.run(folder, force=args.hook in ("trim", "preview"))
+    # one video, the song as it is (original music from the first second); trim / preview only when asked for
+    options = ["full"] if args.hook in ("auto", "both") else [args.hook]
+    if any(o in ("trim", "preview") for o in options):
+        hook.run(folder, force=True)
     draft = args.draft or args.dry_run
     try:
         for option in options:
@@ -253,14 +251,14 @@ def main(argv=None) -> int:
     n = sub.add_parser("thumbnail", help="write out/thumbnail.jpg (1280x720)")
     n.add_argument("song", help="songs/<slug>")
     n.set_defaults(fn=cmd_thumbnail)
-    h = sub.add_parser("hook", help="hook-first edit: render the trim and chorus-preview options (vocal after 10s)")
+    h = sub.add_parser("hook", help="hook-first edit: the trim and chorus-preview audio and lyrics")
     h.add_argument("song", help="songs/<slug>")
-    h.add_argument("--force", action="store_true", help="render both options even if the vocal starts early")
+    h.add_argument("--force", action="store_true", help="kept for old scripts: the edit is always made")
     h.set_defaults(fn=cmd_hook)
     v = sub.add_parser("video", help="render the 16:9 lyric video (out/lyric_<option>.mp4)")
     v.add_argument("song", help="songs/<slug>")
     v.add_argument("--hook", choices=("auto", "both", "full", "trim", "preview"), default="auto",
-                   help="auto/both: trim + preview when the vocal starts after 10s, else full (default)")
+                   help="auto (default): the one full video with the original music; trim / preview: the hook-first edits")
     v.add_argument("--seconds", type=float, help="render only the first N seconds (for a quick test)")
     v.add_argument("--draft", action="store_true", help="half size, 15 fps, fast encode (always on with --dry-run)")
     v.set_defaults(fn=cmd_video)

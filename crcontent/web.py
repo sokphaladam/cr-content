@@ -17,7 +17,7 @@ from . import llm
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1357,6 +1357,92 @@ def shorts_upload_clip(name: str, n: int, file: UploadFile = File(...)):
     return {"status": report["status"]}
 
 
+class ShortsTrim(BaseModel):
+    start: float          # seconds into the beat's clip where the beat starts showing it
+    end: float | None = None   # where it stops: the stretch plays faster or slower to fit the beat (None: normal speed)
+    apply: bool = False   # False: only score that stretch against the planned shot
+
+
+@app.post("/api/shorts/{name}/beats/{n}/trim")
+def shorts_trim_beat(name: str, n: int, req: ShortsTrim):
+    """Score the stretch of beat `n`'s clip from `start` against its planned shot; with apply, keep it."""
+    from . import shorts
+
+    folder = _short_dir(name)
+    _short_idle(name)
+    try:
+        return shorts.trim_beat(folder, n, req.start, req.apply, log=lambda line: None, end=req.end)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class ShortsEdit(BaseModel):
+    look: str | None = None        # a styles.LOOKS key, or "" for the channel default
+    caption: str | None = None     # a captions.STYLES key
+    transition: str | None = None  # cut | flash | dip
+    graphics: list[str] | None = None  # motion graphics (shorts/graphics.py NAMES)
+
+
+@app.post("/api/shorts/{name}/edit")
+def shorts_edit(name: str, req: ShortsEdit):
+    """Save the Edit panel's mood, caption look and cut style; the render uses them once it's approved again."""
+    from . import shorts
+
+    folder = _short_dir(name)
+    _short_idle(name)
+    try:
+        return shorts.set_edit(folder, req.model_dump(exclude_none=True), log=lambda line: None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/shorts/{name}/edit/suggest")
+def shorts_edit_suggest(name: str):
+    """The mood, captions, cuts and motion graphics that fit this Short (nothing is saved)."""
+    from . import shorts
+
+    folder = _short_dir(name)
+    try:
+        return shorts.suggest_edit(folder)
+    except (OSError, ValueError, KeyError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/shorts/{name}/edit/preview")
+def shorts_edit_preview(name: str, beat: int = 1, look: str = "", caption: str = "classic", graphics: str = ""):
+    """One frame of beat `beat` as the render would draw it with this mood and caption look (the Edit panel)."""
+    import tempfile
+
+    from .shorts import edit
+
+    folder = _short_dir(name)
+    fd, tmp = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)  # Windows can't delete a file while the mkstemp handle is still open
+    out = Path(tmp)
+    try:
+        edit.preview(folder, beat, {"look": look, "caption": caption, "graphics": [g for g in graphics.split(",") if g]}, out)
+        data = out.read_bytes()
+    except (ValueError, RuntimeError, OSError) as e:
+        raise HTTPException(400, str(e))
+    finally:
+        out.unlink(missing_ok=True)
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/shorts/{name}/beats/{n}/source")
+def shorts_beat_source(name: str, n: int):
+    """Beat `n`'s clip, for the trim panel's player."""
+    folder = _short_dir(name)
+    try:
+        entries = json.loads((folder / "footage.json").read_text(encoding="utf-8"))
+        path = Path(entries[n - 1]["chosen"]["file"])
+    except (OSError, ValueError, IndexError, KeyError):
+        raise HTTPException(404, "There's no clip for that beat.")
+    if not path.is_file():
+        raise HTTPException(404, "That clip is gone.")
+    return FileResponse(path)
+
+
 @app.delete("/api/shorts/{name}/beats/{n}/clip")
 def shorts_remove_clip(name: str, n: int):
     """Beat `n` goes back to the stock pick your clip replaced; the checks run again."""
@@ -1552,13 +1638,14 @@ def style_suggestion(name: str, req: StyleSuggestionRequest):
     folder = _video_dir(name)
     if not (folder / "song.json").exists():
         raise HTTPException(400, "This isn't a song.")
-    from .pipeline import suggest_cover_prompt
+    from .pipeline import suggest_background_prompt, suggest_cover_prompt
 
     song = SongScript.load(folder / "song.json")
     idea = req.idea[:IDEA_MAX]
     lyrics = " ".join(line for sec in song.sections for line in sec.lyrics)
     return {**suggest_style(song.mood, song.genre, idea, cover=req.pictures == "cover"),
-            "prompt": suggest_cover_prompt(song, idea, lyrics)}
+            "prompt": suggest_cover_prompt(song, idea, lyrics),
+            "video_prompt": suggest_background_prompt(song, idea, lyrics)}
 
 
 @app.post("/api/videos/{name}/video-ideas")
@@ -2345,6 +2432,33 @@ def _locations_view() -> dict:
     data, videos, default = locations.current()
     return {"data": str(data), "videos": str(videos), "videos_default": default,
             "default_data": str(locations.DEFAULT_DATA), "locked": bool(os.getenv("CRCONTENT_DATA_DIR"))}
+
+
+@app.get("/api/settings/cleanup")
+def settings_cleanup():
+    """What can be cleaned up to save space: groups of files nothing needs now, with their sizes (nothing is deleted)."""
+    from . import cleanup
+
+    groups = cleanup.scan(ROOT, OUTPUT_DIR)
+    return {"groups": groups, "bytes": sum(g["bytes"] for g in groups)}
+
+
+class CleanupRequest(BaseModel):
+    groups: list[str]
+
+
+@app.post("/api/settings/cleanup")
+def settings_cleanup_run(req: CleanupRequest):
+    """Delete the chosen groups (not while a video is being made: its files would be in them)."""
+    from . import cleanup
+
+    with jobs_lock:
+        if any(j["status"] in ("queued", "running") for j in jobs.values()):
+            raise HTTPException(409, "A video is being made. Clean up when it's done.")
+    unknown = [g for g in req.groups if g not in cleanup.CATEGORIES]
+    if unknown:
+        raise HTTPException(400, f"Unknown group: {unknown[0]}")
+    return cleanup.run(ROOT, OUTPUT_DIR, req.groups)
 
 
 @app.get("/api/settings/locations")

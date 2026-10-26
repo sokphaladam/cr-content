@@ -26,7 +26,7 @@ songs/<song-slug>/
   suno.txt              you paste this (format below)
   song.json             made by the tool, you edit it
   lyrics.lrc  upload.txt  checklist.md
-  out/                  thumbnail.jpg, lyric_trim.mp4, lyric_preview.mp4 (or lyric_full.mp4), short_chorus.mp4,
+  out/                  thumbnail.jpg, lyric_full.mp4, short_chorus.mp4,
                         instrumental.mp4, hook/ (hook audio + timing)
 ```
 
@@ -79,7 +79,7 @@ The tags `[Verse] [Chorus] [Bridge] [Intro] [Outro] [Pre-Chorus]` are used; othe
 | `text songs/<slug> [--ai template\|local\|gemini] [--refresh]` | `upload.txt` |
 | `checklist songs/<slug>` | `checklist.md` |
 | `thumbnail songs/<slug>` | `out/thumbnail.jpg` |
-| `hook songs/<slug> [--force]` | trim + preview audio and lyrics (only if the vocal starts after 10 s) |
+| `hook songs/<slug>` | optional hook-first edits (trim / chorus preview); `video --hook trim\|preview` makes them |
 | `video songs/<slug> [--hook auto\|full\|trim\|preview]` | 16:9 lyric video(s) |
 | `short songs/<slug>` | 9:16 chorus Short / Reel |
 | `instrumental songs/<slug>` | same visuals, no lyrics, from `instrumental.wav` |

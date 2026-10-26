@@ -63,13 +63,21 @@ export const LOOK_CSS: Record<Look, string> = {
   vibrant: "contrast(1.06) saturate(1.4)",
   dusk: "sepia(0.2) hue-rotate(-18deg) saturate(1.45) contrast(1.06)",
   mono: "grayscale(1) contrast(1.15)",
+  cyberpunk: "hue-rotate(-24deg) saturate(1.5) contrast(1.14) brightness(0.94)",
+  golden: "sepia(0.35) saturate(1.3) hue-rotate(-8deg) brightness(1.02)",
+  pastel: "saturate(0.85) contrast(0.9) brightness(1.08)",
+  noir: "grayscale(1) contrast(1.5) brightness(0.88)",
+  vintage: "sepia(0.45) saturate(0.85) contrast(0.95)",
+  ice: "hue-rotate(18deg) saturate(0.9) brightness(1.04)",
+  teal: "hue-rotate(-14deg) saturate(1.2) contrast(1.12)",
+  crossprocess: "hue-rotate(12deg) saturate(1.3) contrast(1.15)",
 };
 export const SCENE_BG = "linear-gradient(180deg,#f2a65a 0%,#c9576b 38%,#3b4a8c 70%,#0f1a33 100%)";
 
 export const SIZE_PX = { s: 0.8, m: 1, l: 1.25 };
 
 // grades that darken or desaturate: a flat pastel cover picture looks dirty under them
-const MUDDY_ON_COVER: Look[] = ["cinematic", "moody", "mono", "dusk"];
+const MUDDY_ON_COVER: Look[] = ["cinematic", "moody", "mono", "dusk", "noir", "cyberpunk", "vintage", "ice", "teal"];
 
 // crcontent/pipeline.py PICTURE_PACES; minutes are for a 3-minute song at ~40 s a picture
 const PACES: Record<PicturePace, { label: string; hint: string }> = {
@@ -172,6 +180,7 @@ export function MusicVideoOptions({
   const [ideaFile, setIdeaFile] = useState("");
   const [suggested, setSuggested] = useState<StyleSuggestion | null>(null);
   const [copied, setCopied] = useState(false);
+  const [videoCopied, setVideoCopied] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const look: Look = value.look || "natural";
@@ -320,6 +329,29 @@ export function MusicVideoOptions({
           />
         )}
       </div>
+
+      {suggested?.video_prompt && (
+        <div className="grid gap-1 rounded-lg border border-line p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="field-label">Suggested background video prompt</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                void navigator.clipboard?.writeText(suggested.video_prompt).then(() => setVideoCopied(true));
+                setTimeout(() => setVideoCopied(false), 1800);
+              }}
+            >
+              {videoCopied ? "Copied" : "Copy"}
+            </Button>
+          </div>
+          <code className="block text-sm break-words whitespace-pre-wrap text-ink">{suggested.video_prompt}</code>
+          <span className="text-xs text-ink-soft">
+            From your idea, the title, the lyrics and the song's mood: a looping, text-free background. Paste it into a video generator, then add the clip to
+            the scene in your library.
+          </span>
+        </div>
+      )}
 
       <div className="grid gap-1">
         <span className="field-label">Visuals</span>

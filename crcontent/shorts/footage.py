@@ -167,7 +167,7 @@ class Picker:
         attempt.update(score=m["score"], seen=m.get("seen", ""), missing=m.get("missing", []),
                        problem=m.get("problem", ""), reject=scan.reject if scan else "")
         attempt["_pick"] = {**item, "file": str(path), "check": m["score"], "problem": m.get("problem", ""),
-                            "start": start, "focus": [m["x"], m["y"]],
+                            "start": start, "focus": [m["x"], m["y"]], **match.evidence(m),
                             **({"hook": scan.to_json()} if scan else {})}
         return attempt
 
@@ -256,7 +256,8 @@ def own_pick(path: Path, length: float, is_hook: bool, animal: str, plan: dict,
     except Exception as e:
         flags.append(f"your clip wasn't checked against the planned shot ({type(e).__name__}: Gemini unavailable)")
         return chosen, flags, None
-    chosen.update(check=m["score"], problem=m.get("problem", ""), seen=m.get("seen", ""), focus=[m["x"], m["y"]])
+    chosen.update(check=m["score"], problem=m.get("problem", ""), seen=m.get("seen", ""), focus=[m["x"], m["y"]],
+                  **match.evidence(m))
     if scan and not scan.reject:
         hook.judged(scan, m)
         if scan.reject:

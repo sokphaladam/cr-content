@@ -23,6 +23,15 @@ def media_folder(slug: str, cfg: dict) -> Path:
     return folder(cfg["footage"]["media_dir"]) / slug
 
 
+def _placeholder_page(job: Path, message: str) -> None:
+    """A preflight.html for a Short still being built (or that stopped), so the page never opens on a 404."""
+    from html import escape
+
+    (job / "preflight.html").write_text(
+        "<!doctype html><meta charset=utf-8><body style=\"font:16px system-ui;padding:2rem;color:#ddd;"
+        f"background:#0f131a\"><h2>Pre-flight not ready</h2><p>{escape(message)}</p>", encoding="utf-8")
+
+
 def make_job(ep, log=print, job: Path | None = None) -> Path:
     """Steps 1-5 for one ShortPlan, in a new output folder (or again in `job`). Returns the job folder."""
     from ..config import OUTPUT_DIR
@@ -47,6 +56,18 @@ def make_job(ep, log=print, job: Path | None = None) -> Path:
     ep.save(job / "episode.json")
     script.save(job / "scenes.json")
     media = media_folder(script.slug, cfg)
+    _placeholder_page(job, "This Short is still being built. If it stays like this, the run was stopped before the "
+                           "report was written: make it again from the spreadsheet.")
+    try:
+        return _make_steps(ep, script, cfg, job, media, log)
+    except BaseException as err:
+        _placeholder_page(job, f"Building this Short failed: {str(err).strip() or type(err).__name__}")
+        raise
+
+
+def _make_steps(ep, script, cfg, job: Path, media: Path, log) -> Path:
+    from ..longform import voice
+    from . import footage, preflight, timing
 
     log(f"[2/{STEPS}] Voiceover ({cfg['voice']['engine']})")
     voices = voice.make_voices(script, media, job / "voice", cfg, log=log)
@@ -110,7 +131,8 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
         # too short for it gets a new window (the best for motion alone could miss what the shot needs: the water)
         from ..render import duration
 
-        if float(hook_pick.get("start", 0.0)) + tl.slots[0].length > duration(Path(hook_pick["file"])):
+        if float(hook_pick.get("start", 0.0)) + tl.slots[0].length * float(hook_pick.get("speed") or 1.0) \
+                > duration(Path(hook_pick["file"])):
             s = hook.scan(Path(hook_pick["file"]), tl.slots[0].length)
             hook_pick.update(start=s.start, hook=s.to_json())
         for e in entries[1:]:
@@ -186,6 +208,99 @@ def use_own_clip(job: Path, n: int, upload: Path, name: str, log=print) -> dict:
     return _refresh(job, ep, tl, voices, entries, cfg, media, log)
 
 
+_OWN_FLAGS = ("your clip: shot match", "your hook clip:", "needs your own clip: the best stock match")
+
+
+MIN_SPEED, MAX_SPEED = 0.5, 2.0   # how much faster or slower than real time a trimmed stretch may play
+
+
+def trim_window(total: float, length: float, start: float, end: float | None) -> tuple[float, float, float]:
+    """(start, end, speed) of a trim in a clip `total` seconds long for a beat `length` long. With no `end` the beat
+    shows `length` seconds at normal speed; otherwise the stretch start..end is played at the speed that makes it fit
+    the beat, held between MIN_SPEED and MAX_SPEED (so it can be 0.5x to 2x the beat's length) and inside the clip."""
+    lo, hi = length * MIN_SPEED, length * MAX_SPEED
+    start = min(max(float(start), 0.0), max(total - lo, 0.0))
+    window = length if end is None else float(end) - start
+    window = min(max(window, lo), hi, max(total - start, lo))
+    speed = window / length
+    if abs(speed - 1.0) < 0.02:   # near enough to real time: no retiming
+        window, speed = length, 1.0
+    return round(start, 2), round(start + window, 2), round(speed, 3)
+
+
+def trim_beat(job: Path, n: int, start: float, apply: bool = False, log=print, end: float | None = None) -> dict:
+    """Beat `n` shows its clip from `start` to `end` seconds. The beat's length is the voice's, so a stretch longer or
+    shorter than that plays faster or slower to fit (0.5x to 2x); with no `end` it shows `length` seconds of the clip
+    as it is. Gemini scores that stretch against the beat's planned shot, and for the hook the motion rules run on it.
+    With apply=False nothing is saved (the trim panel's Check); with apply=True the beat keeps it and the pre-flight
+    runs again. Returns {start, end, speed, clip, length, score, seen, problem, reject, applied, ...}."""
+    from ..render import duration
+    from . import hook, match
+    from .footage import PLACEHOLDERS
+
+    job = Path(job)
+    cfg, ep, tl, voices, entries, media = _load(job)
+    if not 1 <= n <= len(entries):
+        raise ValueError(f"There's no beat {n}.")
+    e = entries[n - 1]
+    c = e["chosen"]
+    if e.get("reuses_opening"):
+        raise ValueError(f"Beat {n} is the opening shot again: trim beat 1 and it follows.")
+    if c.get("kind") != "video" or c.get("source") in PLACEHOLDERS:
+        raise ValueError(f"Beat {n} doesn't show a video clip: there's nothing to trim.")
+    path, length = Path(c["file"]), tl.slots[n - 1].length
+    total = duration(path)
+    start, end, speed = trim_window(total, length, start, end)
+    window = end - start
+    shot = (e.get("search") or {}).get("plan") or {"shot": ep.script.scenes[n - 1].visual, "key_objects": []}
+    animal = ep.animal or ep.animal_search or "animal"
+    out = {"start": start, "end": end, "speed": speed, "clip": round(total, 2), "length": round(length, 2), "score": None, "seen": "",
+           "problem": "", "reject": "", "applied": False, "key_objects": shot.get("key_objects", []),
+           "objects_seen": [], "missing": [], "pass": match.PASS, "cap": match.GENERIC_MAX}
+    scan = hook.scan_window(path, start, window) if n == 1 else None
+    try:
+        m = match.check(path, animal, shot["shot"], shot.get("key_objects", []), start, window)
+    except Exception as ex:  # no Gemini: the window can still be used, unscored
+        m = None
+        out["problem"] = f"not checked ({type(ex).__name__}: Gemini unavailable)"
+    if m:
+        out.update(score=m["score"], seen=m.get("seen", ""), problem=m.get("problem", ""), **match.evidence(m))
+        if scan:
+            hook.judged(scan, m)
+    if scan:
+        out["reject"] = scan.reject
+    if not apply:
+        return out
+
+    flags = [f for f in e["flags"] if not f.startswith(_OWN_FLAGS)]
+    own = c["source"] == "own"
+    if scan and scan.reject:
+        flags.append(f"{'your hook clip' if own else 'the hook clip'}: {scan.reject}")
+    c["start"] = start
+    c["trimmed"] = True
+    if speed != 1.0:
+        c["end"], c["speed"] = end, speed
+    else:
+        c.pop("end", None), c.pop("speed", None)
+    if scan:
+        c["hook"] = scan.to_json()
+    if m:
+        c.update(check=m["score"], problem=m.get("problem", ""), seen=m.get("seen", ""), focus=[m["x"], m["y"]],
+                 **match.evidence(m))
+        e["match"] = m["score"]
+        if m["score"] < match.PASS:
+            missing = f" (no {', '.join(m['missing'])})" if m.get("missing") else ""
+            flags.append(f"your clip: shot match {m['score']}/10{missing} for \"{shot['shot']}\": {m.get('seen', '')}"
+                         if own else f"needs your own clip: the best stock match is {m['score']}/10{missing} for "
+                                     f"\"{shot['shot']}\"")
+    e["flags"] = flags
+    log(f"      beat {n}: clip {start:.2f}s to {end:.2f}s" + (f" at {speed:.2f}x" if speed != 1.0 else "")
+        + f", shot match {out['score']}")
+    _refresh(job, ep, tl, voices, entries, cfg, media, log)
+    out["applied"] = True
+    return out
+
+
 def remove_own_clip(job: Path, n: int, log=print) -> dict:
     """Beat `n` goes back to the stock pick your clip replaced. Your file isn't deleted (it may be your only copy): it
     moves to <media>/removed/, where the picker doesn't look."""
@@ -210,6 +325,26 @@ def remove_own_clip(job: Path, n: int, log=print) -> dict:
         e["match"], e["flags"] = 0, ["needs your own clip: build the episode again to search stock for it"]
     log(f"      beat {n}: back to {e['chosen']['source']}")
     return _refresh(job, ep, tl, voices, entries, cfg, media, log)
+
+
+def set_edit(job: Path, choice: dict, log=print) -> dict:
+    """Save the Edit panel's choices (mood, caption look, cut style). They only change the render, so the checks stand
+    and the approval is asked for again. Returns the saved choices."""
+    from ..longform import storyboard
+    from . import edit
+
+    job = Path(job)
+    saved = edit.save(job, choice)
+    (job / storyboard.APPROVAL).unlink(missing_ok=True)
+    log(f"      edit: {saved}")
+    return saved
+
+
+def suggest_edit(job: Path) -> dict:
+    """What the Edit panel's "Suggest edit" fills in (see edit.suggest); nothing is saved."""
+    from . import edit
+
+    return edit.suggest(Path(job))
 
 
 def report_status(job: Path) -> dict:

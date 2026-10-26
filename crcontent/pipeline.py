@@ -1262,6 +1262,57 @@ def suggest_cover_prompt(song, idea: str = "", lyrics: str = "") -> str:
     return ", ".join(p for p in parts if p)
 
 
+# words in the idea, title or lyrics -> a place for the background video (first match wins)
+BACKGROUND_PLACES = [
+    (("rain", "storm", "umbrella", "monsoon", "ភ្លៀង"), "rain-streaked window at night, blurred city lights outside"),
+    (("ocean", "sea", "wave", "beach", "shore"), "empty shoreline, slow waves rolling in"),
+    (("star", "stars", "galaxy", "moon", "space", "sky"), "wide night sky full of stars, slow drifting clouds"),
+    (("road", "drive", "highway", "car", "train", "travel"), "view through a moving window along an empty road"),
+    (("city", "street", "neon", "downtown", "tokyo"), "empty city street, neon signs reflecting on wet ground"),
+    (("sakura", "cherry blossom", "petal", "spring", "flower"), "cherry blossom branches swaying, petals drifting"),
+    (("snow", "winter", "frost", "christmas"), "quiet snowfall over a still landscape"),
+    (("forest", "tree", "woods", "leaves", "autumn"), "sunlit forest, leaves falling slowly"),
+    (("home", "room", "bed", "window", "letter", "memory", "memories"), "quiet bedroom by a window, curtains moving"),
+    (("fire", "flame", "campfire", "burning"), "campfire glowing in the dark, embers rising"),
+    (("dance", "party", "club", "tonight"), "dark club with soft moving light beams and haze"),
+]
+
+
+def suggest_background_prompt(song, idea: str = "", lyrics: str = "") -> str:
+    """A starter prompt for a text-to-video tool: a looping, text-free background that fits the song's mood and what
+    it is about (the idea first, then the title and lyrics), with a palette, light and slow camera move. No Gemini."""
+    mood = song.mood.lower()
+    place = ""
+    for source in (idea.lower(), song.title.lower(), lyrics.lower()):
+        place = next((tag for words, tag in BACKGROUND_PLACES
+                      if any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)" if w.isascii() else re.escape(w), source)
+                             for w in words)), "")
+        if place:
+            break
+    if not place:
+        place = "abstract soft light and haze drifting through an empty dreamy space"
+    if re.search(r"sad|melanchol|lonely|longing|yearning|heartbreak|grief", mood):
+        feel = "melancholic, lonely, tender; muted blue and violet palette, low soft light; very slow camera drift"
+    elif re.search(r"nostalgi|bittersweet|wistful", mood):
+        feel = "nostalgic, hazy, bittersweet; warm faded film tones, golden light; slow gentle push-in"
+    elif re.search(r"romantic|tender|love", mood):
+        feel = "warm, romantic, intimate; soft pink and amber palette, glowing bokeh; slow floating camera"
+    elif re.search(r"happy|euphoric|upbeat|joy|playful|energetic", mood):
+        feel = "bright, joyful, energetic; saturated colours, sunlit; smooth moving camera"
+    elif re.search(r"dream|psych|hazy|float|ethereal|synth", mood):
+        feel = ("dreamy, hazy, floating; soft purple, pink and teal palette, glowing light leaks and bokeh; "
+                "slow drifting camera")
+    elif re.search(r"dark|angry|intense|dramatic", mood):
+        feel = "dark, intense, cinematic; deep shadows with one strong accent colour; slow dramatic move"
+    else:
+        feel = f"{mood or 'calm'} mood; cohesive soft palette, gentle light; slow camera drift"
+    weather = ", ".join(a.replace("_", " ") for a in atmospheres(idea))
+    parts = [f"Cinematic background video for a lyric video: {place}", feel, weather and f"with {weather}",
+             "no people in focus, no text, no logos, no subtitles, empty space in the centre for lyrics",
+             "seamless loop, 16:9 (or 9:16), shallow depth of field, 5-8 seconds"]
+    return ". ".join(p for p in parts if p)
+
+
 def cover_scene(song, idea: str = "") -> str:
     """The direction for a song's single cover picture (director.plan_song follows it exactly): the character, one
     object that says what the song is about, an expression that fits its mood and the idea's weather, on a flat

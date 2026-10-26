@@ -12,7 +12,7 @@ FIELDS = {
     "title": "", "slug": "", "genre": "", "mood_phrase": "", "scene_theme": "", "style_prompt": "",
     "bpm": None, "beat_times": [], "chorus": {"start": None, "end": None}, "sections": [],
     "palette": [], "subscribe_line": "", "plan": "", "generated_on": "", "playlist": "",
-    "vocal_start": None, "audio": "",
+    "vocal_start": None, "audio": "", "lyric_style": "", "mood_grade": "", "beat_pulse": "", "pulse_parts": "", "pulse_when": "", "neon_intro": "", "now_playing": "",
 }
 
 
@@ -83,9 +83,10 @@ def save(path: Path, data: dict, force: bool = False) -> Path | None:
     if path.exists() and not force:
         raise FileExistsError(f"{path} exists (use --force to replace it; a backup is kept)")
     kept = backup(path)
+    data = {k: v for k, v in data.items() if not k.startswith("_")}  # "_dir" is only for this run
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return kept
 
 
 def load(path: Path) -> dict:
-    return {**FIELDS, **json.loads(path.read_text(encoding="utf-8"))}
+    return {**FIELDS, **json.loads(path.read_text(encoding="utf-8")), "_dir": str(path.parent)}

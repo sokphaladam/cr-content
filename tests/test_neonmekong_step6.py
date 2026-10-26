@@ -65,12 +65,13 @@ def test_draft_video_dry_run(tmp_path):
 
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
-def test_auto_renders_both_hook_options_with_audio(tmp_path):
+def test_auto_renders_one_full_video_with_audio(tmp_path):
     song = _song(tmp_path)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=48",
                     str(song / "audio.wav")], check=True)
-    assert make_song.main(["video", str(song), "--draft", "--seconds", "2"]) == 0   # vocal at 12s -> trim + preview
-    for option in ("trim", "preview"):
+    assert make_song.main(["video", str(song), "--draft", "--seconds", "2"]) == 0   # one video with the original music
+    assert not (song / "out" / "lyric_trim.mp4").exists() and not (song / "out" / "lyric_preview.mp4").exists()
+    for option in ("full",):
         out = song / "out" / f"lyric_{option}.mp4"
         assert out.exists()
         streams = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0",

@@ -52,6 +52,6 @@ def test_full_pipeline_with_instrumental(tmp_path):
     assert make_song.main(["--dry-run", "analyze", str(song)]) == 0
     assert make_song.main([str(song), "--draft", "--seconds", "2"]) == 0
     out = song / "out"
-    for f in ("thumbnail.jpg", "lyric_trim.mp4", "lyric_preview.mp4", "short_chorus.mp4", "instrumental.mp4"):
+    for f in ("thumbnail.jpg", "lyric_full.mp4", "short_chorus.mp4", "instrumental.mp4"):
         assert (out / f).exists(), f
     assert (song / "upload.txt").exists() and (song / "checklist.md").exists()

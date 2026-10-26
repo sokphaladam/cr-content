@@ -1,8 +1,10 @@
 "use client";
 
-import { Check, Copy, Music2, Plus, RefreshCw } from "lucide-react";
+import { Check, Copy, Music2, Pause, Play, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, songFileUrl, type Job, type LyricSong, type LyricSongDetail } from "@/lib/api";
+import { api, lyricPreviewUrl, lyricStreamUrl, songFileUrl, type Job, type LyricSong, type LyricSongDetail } from "@/lib/api";
+import { LyricPicturesCard } from "./LyricPictures";
+import { RowMenu } from "./Library";
 import { Button, Field, FileInput, Spinner, useToast } from "./ui";
 
 const STEP_LABEL: Record<string, string> = {
@@ -15,8 +17,6 @@ const STEP_LABEL: Record<string, string> = {
   instrumental: "Instrumental video",
 };
 const VIDEOS: [string, string][] = [
-  ["lyric_trim.mp4", "Lyric video, starts at the first vocal"],
-  ["lyric_preview.mp4", "Lyric video, 8 s chorus preview first"],
   ["lyric_full.mp4", "Lyric video"],
   ["short_chorus.mp4", "Short / Reel (9:16)"],
   ["instrumental.mp4", "Instrumental"],
@@ -167,6 +167,47 @@ function NewSong({ onCreated }: { onCreated: (slug: string, job: string) => void
   );
 }
 
+const KIND_COLOUR: Record<string, string> = {
+  chorus: "#c02a75", "pre-chorus": "#a8368a", verse: "#1d6f86", bridge: "#b9741a", intro: "#5c6680", outro: "#3c4660",
+};
+
+/** The song as a bar of its sections, with where the video puts the subscribe pill (just after the first chorus) and
+ *  the end-screen space (the last 20 s). Click it to preview that moment. */
+function SongStrip({ d, at, onAt }: { d: LyricSongDetail; at: number; onAt: (t: number) => void }) {
+  const dur = d.duration ?? 0;
+  if (!dur) return null;
+  const pct = (t: number) => `${Math.min(Math.max(t / dur, 0), 1) * 100}%`;
+  const chorusEnd = d.chorus.end;
+  return (
+    <div className="grid gap-1">
+      <div
+        className="relative h-14 w-full cursor-pointer overflow-hidden rounded-lg border border-line bg-sunken"
+        role="slider" aria-label="Song position" aria-valuemin={0} aria-valuemax={Math.round(dur)} aria-valuenow={Math.round(at)} tabIndex={-1}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          onAt(Math.round(((e.clientX - r.left) / r.width) * dur));
+        }}
+      >
+        {d.sections.map((s) => (
+          <div key={`${s.tag}-${s.start}`} title={`${s.tag} ${clock(Math.round(s.start))}`} className="absolute inset-y-0 flex items-center overflow-hidden border-r border-white/30 px-1.5 text-xs font-semibold whitespace-nowrap text-white"
+            style={{ left: pct(s.start), width: pct(s.end - s.start), background: KIND_COLOUR[s.kind] ?? "#5c6680" }}>
+            {(s.end - s.start) / dur > 0.045 ? s.tag : ""}
+          </div>
+        ))}
+        {chorusEnd != null && (
+          <div title="Subscribe pill" className="absolute inset-y-0 border-l-2 border-amber-300" style={{ left: pct(chorusEnd + 0.3), width: pct(4), background: "repeating-linear-gradient(135deg,#ffe18a 0 4px,#ffe18a00 4px 8px)" }} />
+        )}
+        <div title="End-screen space (last 20 s)" className="absolute inset-y-0" style={{ left: pct(dur - 20), right: 0, background: "repeating-linear-gradient(135deg,#39d5e099 0 4px,#39d5e000 4px 8px)" }} />
+        <div className="absolute -inset-y-1 w-0.5 bg-ink" style={{ left: pct(at) }} />
+      </div>
+      <div className="flex flex-wrap gap-x-4 text-xs text-ink-soft">
+        <span><i className="mr-1 inline-block size-2.5 rounded-sm align-middle" style={{ background: "#ffe18a" }} />Subscribe pill</span>
+        <span><i className="mr-1 inline-block size-2.5 rounded-sm align-middle" style={{ background: "#39d5e0aa" }} />End-screen space</span>
+      </div>
+    </div>
+  );
+}
+
 const fmt = (s: number | null | undefined) => (s == null ? "" : String(s));
 
 function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string | null; onJob: (id: string) => void; onChanged: () => void }) {
@@ -179,7 +220,16 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
   const [ai, setAi] = useState<"template" | "gemini">("template");
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [promptCopied, setPromptCopied] = useState(false);
   const [bust, setBust] = useState("");
+  const [at, setAt] = useState(0);
+  const [picBust, setPicBust] = useState(""); // changes when a picture does, so the preview frame is drawn again
+  const [shown, setShown] = useState(0); // the time the preview frame is drawn at: moves when the slider is let go
+  const [playing, setPlaying] = useState(false); // the timeline is playing in the preview (a live stream + the song)
+  const [from, setFrom] = useState(0); // the second the stream started from
+  const [run, setRun] = useState(0); // a new number = a new stream (play, seek, or a new look while playing)
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const synced = useRef(false); // the song starts with the stream's first frame
 
   const load = useCallback(async () => {
     try {
@@ -225,6 +275,23 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
     }
   }
 
+  async function setBackground(f: File) {
+    try {
+      setD(await api.setLyricBackground(slug, f));
+      setBust(String(Date.now()));
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
+
+  async function removeBackground() {
+    try {
+      setD(await api.removeLyricBackground(slug));
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
+
   async function render() {
     if (!(await save())) return;
     try {
@@ -235,7 +302,28 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
   }
 
   if (!d || !form) return <div className="grid place-items-center p-10"><Spinner className="size-6" /></div>;
-  const set = (k: keyof typeof form, v: string) => setForm({ ...form, [k]: v });
+  const look = { style: form.lyric_style, grade: form.mood_grade, neon: !!form.neon_intro, playing: !!form.now_playing,
+    pulse: form.beat_pulse, parts: form.pulse_parts, when: form.pulse_when };
+  /** (Re)start the stream from second `t`; the song joins when its first frame arrives. */
+  const playFrom = (t: number) => {
+    synced.current = false;
+    audioRef.current?.pause();
+    setAt(t);
+    setFrom(t);
+    setRun((n) => n + 1);
+    setPlaying(true);
+  };
+  const stopPlaying = () => {
+    audioRef.current?.pause();
+    setPlaying(false);
+    setShown(at);
+  };
+  const LOOK_KEYS = ["lyric_style", "mood_grade", "beat_pulse", "pulse_parts", "pulse_when", "neon_intro", "now_playing"];
+  const set = (k: keyof typeof form, v: string) => {
+    setForm({ ...form, [k]: v });
+    if (playing && LOOK_KEYS.includes(k)) playFrom(at); // a new look while playing: carry on from here in it
+  };
+  const previewSrc = lyricPreviewUrl(slug, shown, look, picBust);
   const videos = VIDEOS.filter(([f]) => d.files.includes(f));
 
   return (
@@ -297,6 +385,138 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
               <Button variant="ghost" icon={<RefreshCw className="size-4" />} disabled={busy} onClick={async () => onJob((await api.reanalyzeLyricSong(slug)).job)}>Time the lyrics again</Button>
             </div>
           </section>
+
+          <section className="card grid gap-3 p-4">
+            <h2 className="card-title">Style and mood</h2>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,34rem)]">
+              <div className="grid content-start gap-3">
+                <Field label="Lyric style" htmlFor="sv-style">
+                  <select id="sv-style" className="field-input" value={form.lyric_style || "classic"} onChange={(e) => set("lyric_style", e.target.value)}>
+                    {Object.entries(d.styles).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                  </select>
+                </Field>
+                <Field label="Mood grade" htmlFor="sv-grade">
+                  <select id="sv-grade" className="field-input" value={form.mood_grade || "neon"} onChange={(e) => set("mood_grade", e.target.value)}>
+                    {Object.entries(d.grades).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                  </select>
+                </Field>
+                <fieldset className="m-0 grid gap-2 border-0 p-0">
+                  <legend className="mb-1 p-0 text-base font-semibold">Beat effect</legend>
+                  <Field label="Strength" htmlFor="sv-pulse">
+                    <select id="sv-pulse" className="field-input" value={form.beat_pulse || "subtle"} onChange={(e) => set("beat_pulse", e.target.value)}>
+                      {Object.entries(d.pulse.levels).map(([k, label]) => <option key={k} value={k}>{label}{d.suggestion?.pulse === k ? " (suggested)" : ""}</option>)}
+                    </select>
+                  </Field>
+                  {(form.beat_pulse || "subtle") !== "off" && (
+                    <>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1">
+                        {Object.entries(d.pulse.parts).map(([k, label]) => {
+                          const all = Object.keys(d.pulse.parts);
+                          const on = (form.pulse_parts ? form.pulse_parts.split(",") : all).includes(k);
+                          return (
+                            <label key={k} className="flex items-center gap-2 text-base">
+                              <input type="checkbox" className="size-4 accent-cobalt" checked={on}
+                                onChange={() => set("pulse_parts", all.filter((g) => (g === k ? !on : (form.pulse_parts ? form.pulse_parts.split(",") : all).includes(g))).join(",") || "none")} />
+                              {label}
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <Field label="When" htmlFor="sv-when">
+                        <select id="sv-when" className="field-input" value={form.pulse_when || "always"} onChange={(e) => set("pulse_when", e.target.value)}>
+                          {Object.entries(d.pulse.when).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                        </select>
+                      </Field>
+                    </>
+                  )}
+                  <p className="m-0 text-sm text-ink-soft">On each beat the picture brightens and pushes in a little, and chorus lines glow. Subtle is calm; Strong suits club and rock songs.</p>
+                </fieldset>
+                {d.suggestion && (() => {
+                  const sg = d.suggestion;
+                  const same = (form.mood_grade || "neon") === sg.grade && (form.lyric_style || "classic") === sg.style && (form.beat_pulse || "subtle") === sg.pulse;
+                  return (
+                    <p className="well m-0 flex flex-wrap items-center gap-x-3 gap-y-1 p-3 text-sm">
+                      <span>Suggested for this {sg.reason}: <b>{d.grades[sg.grade]}</b> · <b>{d.styles[sg.style]?.split(" (")[0]}</b> lyrics</span>
+                      {same ? <span className="text-ink-soft">In use</span> : (
+                        <Button size="sm" variant="secondary" onClick={() => setForm({ ...form, mood_grade: sg.grade, lyric_style: sg.style, beat_pulse: sg.pulse })}>Use this</Button>
+                      )}
+                    </p>
+                  );
+                })()}
+                <div className="flex flex-wrap gap-x-6 gap-y-1">
+                  <label className="flex items-center gap-2 text-base"><input type="checkbox" className="size-4 accent-cobalt" checked={!!form.neon_intro} onChange={(e) => set("neon_intro", e.target.checked ? "1" : "")} /> Neon title intro</label>
+                  <label className="flex items-center gap-2 text-base"><input type="checkbox" className="size-4 accent-cobalt" checked={!!form.now_playing} onChange={(e) => set("now_playing", e.target.checked ? "1" : "")} /> Now-playing card</label>
+                </div>
+                <p className="m-0 -mt-1 text-sm text-ink-soft">
+                  Neon title intro: the song&apos;s name flickers on like a sign over the first seconds and fades before the singing starts (only when the song starts with a quiet intro). Now-playing card: a dark card in the top-left corner with the title, a progress bar and a spinning record.
+                </p>
+              </div>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img key={playing ? `play|${run}` : `${form.lyric_style}|${form.mood_grade}|${form.beat_pulse}|${form.pulse_parts}|${form.pulse_when}|${form.neon_intro}|${form.now_playing}|${shown}|${picBust}`}
+                src={playing ? lyricStreamUrl(slug, from, look) : previewSrc} alt={playing ? "The lyric video playing" : "Preview frame of the lyric video"}
+                onLoad={() => {
+                  // the stream's first frame is up: the song starts with it, and the playhead follows the song
+                  if (!playing || synced.current) return;
+                  synced.current = true;
+                  const a = audioRef.current;
+                  if (a && d.audio) {
+                    a.currentTime = from;
+                    void a.play().catch(() => {});
+                  }
+                }}
+                className="well w-full rounded-lg bg-black" style={{ aspectRatio: "16/9" }} />
+              {d.audio && (
+                <audio ref={audioRef} src={songFileUrl(slug, d.audio)} preload="auto"
+                  onTimeUpdate={(e) => { if (playing && synced.current) setAt(Math.round(e.currentTarget.currentTime * 10) / 10); }}
+                  onEnded={() => { setPlaying(false); setShown(0); setAt(0); }} />
+              )}
+            </div>
+            <div className="grid gap-2 border-t border-line pt-4">
+            <div className="grid gap-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <Button size="sm" variant="primary" icon={playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+                  onClick={() => (playing ? stopPlaying() : playFrom(at >= (d.duration ?? 0) - 2 ? 0 : at))}>{playing ? "Pause" : "Play"}</Button>
+                <span className="text-base font-semibold tabular-nums">{clock(Math.round(at))} <span className="font-normal text-ink-soft">/ {clock(Math.round(d.duration ?? 0))}</span></span>
+                <span className="text-sm text-ink-soft">{playing ? "Playing the timeline with the song" : "Plays this look from the time on the timeline"}</span>
+              </div>
+              <SongStrip d={d} at={at} onAt={(t) => { if (playing) playFrom(t); else { setAt(t); setShown(t); } }} />
+              <input id="sv-at" type="range" className="w-full accent-cobalt" aria-label="Song position" min={0} max={Math.max(Math.floor(d.duration ?? 0) - 1, 1)} step={1} value={at}
+                onChange={(e) => setAt(Number(e.target.value))}
+                onPointerUp={() => (playing ? playFrom(at) : setShown(at))} onKeyUp={() => (playing ? playFrom(at) : setShown(at))} />
+            </div>
+            <p className="m-0 text-sm text-ink-soft">The frame is drawn the way the render will draw it. Pick a time inside a sung line to see the lyric style. Save changes to keep it; the Short (9:16) uses the same look.</p>
+            </div>
+          </section>
+
+          <LyricPicturesCard slug={slug} onTest={(t) => { if (playing) playFrom(Math.round(t)); else { setAt(Math.round(t)); setShown(Math.round(t)); } window.scrollTo({ top: 0, behavior: "smooth" }); }}
+            onChanged={() => { setPicBust(String(Date.now())); void load(); }} />
+
+          {d.video_prompt && (
+            <section className="card grid gap-2 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="card-title">Suggested background video prompt</h2>
+                <Button size="sm" variant="ghost" icon={promptCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                  onClick={() => { void navigator.clipboard.writeText(d.video_prompt); setPromptCopied(true); setTimeout(() => setPromptCopied(false), 1500); }}>
+                  {promptCopied ? "Copied" : "Copy"}
+                </Button>
+              </div>
+              <code className="well block p-3 text-sm break-words whitespace-pre-wrap">{d.video_prompt}</code>
+              <p className="m-0 text-sm text-ink-soft">
+                From the song&apos;s mood, genre, scene theme, title and lyrics. Make a picture with it in an image generator, then add it below.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <FileInput id="sv-bg" accept=".png,.jpg,.jpeg,.webp,image/*" file={d.background} onFile={(f) => void setBackground(f)} onReject={(m) => toast(m, "error")} />
+                {d.background && <Button size="sm" variant="ghost" onClick={() => void removeBackground()}>Use the neon city again</Button>}
+              </div>
+              {d.background && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={songFileUrl(slug, d.background, bust)} alt="Background" className="w-full max-w-sm rounded-lg border border-line" />
+              )}
+              <p className="m-0 text-sm text-ink-soft">
+                {d.background ? "The video and thumbnail use this picture (slowly panned and zoomed). Render again to see it." : "Without a picture the video draws the default neon city on a river. The scene theme above is only a note for the upload text."}
+              </p>
+            </section>
+          )}
 
           <section className="card grid gap-4 p-4">
             <h2 className="card-title">2. Make the videos</h2>
@@ -372,6 +592,20 @@ export function LyricVideo() {
     return () => clearTimeout(t);
   }, [loadList]);
 
+  async function remove(s: LyricSong) {
+    try {
+      await api.deleteLyricSong(s.slug);
+      if (sel === s.slug) {
+        setSel("new");
+        setJob(null);
+      }
+      toast(`Deleted ${s.title}`, "success");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+    void loadList();
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
       <aside className="shrink-0 border-b border-line bg-panel lg:w-64 lg:border-r lg:border-b-0">
@@ -382,12 +616,18 @@ export function LyricVideo() {
         <ul className="max-h-40 overflow-y-auto p-2 lg:max-h-none">
           {songs.length === 0 && <li className="p-2 text-base text-ink-soft">No songs yet.</li>}
           {songs.map((s) => (
-            <li key={s.slug}>
+            <li key={s.slug} className="group relative">
               <button type="button" onClick={() => { setSel(s.slug); setJob(null); }} aria-current={sel === s.slug}
-                className={`w-full cursor-pointer rounded-lg border-0 px-3 py-2 text-left text-base ${sel === s.slug ? "bg-cobalt/10 font-semibold" : "bg-transparent hover:bg-ink/[0.05]"}`}>
+                className={`w-full cursor-pointer rounded-lg border-0 py-2 pr-10 pl-3 text-left text-base ${sel === s.slug ? "bg-cobalt/10 font-semibold" : "bg-transparent hover:bg-ink/[0.05]"}`}>
                 <span className="block truncate">{s.title}</span>
                 <span className="text-sm text-ink-soft">{s.rendered ? "Rendered" : s.analyzed ? "Ready to render" : "Not timed yet"}</span>
               </button>
+              <RowMenu item={{
+                title: s.title, current: sel === s.slug,
+                onClick: () => { setSel(s.slug); setJob(null); },
+                deleteHint: "Deletes the song's folder: its audio, lyrics, pictures and every video made from it.",
+                onDelete: () => void remove(s),
+              }} />
             </li>
           ))}
         </ul>

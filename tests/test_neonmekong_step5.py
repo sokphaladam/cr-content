@@ -34,7 +34,10 @@ def test_plan_trim_and_preview(tmp_path):
     starts = [ln["start"] for ln in pv["lyrics"]]
     assert starts[0] < 1.0 and starts == sorted(starts)             # the chorus preview opens on a lyric
     assert pv["lyrics"][-1]["text"] == "Hold on, hold on"           # full song follows, shifted by the offset
-    assert pv["lyrics"][-1]["start"] == pytest.approx(40.5 + 7.2, abs=0.01)
+    # the song part skips the same long intro as the trim: it starts at the trim's cut, not at 0
+    assert pv["song_start"] == t["audio_start"]
+    assert pv["lyrics"][-1]["start"] == pytest.approx(40.5 + 7.2 - t["audio_start"], abs=0.01)
+    assert pv["duration"] == pytest.approx(7.2 + 48.0 - t["audio_start"], abs=0.01)
 
 
 def test_early_vocal_needs_no_edit(tmp_path):
@@ -67,4 +70,15 @@ def test_renders_audio_with_expected_lengths(tmp_path):
         return float(r.stdout)
     p = json.loads((song / "out" / "hook" / "hook.json").read_text())
     assert length("audio_trim.wav") == pytest.approx(48 - p["trim"]["audio_start"], abs=0.1)
-    assert length("audio_preview.wav") == pytest.approx(48 + p["preview"]["song_offset"], abs=0.1)
+    assert length("audio_preview.wav") == pytest.approx(p["preview"]["duration"], abs=0.1)
+
+
+def test_preview_timeline_maps_back_to_the_song(tmp_path):
+    from neonmekong import lyricvideo as lv
+    song = _song(tmp_path)
+    assert make_song.main(["--dry-run", "hook", str(song)]) == 0
+    data = songjson.load(song / "song.json")
+    v = lv.variant(song, data, "preview")
+    length, p0, off = v.preview
+    assert v.song_time(1.0) == pytest.approx(p0 + 1.0)                       # the chorus preview
+    assert v.song_time(off + 5.0) == pytest.approx(v.skip + 5.0)             # the song, from the trim's cut

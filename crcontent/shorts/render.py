@@ -16,7 +16,7 @@ from ..pipeline import _install_font, progress_reporter
 from ..render import duration, finalize, render_scene, run
 from ..tts import Word
 from ..visuals import IMAGE_EXTS
-from . import captions
+from . import captions, edit as editor
 
 
 def _start(chosen: dict, length: float) -> float:
@@ -28,10 +28,17 @@ def _start(chosen: dict, length: float) -> float:
 
 
 def beat_clip(chosen: dict, length: float, out: Path, size: tuple[int, int], look: str, start: float | None = None,
-              bright: bool = False) -> None:
+              bright: bool = False, push: bool = True) -> None:
+    """`push`: a video clip with no camera move of its own gets a slow push-in (photos always get one)."""
     focus = tuple(chosen["focus"]) if chosen.get("focus") else None
-    render_scene(Path(chosen["file"]), None, length, out, start=_start(chosen, length) if start is None else start,
-                 size=size, look=look, bright=bright, focus=focus)
+    path = Path(chosen["file"])
+    start = _start(chosen, length) if start is None else start
+    speed = float(chosen.get("speed") or 1.0) if start == _start(chosen, length) else 1.0   # a trimmed beat's retime
+    if push and path.suffix.lower() not in IMAGE_EXTS and chosen.get("source") not in ("card", "placeholder"):
+        from . import hook
+        push = not hook.has_camera_move(path, start, length * speed)
+    render_scene(path, None, length, out, start=start, size=size, look=look, bright=bright, focus=focus, push=push,
+                 speed=speed)
 
 
 def frame_lengths(ends: list[float]) -> list[float]:
@@ -42,14 +49,14 @@ def frame_lengths(ends: list[float]) -> list[float]:
     return [(b - a) / FPS for a, b in zip(edges, edges[1:])]
 
 
-def join(clips: list[Path], work: Path, out_name: str) -> Path:
+def join(clips: list[Path], work: Path, out_name: str, cuts: str = "") -> Path:
     """The clips' pictures back to back, every frame kept, at a constant 30 fps. The concat demuxer (render.concat)
     places each clip after its audio, which runs a few ms past the picture, and a frame is lost at that seam; the
     concat filter joins the pictures by their own lengths. Re-encoded near-lossless, once: seconds for a Short."""
     inputs = [a for c in clips for a in ("-i", c.name)]
     streams = "".join(f"[{k}:v]" for k in range(len(clips)))
     run(["ffmpeg", "-y", "-hide_banner", *inputs, "-filter_complex",
-         f"{streams}concat=n={len(clips)}:v=1:a=0,fps={FPS}[v]", "-map", "[v]",
+         f"{streams}concat=n={len(clips)}:v=1:a=0,fps={FPS}{',' + cuts if cuts else ''}[v]", "-map", "[v]",
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "10", "-pix_fmt", "yuv420p", out_name], cwd=work)
     return work / out_name
 
@@ -66,14 +73,16 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
     """work/ -> job/video.mp4. Returns {music, encoder, tail}."""
     rc = cfg["render"]
     size = (int(rc["width"]), int(rc["height"]))
-    look = str(rc.get("look") or "")
+    choice = editor.load(job, cfg)   # the pre-flight's Edit panel: mood, caption look, cut style
+    look = choice["look"]
     tail = min(float(cfg["rules"]["loop_tail"]), tl.slots[-1].length / 2)
     work = job / "work"
     if work.exists():
         shutil.rmtree(work)
     work.mkdir()
 
-    log(f"      {len(tl.slots)} beats at {size[0]}x{size[1]}, loop tail {tail:.1f}s")
+    log(f"      {len(tl.slots)} beats at {size[0]}x{size[1]}, loop tail {tail:.1f}s; mood {look or 'default'}, "
+        f"captions {choice['caption']}, cuts {choice['transition']}, graphics {','.join(choice['graphics']) or 'none'}")
     lengths = frame_lengths([s.end for s in tl.slots[:-1]] + [tl.total - tail, tl.total])
     tail = lengths.pop()
     clips = []
@@ -84,12 +93,15 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
     hook = entries[0]["chosen"]
     if hook["source"] not in ("card", "placeholder") and tail > 0:
         clip = work / "loop_tail.mp4"
-        beat_clip(hook, tail, clip, size, look, start=loop_tail(hook, tail), bright=True)
+        beat_clip(hook, tail, clip, size, look, start=loop_tail(hook, tail), bright=True,
+                  push=False)  # ends on the hook's first frame: a push would jump back at the loop
         clips.append(clip)
     else:  # no hook clip to loop into: the last beat runs to the end
         render_scene(Path(entries[-1]["chosen"]["file"]), None, tail, work / "loop_tail.mp4", size=size, look=look)
         clips.append(work / "loop_tail.mp4")
-    join(clips, work, "joined.mp4")
+    # the cuts between beats (not the one into the loop tail: that join has to stay the hook's own motion)
+    ends = [s.end for s in tl.slots[:-1]]
+    join(clips, work, "joined.mp4", editor.cut_filter([round(e * FPS) / FPS for e in ends], choice["transition"]))
     for c in clips:
         c.unlink(missing_ok=True)
 
@@ -106,7 +118,7 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
         from ..longform.settings import folder
         log(f"      ! no music: {folder(cfg['music']['dir'])} has no tracks (mp3, wav, m4a, flac)")
 
-    (work / "text.ass").write_text(captions.build(script, tl, voices), encoding="utf-8")
+    (work / "text.ass").write_text(captions.build(script, tl, voices, choice['caption'], choice['graphics']), encoding="utf-8")
     profile = LANGS.get(script.lang, LANGS["en"])
     for _, file in _fonts(script.lang):
         _install_font(profile, work / "fonts", file)

@@ -28,6 +28,14 @@ CAPTION_Y = round(HEIGHT * 0.64)     # the caption's middle: under the animal, w
 LABEL_TOP = TOP + 40
 YELLOW, WHITE, BLACK = "&H0000D4FF&", "&H00FFFFFF&", "&H00000000&"
 SENTENCE_END = (".", "!", "?", "…", "—", ":", ";")
+# caption looks (edit.py picks one per Short): the spoken word's colour, the others' colour, size, outline and how hard
+# a group's first word pops in
+STYLES = {
+    "classic": {"label": "Classic", "hi": YELLOW, "base": WHITE, "px": CAPTION_PX, "bord": 7, "edge": BLACK, "pop": (82, 106)},
+    "pop": {"label": "Pop", "hi": "&H009B30FF&", "base": WHITE, "px": 112, "bord": 8, "edge": BLACK, "pop": (60, 118)},
+    "neon": {"label": "Neon", "hi": "&H00FFE500&", "base": WHITE, "px": 96, "bord": 6, "edge": "&H00601A00&", "pop": (90, 104)},
+    "minimal": {"label": "Minimal", "hi": WHITE, "base": "&H00C8C8C8&", "px": 84, "bord": 5, "edge": BLACK, "pop": (96, 100)},
+}
 
 
 def groups(words: list[Word], n: int) -> list[list[Word]]:
@@ -67,7 +75,8 @@ def label_events(text: str, start: float, end: float, family: str, lang: str) ->
             + r"\N".join(_esc(r) for r in rows)]
 
 
-def caption_events(words: list[Word], at: float, family: str, lang: str, n: int, until: float) -> list[str]:
+def caption_events(words: list[Word], at: float, family: str, lang: str, n: int, until: float,
+                   look: dict = STYLES["classic"]) -> list[str]:
     """The voiceover's words (times relative to `at`, the beat's start) as captions; the last group stays up to
     `until` at most."""
     out = []
@@ -75,7 +84,7 @@ def caption_events(words: list[Word], at: float, family: str, lang: str, n: int,
     for gi, g in enumerate(gs):
         g_end = gs[gi + 1][0].start if gi + 1 < len(gs) else min(g[-1].end + 0.3, until - at)
         texts = [_esc(_case(w.text, "upper", lang)) for w in g]
-        rows, size = _fit(" ".join(texts), family, CAPTION_PX, lang, RIGHT - LEFT)
+        rows, size = _fit(" ".join(texts), family, look["px"], lang, RIGHT - LEFT)
         # each row is drawn as its words, so the spoken one can be coloured; rows were balanced on the plain text
         per_row, k = [], 0
         for r in rows:
@@ -86,16 +95,20 @@ def caption_events(words: list[Word], at: float, family: str, lang: str, n: int,
             e = at + (g[wi + 1].start if wi + 1 < len(g) else g_end)
             if e <= s:
                 continue
-            pop = r"\fscx82\fscy82\t(0,80,0.7,\fscx106\fscy106)\t(80,130,\fscx100\fscy100)" if wi == 0 else ""
-            body = r"\N".join(" ".join(f"{{\\1c{YELLOW if j == wi else WHITE}}}{texts[j]}" for j in idx)
+            lo, hi = look["pop"]
+            pop = (rf"\fscx{lo}\fscy{lo}\t(0,80,0.7,\fscx{hi}\fscy{hi})\t(80,130,\fscx100\fscy100)"
+                   if wi == 0 and lo != hi else "")
+            body = r"\N".join(" ".join(f"{{\\1c{look['hi'] if j == wi else look['base']}}}{texts[j]}" for j in idx)
                               for idx in per_row)
             out.append(f"Dialogue: 1,{_ts(s)},{_ts(e)},Caption,,0,0,0,,{{\\an5\\pos({CX},{CAPTION_Y})\\fs{size}"
                        f"{pop}}}{body}")
     return out
 
 
-def build(script: Script, tl: Timeline, voices: dict[int, list[Word]]) -> str:
-    """The whole text layer: hook, labels and captions for every beat."""
+def build(script: Script, tl: Timeline, voices: dict[int, list[Word]], style: str = "classic",
+          graphics: tuple[str, ...] | list[str] = ()) -> str:
+    """The whole text layer: hook, labels and captions for every beat; `style` is a key of STYLES."""
+    look = STYLES.get(style, STYLES["classic"])
     lang = script.lang
     profile = LANGS.get(lang, LANGS["en"])
     (body, _), (title, _) = _fonts(lang)
@@ -110,15 +123,23 @@ def build(script: Script, tl: Timeline, voices: dict[int, list[Word]]) -> str:
             events += label_events(scene.text, slot.start + 0.05, slot.end - 0.05, heavy, lang)
         words = voices.get(scene.n) or []
         if words:
-            events += caption_events(words, slot.start, heavy, lang, n, slot.end)
+            events += caption_events(words, slot.start, heavy, lang, n, slot.end, look)
+    if graphics:
+        from . import graphics as gfx
+
+        events = gfx.events(graphics, tl) + events
     styles = [
         f"Style: Hook,{heavy},{HOOK_PX},&H00141414&,&H00141414&,&H00FFFFFF&,&H00FFFFFF&,-1,0,0,0,100,100,0,0,1,0,0,"
         "8,0,0,0,1",
         f"Style: Label,{heavy},{LABEL_PX},{WHITE},{WHITE},{BLACK},{BLACK},-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1",
         # thick outline + soft shadow: readable on any footage
-        f"Style: Caption,{heavy},{CAPTION_PX},{WHITE},{WHITE},{BLACK},&H80000000&,-1,0,0,0,100,100,0,0,1,7,3,5,0,0,0,"
-        "1",
+        f"Style: Caption,{heavy},{look['px']},{WHITE},{WHITE},{look['edge']},&H80000000&,-1,0,0,0,100,100,0,0,1,"
+        f"{look['bord']},3,5,0,0,0,1",
     ]
+    if graphics:
+        from . import graphics as gfx
+
+        styles.append(gfx.STYLE)
     return "\n".join([
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {WIDTH}", f"PlayResY: {HEIGHT}", "WrapStyle: 2",
         "ScaledBorderAndShadow: yes", "", "[V4+ Styles]",

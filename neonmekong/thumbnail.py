@@ -47,6 +47,17 @@ def font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(p, size) if p else ImageFont.load_default(size)
 
 
+LYRIC_FONTS = ("seguisb.ttf", "segoeuib.ttf", "arialbd.ttf")   # a clean semibold sans for the sung words
+
+
+def lyric_font(size: int) -> ImageFont.FreeTypeFont:
+    """The lyrics' font: easier to read at length than the condensed headline face (which stays for titles)."""
+    for n in LYRIC_FONTS:
+        if (Path("C:/Windows/Fonts") / n).exists():
+            return ImageFont.truetype(str(Path("C:/Windows/Fonts") / n), size)
+    return font(size)
+
+
 def background(pal: list[tuple[int, int, int]], seed: str, w: int = W, h: int = H, shade: bool = True) -> Image.Image:
     """Dark gradient sky, soft city-light bokeh above the horizon, the same lights stretched on the river below.
     Any size (the lyric video uses a larger canvas to pan over); `shade` darkens the left for thumbnail text."""
@@ -78,6 +89,40 @@ def background(pal: list[tuple[int, int, int]], seed: str, w: int = W, h: int = 
     # darken the left so the text always reads
     mask = np.linspace(170, 0, w)[None, :].repeat(h, 0).astype("uint8")
     return Image.alpha_composite(img, Image.merge("RGBA", (*[Image.new("L", (w, h), 0)] * 3, Image.fromarray(mask)))).convert("RGB")
+
+
+BACKGROUND_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def custom_background_file(folder: Path) -> Path | None:
+    """The picture you put in the song's folder (background.png / .jpg / .webp), drawn instead of the neon city."""
+    return next((folder / f"background{e}" for e in BACKGROUND_EXTS if (folder / f"background{e}").exists()), None)
+
+
+def custom_background(data: dict, w: int, h: int) -> Image.Image | None:
+    """The song's own background picture, scaled to cover w x h (centre-cropped), or None to draw the default."""
+    folder = data.get("_dir")
+    file = custom_background_file(Path(folder)) if folder else None
+    if not file:
+        return None
+    return cover_crop(Image.open(file), w, h)
+
+
+def cover_crop(im: Image.Image, w: int, h: int) -> Image.Image:
+    """`im` scaled to cover w x h and centre-cropped to it."""
+    im = im.convert("RGB")
+    k = max(w / im.width, h / im.height)
+    im = im.resize((max(w, round(im.width * k)), max(h, round(im.height * k))), Image.LANCZOS)
+    left, top = (im.width - w) // 2, (im.height - h) // 2
+    return im.crop((left, top, left + w, top + h))
+
+
+def shade_left(img: Image.Image) -> Image.Image:
+    """Darken the left so the text always reads."""
+    w, h = img.size
+    mask = np.linspace(170, 0, w)[None, :].repeat(h, 0).astype("uint8")
+    return Image.alpha_composite(img.convert("RGBA"), Image.merge(
+        "RGBA", (*[Image.new("L", (w, h), 0)] * 3, Image.fromarray(mask))))
 
 
 def fit(text: str, max_w: int, max_h: int, top: int, max_lines: int) -> tuple[list[str], ImageFont.FreeTypeFont]:
@@ -136,18 +181,40 @@ def badge(img: Image.Image, accent: tuple[int, int, int], scale: float = 1.0) ->
     d.text((m + int(22 * scale), top + int(8 * scale)), text, font=f, fill=(255, 255, 255))
 
 
-def render(data: dict, out: Path) -> Path:
-    pal = palette_of(data)
-    img = background(pal, data.get("slug") or data["title"]).convert("RGBA")
-    badge(img, pal[0])
-    f_tag = font(28)
-    ImageDraw.Draw(img).text((W - MARGIN, 58), "OFFICIAL LYRIC VIDEO", font=f_tag, fill=(235, 235, 245), anchor="ra")
+def bottom_shade(img: Image.Image) -> Image.Image:
+    """A soft dark fade up from the bottom edge: the title sits on it and the artwork above stays untouched."""
+    w, h = img.size
+    ramp = np.clip((np.linspace(0, 1, h) - 0.45) / 0.55, 0, 1) ** 1.6 * 205
+    mask = ramp[:, None].repeat(w, 1).astype("uint8")
+    return Image.alpha_composite(img.convert("RGBA"), Image.merge(
+        "RGBA", (*[Image.new("L", (w, h), 0)] * 3, Image.fromarray(mask))))
 
-    mood = (data.get("mood_phrase") or data["title"]).upper()
-    lines, f_mood = fit(mood, 800, 360, 170, 3)
-    y = neon_text(img, (MARGIN, 150), lines, f_mood, (255, 255, 255), pal[0])
-    t_lines, f_title = fit(data["title"], 800, 120, 74, 2)
-    neon_text(img, (MARGIN, y + 16), t_lines, f_title, pal[3], pal[1])
+
+def render(data: dict, out: Path) -> Path:
+    """Artwork first, like the big lofi channels: the picture fills the frame, the badge sits top left, and the
+    song's name and mood are one quiet block at the bottom left."""
+    from .overlays import neon_name   # the short name, not the long upload title ("... (Official Lyric Video)")
+    pal = palette_of(data)
+    own = custom_background(data, W, H)
+    img = bottom_shade(own) if own else bottom_shade(background(pal, data.get("slug") or data["title"], shade=False))
+    badge(img, pal[0])
+
+    t_lines, f_title = fit(neon_name(data["title"]).upper(), 900, 200, 112, 2)
+    mood = (data.get("mood_phrase") or "").upper()
+    lead = int(f_title.size * 1.06)
+    y = H - 56 - lead * len(t_lines)
+    d = ImageDraw.Draw(img)
+    if mood:
+        f_mood = font(32)
+        d.text((MARGIN + 3, y - 18), mood, font=f_mood, fill=(*pal[3], 255), anchor="ld")
+    shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    for i, ln in enumerate(t_lines):
+        sd.text((MARGIN, y + i * lead + 5), ln, font=f_title, fill=(0, 0, 0, 200))
+    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(9)))
+    d = ImageDraw.Draw(img)
+    for i, ln in enumerate(t_lines):
+        d.text((MARGIN, y + i * lead), ln, font=f_title, fill=(255, 255, 255, 255))
 
     out.parent.mkdir(parents=True, exist_ok=True)
     songjson.backup(out)

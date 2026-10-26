@@ -1,11 +1,11 @@
 "use client";
 
-import { CalendarClock, Copy, Download, ExternalLink, FolderOpen, KeyRound, LogOut, Monitor, Moon, Plus, Sun, X } from "lucide-react";
+import { CalendarClock, Copy, Download, ExternalLink, FolderOpen, KeyRound, LogOut, Monitor, Moon, Plus, Sun, Trash2, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useAppearance } from "@/lib/appearance";
 import { checkNow, install, setAutoCheck, startUpdates, useAutoCheck, useUpdates } from "@/lib/updates";
 import { AddonProgress, DownloadProgress, useArtStatus } from "./ArtControls";
-import { api, ART_STYLES, getAutostart, isMac, pickFolder, setAutostart, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
+import { api, ART_STYLES, getAutostart, isMac, pickFolder, setAutostart, type CleanupGroup, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
 import { Button, IconButton, Segmented, useToast } from "./ui";
 
 export const PLATFORM_NAMES: Record<Platform, string> = { youtube: "YouTube", tiktok: "TikTok", facebook: "Facebook", instagram: "Instagram" };
@@ -215,6 +215,7 @@ const SECTIONS = [
   { id: "scene-art", label: "AI features" },
   { id: "appearance", label: "Appearance" },
   { id: "storage", label: "Storage" },
+  { id: "cleanup", label: "Clean up" },
   { id: "about", label: "About & updates" },
 ];
 
@@ -553,6 +554,101 @@ const FOLDERS: Record<FolderKey, { name: string; does: string; pick: string }> =
   },
   videos: { name: "Finished videos", does: "Every rendered video, with its thumbnail and post text.", pick: "Choose the folder for finished videos" },
 };
+
+const size = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(Math.round(b / 1e6), b ? 1 : 0)} MB`);
+/** Groups that can't be undone start unticked; the rest only cost a download or a redraw. */
+const KEEP_BY_DEFAULT = new Set(["old", "removed"]);
+
+function CleanUp() {
+  const toast = useToast();
+  const [groups, setGroups] = useState<CleanupGroup[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [error, setError] = useState("");
+  const [sure, setSure] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const scan = () => {
+    setGroups(null);
+    setError("");
+    api
+      .cleanupScan()
+      .then((r) => {
+        setGroups(r.groups);
+        setPicked(new Set(r.groups.filter((g) => !KEEP_BY_DEFAULT.has(g.id)).map((g) => g.id)));
+      })
+      .catch((e) => setError((e as Error).message));
+  };
+  useEffect(() => {
+    const t = setTimeout(scan, 0); // a timer callback, so the first scan isn't a setState in the effect body
+    return () => clearTimeout(t);
+  }, []);
+
+  if (!groups) return <p className={`m-0 p-4 text-base ${error ? "text-danger" : "text-ink-soft"}`}>{error || "Looking for files nothing uses…"}</p>;
+  if (groups.length === 0) return <p className="m-0 p-4 text-base text-ink-soft">Nothing to clean up: every file is in use.</p>;
+  const total = groups.filter((g) => picked.has(g.id)).reduce((n, g) => n + g.bytes, 0);
+
+  async function run() {
+    setBusy(true);
+    try {
+      const r = await api.cleanupRun([...picked]);
+      toast(`Freed ${size(r.freed)} (${r.files} files)${r.failed ? `. ${r.failed} are open in another program and stayed.` : ""}`, "success");
+      scan();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+    setSure(false);
+    setBusy(false);
+  }
+
+  return (
+    <>
+      {groups.map((g) => (
+        <label key={g.id} className="grid cursor-pointer gap-1 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:gap-x-3">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 accent-cobalt"
+            checked={picked.has(g.id)}
+            disabled={busy}
+            onChange={(e) => {
+              setSure(false);
+              setPicked((p) => {
+                const next = new Set(p);
+                if (e.target.checked) next.add(g.id);
+                else next.delete(g.id);
+                return next;
+              });
+            }}
+          />
+          <span className="min-w-0">
+            <span className="block text-md font-semibold">{g.label}</span>
+            <span className="block text-base text-ink-soft">{g.hint}</span>
+            <span className="block text-sm text-ink-soft">If deleted: {g.cost}</span>
+            <span className="block truncate text-sm text-ink-soft">
+              {g.files} files, e.g. {g.examples.join(", ")}
+            </span>
+          </span>
+          <span className="text-md font-semibold tabular-nums sm:text-right">{size(g.bytes)}</span>
+        </label>
+      ))}
+      <div className="flex flex-wrap items-center gap-2 p-4">
+        <Button
+          size="sm"
+          variant={sure ? "primary" : "secondary"}
+          icon={<Trash2 className="size-3.5" />}
+          loading={busy}
+          disabled={busy || total === 0}
+          onClick={() => (sure ? void run() : setSure(true))}
+        >
+          {sure ? `Click again to delete ${size(total)}` : total ? `Free ${size(total)}` : "Pick something to free"}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={scan}>
+          Check again
+        </Button>
+        <span className="text-sm text-ink-soft">Deleted files don&apos;t go to the recycle bin. Videos you have finished are never touched.</span>
+      </div>
+    </>
+  );
+}
 
 function Storage() {
   const toast = useToast();
@@ -1285,6 +1381,9 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
           </Section>
           <Section id="storage" title="Storage" intro="Where your library is kept. Changing a folder moves the files there.">
             <Storage />
+          </Section>
+          <Section id="cleanup" title="Clean up" intro="Remove files nothing uses any more to save space. Each group says what deleting it costs; nothing is deleted until you press the button.">
+            <CleanUp />
           </Section>
           <Section id="about" title="About & updates" intro="New versions come from the project's releases on GitHub and install with one click.">
             <AboutRows />

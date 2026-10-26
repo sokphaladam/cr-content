@@ -53,7 +53,7 @@ def run(folder: Path, seconds: float | None = None, draft: bool = False, log=pri
     suno_file = folder / "suno.txt"
     chorus_lines = [ln for sec in parse_suno(suno_file.read_text(encoding="utf-8")).sections if sec.kind == "chorus"
                     for ln in sec.lines] if suno_file.exists() else []
-    v = lyricvideo.Variant("short", audio, p["lyrics"], p["beats"], None, p["length"])
+    v = lyricvideo.Variant("short", audio, p["lyrics"], p["beats"], None, p["length"], cut=p["cut"])
     scene = lyricvideo.Scene(data, v, chorus_lines, DRAFT if draft else SIZE, 15 if draft else lyricvideo.FPS,
                              text_scale=2.0, title_card=False, pill=False, end_screen=False, instant_first=True,
                              lyric_frac=0.5, max_lines=3, wrap_frac=0.88)
