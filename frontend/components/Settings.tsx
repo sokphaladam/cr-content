@@ -5,7 +5,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useAppearance } from "@/lib/appearance";
 import { checkNow, install, setAutoCheck, startUpdates, useAutoCheck, useUpdates } from "@/lib/updates";
 import { AddonProgress, DownloadProgress, useArtStatus } from "./ArtControls";
-import { api, ART_STYLES, getAutostart, isMac, pickFolder, setAutostart, type CleanupGroup, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
+import { api, ART_STYLES, getAutostart, isMac, pickFolder, setAutostart, type CleanupGroup, type GeminiUsage, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
 import { Button, IconButton, Segmented, useToast } from "./ui";
 
 export const PLATFORM_NAMES: Record<Platform, string> = { youtube: "YouTube", tiktok: "TikTok", facebook: "Facebook", instagram: "Instagram" };
@@ -126,6 +126,56 @@ function BackgroundRow() {
 }
 
 /* ---------- Services (API keys) ---------- */
+
+const hm = (sec: number) => `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+
+/** How much Gemini the app has used today, counted here (Google doesn't say what's left), refreshed every 30 s. */
+function GeminiUsageRow() {
+  const [u, setU] = useState<GeminiUsage | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => api.geminiUsage().then((x) => live && setU(x)).catch(() => {});
+    load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      live = false;
+      clearInterval(id);
+    };
+  }, []);
+  if (!u || !u.key_set) return null;
+  const rows = u.models.some((m) => m.model === u.current) ? u.models : [{ model: u.current, requests: 0, limit: null, blocked_for: 0, message: "" }, ...u.models];
+  return (
+    <div className="grid gap-2 px-4 py-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-base font-semibold">Gemini usage today</span>
+        <span className="text-sm text-ink-soft">Free limits reset in about {hm(u.resets_in)} (midnight Pacific time)</span>
+      </div>
+      <ul className="m-0 grid list-none gap-2 p-0">
+        {rows.map((m) => {
+          const pct = m.limit ? Math.min(100, (m.requests / m.limit) * 100) : 0;
+          return (
+            <li key={m.model} className="grid gap-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-semibold">{m.model}{m.model === u.current ? <span className="font-normal text-ink-soft"> (in use)</span> : null}</span>
+                <span className={`tabular-nums ${m.blocked_for ? "font-semibold text-danger" : "text-ink-soft"}`}>
+                  {m.blocked_for ? `Limit reached · works again in ${hm(m.blocked_for)}` : `${m.requests}${m.limit ? ` / ${m.limit}` : ""} requests`}
+                </span>
+              </div>
+              {m.limit ? (
+                <div role="progressbar" aria-label={`${m.model} requests used today`} aria-valuemin={0} aria-valuemax={m.limit} aria-valuenow={m.requests} className="h-2 overflow-hidden rounded-full bg-line">
+                  <div className={`h-full rounded-full ${m.blocked_for || pct >= 90 ? "bg-danger" : "bg-cobalt"}`} style={{ width: `${m.blocked_for ? 100 : pct}%` }} />
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="m-0 text-sm leading-snug text-ink-soft">
+        Counted by this app, so calls from other apps on the same key don&apos;t show. The limit appears once Google has named it in an error. Each model has its own daily limit.
+      </p>
+    </div>
+  );
+}
 
 function ServiceRow({ service, state, onSaved }: { service: (typeof SERVICES)[number]; state?: ServiceKeys[ServiceKey]; onSaved: (keys: ServiceKeys) => void }) {
   const toast = useToast();
@@ -1342,6 +1392,7 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
                 }}
               />
             ))}
+            <GeminiUsageRow />
           </Section>
           <Section
             id="channels"

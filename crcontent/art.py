@@ -51,7 +51,7 @@ Craft:
 """ + CRAFT
 
 MOTION_LOOP_SEC = 6.0
-MOTION_SYSTEM = """You are the motion designer for short-form videos (YouTube Shorts, TikTok, Reels) and music
+MOTION_SYSTEM_T = """You are the motion designer for short-form videos (YouTube Shorts, TikTok, Reels) and music
 videos. You animate with SVG code: the SVG you write is played frame by frame. At each frame its SMIL animations are
 evaluated and the picture is rendered by resvg (a strict SVG 1.1 renderer with most of SVG 2 painting); the frames
 become a seamless looping video clip of exactly {loop:g} seconds.
@@ -88,7 +88,15 @@ Paint the still picture first (as good as a still would be), then bring it to li
 Craft:
 - Look like a professional designer made it, not clip art. Layer depth: a rich background (multi-stop gradients,
   soft blurred light blooms), a clear focal element, and atmosphere (haze, glow, light rays, bokeh, vignette).
-""".format(loop=MOTION_LOOP_SEC, choices=", ".join(f"{MOTION_LOOP_SEC / k:g}s" for k in (1, 2, 3, 4, 6))) + CRAFT
+"""
+
+
+def motion_system(loop: float = MOTION_LOOP_SEC) -> str:
+    """The motion designer's brief for a clip that loops every `loop` seconds."""
+    return MOTION_SYSTEM_T.format(loop=loop, choices=", ".join(f"{loop / k:g}s" for k in (1, 2, 3, 4, 6))) + CRAFT
+
+
+MOTION_SYSTEM = motion_system()
 
 BACKGROUND_TASK = """Draw a background for one moment of a video. It sits behind white captions and moves with a slow
 zoom, so:
@@ -258,8 +266,8 @@ def background(subject: str, size: tuple[int, int], client: llm.Client | None = 
 
 
 def motion_background(subject: str, size: tuple[int, int], client: llm.Client | None = None,
-                      log=print) -> Path:
-    """Gemini-animated artwork for `subject`, as an mp4 at `size` that loops seamlessly every MOTION_LOOP_SEC (scenes
+                      log=print, loop: float = MOTION_LOOP_SEC) -> Path:
+    """Gemini-animated artwork for `subject`, as an mp4 at `size` that loops seamlessly every `loop` seconds (scenes
     loop video clips to their length). Cached like background(); the SVG is kept next to it."""
     from . import motion
 
@@ -267,17 +275,18 @@ def motion_background(subject: str, size: tuple[int, int], client: llm.Client | 
     if not subject:
         raise ValueError("Say what the background should show.")
     W, H = size
-    key = hashlib.sha1(f"motion {W}x{H}\n{subject}".encode()).hexdigest()[:16]
+    extra = f"\n{loop:g}s" if loop != MOTION_LOOP_SEC else ""   # the 6 s clips keep their old cache keys
+    key = hashlib.sha1(f"motion {W}x{H}\n{subject}{extra}".encode()).hexdigest()[:16]
     out = ART_CACHE / f"motion-{key}.mp4"
     if out.exists() and out.stat().st_size:
         return out
     task = MOTION_TASK.format(w=W, h=H, subject=subject)
     if W > H:
         task = task.replace("band from about 30% to 75% of the height", "lower third")
-    svg = clean_svg(_ask(_client(client), [{"type": "text", "text": task}], max_tokens=20000, system=MOTION_SYSTEM))
+    svg = clean_svg(_ask(_client(client), [{"type": "text", "text": task}], max_tokens=20000, system=motion_system(loop)))
     ART_CACHE.mkdir(parents=True, exist_ok=True)
     out.with_suffix(".svg").write_text(svg, encoding="utf-8")
-    return motion.render_loop(svg, size, out, MOTION_LOOP_SEC, log=log)
+    return motion.render_loop(svg, size, out, loop, log=log)
 
 
 def try_background(subject: str, size: tuple[int, int], log=print) -> Path | None:

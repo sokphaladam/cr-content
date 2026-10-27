@@ -88,7 +88,8 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
     clips = []
     for k, (entry, slot, length) in enumerate(zip(entries, tl.slots, lengths)):
         clip = work / f"beat_{slot.scene:02d}.mp4"
-        beat_clip(entry["chosen"], length, clip, size, look, bright=k == 0)  # the opening frame is lifted for the feed
+        beat_clip(entry["chosen"], length, clip, size, editor.for_beat(choice, slot.scene, "look"), bright=k == 0,
+                  push=choice["push"])  # the opening frame is lifted for the feed
         clips.append(clip)
     hook = entries[0]["chosen"]
     if hook["source"] not in ("card", "placeholder") and tail > 0:
@@ -99,9 +100,11 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
     else:  # no hook clip to loop into: the last beat runs to the end
         render_scene(Path(entries[-1]["chosen"]["file"]), None, tail, work / "loop_tail.mp4", size=size, look=look)
         clips.append(work / "loop_tail.mp4")
-    # the cuts between beats (not the one into the loop tail: that join has to stay the hook's own motion)
+    # the cuts between beats (not the one into the loop tail: that join has to stay the hook's own motion); each cut
+    # takes the transition of the beat it cuts into
     ends = [s.end for s in tl.slots[:-1]]
-    join(clips, work, "joined.mp4", editor.cut_filter([round(e * FPS) / FPS for e in ends], choice["transition"]))
+    cuts = [editor.for_beat(choice, s.scene, "transition") for s in tl.slots[1:]]
+    join(clips, work, "joined.mp4", editor.cut_filter([round(e * FPS) / FPS for e in ends], cuts))
     for c in clips:
         c.unlink(missing_ok=True)
 
@@ -118,7 +121,8 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
         from ..longform.settings import folder
         log(f"      ! no music: {folder(cfg['music']['dir'])} has no tracks (mp3, wav, m4a, flac)")
 
-    (work / "text.ass").write_text(captions.build(script, tl, voices, choice['caption'], choice['graphics']), encoding="utf-8")
+    (work / "text.ass").write_text(captions.build(script, tl, voices, choice['caption'], choice['graphics'],
+                                                  choice["caption_size"], choice["caption_y"]), encoding="utf-8")
     profile = LANGS.get(script.lang, LANGS["en"])
     for _, file in _fonts(script.lang):
         _install_font(profile, work / "fonts", file)
@@ -126,7 +130,8 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
     enc = encoder(cfg)
     log(f"      encoding ({'NVENC' if enc == 'nvenc' else 'x264'}), -14 LUFS, captions burned in")
     final = job / "video.mp4"
-    kw = dict(music=bed, music_volume=float(cfg["music"]["volume"]), fade_out=0.0, progress=progress_reporter(log))
+    volume = choice["music_volume"] if choice["music_volume"] is not None else float(cfg["music"]["volume"])
+    kw = dict(music=bed, music_volume=volume, fade_out=0.0, progress=progress_reporter(log))
     try:
         finalize(work, "picture.mkv", "text.ass", final, encoder=enc, **kw)
     except RuntimeError as e:

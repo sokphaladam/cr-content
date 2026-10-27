@@ -341,7 +341,11 @@ def _pictures(folder: Path) -> dict:
             pictures.save(folder, plan)
     from neonmekong import thumbnail
     own = thumbnail.custom_background_file(folder)
-    return {**plan, "cover": own.name if own else "", "cover_prompt": plan.get("cover_prompt", ""),
+    from neonmekong.lyricvideo import LOOP
+    others = [{"slug": f.name, "title": songjson.load(f / "song.json").get("title") or f.name}
+              for f in sorted(SONGS_DIR.iterdir()) if f != folder and (f / LOOP).exists() and (f / "song.json").exists()]
+    return {**plan, "cover": own.name if own else "", "loop": LOOP if (folder / LOOP).exists() else "",
+            "other_loops": others, "cover_prompt": plan.get("cover_prompt", ""),
             "meaning": plan.get("meaning", ""), "motions": pictures.MOTIONS,
             "traditions": traditions.catalog(), "tradition": traditions.pick(plan.get("tradition")),
             "cover_motion": plan.get("cover_motion", ""), "custom_look": plan.get("custom_look", ""), "custom_avoid": plan.get("custom_avoid", ""),
@@ -401,6 +405,66 @@ def motion_clip(slug: str, pid: str, move: str | None = None):
     except (RuntimeError, OSError) as e:
         raise HTTPException(500, str(e)[-300:])
     return {"file": name}
+
+
+LOOP_SCENE = ("A cozy lo-fi illustration of a small room at night, seen from the side: an original young character "
+              "with headphones and a loose sweater studying at a wooden desk by a big window, a desk lamp with a "
+              "warm glow, a steaming mug, stacked books, potted plants, a sleeping cat on the windowsill, a city "
+              "skyline far outside. Soft flat shading, a limited warm palette (amber lamp light against deep blue "
+              "night). Gentle looping motion: rain streaks sliding down the window, steam curling up from the "
+              "mug, the cat's tail slowly swaying, the character's head nodding slightly to the music, the lamp "
+              "glow breathing, faint dust motes drifting in the light.")
+
+
+LOOP_SEC = 12.0   # long enough that a song's ~15 repeats go unnoticed, and lofi motion can be slow
+
+
+@router.post("/api/lyricvideo/{slug}/loop")
+def draw_loop(slug: str, again: bool = False):
+    """Gemini draws the song's cover as an animated lofi room that loops seamlessly (<song>/loop.mp4); it plays behind
+    the lyrics wherever the cover shows. A minute or two."""
+    import shutil
+
+    from neonmekong import lyricvideo, songjson
+
+    from . import art, llm
+
+    folder = _folder(slug)
+    data = songjson.load(folder / "song.json")
+    mood = ", ".join(x for x in (data.get("mood_phrase"), data.get("scene_theme")) if x)
+    subject = LOOP_SCENE + (f" The song's mood: {mood}." if mood else "")
+    if again:   # motion_background caches by subject: a new take needs a different one
+        subject += f" (take {int(time.time())})"
+    try:
+        clip = art.motion_background(subject, lyricvideo.FULL, loop=LOOP_SEC)
+    except (llm.APIError, RuntimeError, ValueError) as e:
+        raise HTTPException(502, f"The animated cover could not be drawn: {str(e)[-300:]}")
+    shutil.copy(clip, folder / lyricvideo.LOOP)
+    return _pictures(folder)
+
+
+@router.post("/api/lyricvideo/{slug}/loop/from/{source}")
+def copy_loop(slug: str, source: str):
+    """Use another song's animated cover for this one: no Gemini request, and one room becomes the channel's look."""
+    import shutil
+
+    from neonmekong import lyricvideo
+
+    folder, src = _folder(slug), _folder(source) / lyricvideo.LOOP
+    if not src.exists():
+        raise HTTPException(404, "That song has no animated cover.")
+    if src.parent != folder:
+        shutil.copy(src, folder / lyricvideo.LOOP)
+    return _pictures(folder)
+
+
+@router.delete("/api/lyricvideo/{slug}/loop")
+def remove_loop(slug: str):
+    from neonmekong import lyricvideo
+
+    folder = _folder(slug)
+    (folder / lyricvideo.LOOP).unlink(missing_ok=True)
+    return _pictures(folder)
 
 
 @router.post("/api/lyricvideo/{slug}/pictures/motion/suggest")

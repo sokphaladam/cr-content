@@ -10,9 +10,15 @@ from pathlib import Path
 from ..styles import LOOKS, look_filter
 from . import captions
 
-TRANSITIONS = {"cut": "Hard cut", "flash": "Flash on the cut", "dip": "Dip to black"}
-DEFAULT = {"look": "", "caption": "classic", "transition": "cut", "graphics": []}
-FLASH, DIP = 0.09, 0.1   # seconds
+TRANSITIONS = {"cut": "Hard cut", "flash": "Flash on the cut", "dip": "Dip to black", "glitch": "Glitch on the cut",
+               "blur": "Blur whip"}
+DEFAULT = {"look": "", "caption": "classic", "transition": "cut", "graphics": [], "beats": {}, "caption_size": 1.0,
+           "caption_y": 0.64, "music_volume": None, "push": True, "voice": "", "rate": ""}
+# the fine-tune sliders: (lowest, highest). caption_y is the caption's middle as a share of the height: 0.72 keeps two
+# rows clear of the bottom 20% the apps draw over
+NUMBERS = {"caption_size": (0.7, 1.4), "caption_y": (0.45, 0.72), "music_volume": (0.0, 1.0)}
+PER_BEAT = ("look", "transition")   # what a beat can set for itself; the rest is the whole Short's
+FLASH, DIP, GLITCH, WHIP = 0.09, 0.1, 0.12, 0.07   # seconds
 
 
 def options() -> dict:
@@ -41,11 +47,54 @@ def load(job: Path, cfg: dict | None = None) -> dict:
             out[k] = saved[k]
     if isinstance(saved.get("graphics"), list):
         out["graphics"] = [g for g in saved["graphics"] if g in graphics_names()]
+    try:
+        out["beats"] = _beats(saved.get("beats") or {})
+    except ValueError:
+        pass
+    for k, (lo, hi) in NUMBERS.items():
+        if isinstance(saved.get(k), (int, float)):
+            out[k] = min(max(float(saved[k]), lo), hi)
+    if isinstance(saved.get("push"), bool):
+        out["push"] = saved["push"]
+    for k in ("voice", "rate"):
+        if isinstance(saved.get(k), str):
+            out[k] = saved[k]
     return out
 
 
+def _beats(beats: dict) -> dict:
+    """{"N": {look?, transition?}} with only real overrides kept ("" = as the whole Short); bad names raise."""
+    if not isinstance(beats, dict):
+        raise ValueError("Per-beat edits must be {beat: {look, transition}}.")
+    out = {}
+    for n, over in beats.items():
+        if not str(n).isdigit() or not isinstance(over, dict):
+            raise ValueError(f"Bad per-beat edit for beat {n!r}.")
+        kept = {}
+        for k in PER_BEAT:
+            v = over.get(k) or ""
+            if v and v not in options()[k]:
+                raise ValueError(f"Unknown {k} for beat {n}: {v!r}.")
+            if v:
+                kept[k] = v
+        if kept:
+            out[str(int(n))] = kept
+    return out
+
+
+def for_beat(choice: dict, n: int, key: str) -> str:
+    """Beat `n`'s own look or transition, else the whole Short's."""
+    return choice.get("beats", {}).get(str(n), {}).get(key) or choice[key]
+
+
+def write(job: Path, edit: dict) -> dict:
+    (Path(job) / "edit.json").write_text(json.dumps(edit, indent=2), encoding="utf-8")
+    return edit
+
+
 def save(job: Path, choice: dict) -> dict:
-    """Keep the valid parts of `choice`; unknown names raise ValueError."""
+    """Keep the valid parts of `choice`; unknown names and numbers out of range raise ValueError. The narrator
+    ("voice", "rate") isn't set here: changing it re-voices the Short (shorts.set_voice)."""
     job = Path(job)
     edit = load(job)
     for k, allowed in options().items():
@@ -57,8 +106,16 @@ def save(job: Path, choice: dict) -> dict:
         if not isinstance(choice["graphics"], list) or any(g not in graphics_names() for g in choice["graphics"]):
             raise ValueError("Unknown motion graphic.")
         edit["graphics"] = list(dict.fromkeys(choice["graphics"]))
-    (job / "edit.json").write_text(json.dumps(edit, indent=2), encoding="utf-8")
-    return edit
+    if "beats" in choice:
+        edit["beats"] = _beats(choice["beats"])
+    for k, (lo, hi) in NUMBERS.items():
+        if choice.get(k) is not None:
+            if not lo <= float(choice[k]) <= hi:
+                raise ValueError(f"{k} must be between {lo} and {hi}.")
+            edit[k] = float(choice[k])
+    if "push" in choice:
+        edit["push"] = bool(choice["push"])
+    return write(job, edit)
 
 
 # ---- the "Suggest edit" button: what fits this Short, from what it is about and how fast it moves
@@ -152,16 +209,27 @@ def suggest(job: Path) -> dict:
             "summary": summary, "pace": pace}
 
 
-def cut_filter(boundaries: list[float], transition: str) -> str:
-    """An ffmpeg filter chain for the cuts at `boundaries` (seconds): "" for a hard cut. Brightness is eased around
-    each cut, so the picture's length and the voice sync don't change."""
+def _cut(b: float, transition: str) -> str:
     if transition == "flash":
-        return ",".join(f"eq=brightness='0.55*max(0,1-(t-{b:.3f})/{FLASH})':eval=frame:"
-                        f"enable='between(t,{b:.3f},{b + FLASH:.3f})'" for b in boundaries)
+        return (f"eq=brightness='0.55*max(0,1-(t-{b:.3f})/{FLASH})':eval=frame:"
+                f"enable='between(t,{b:.3f},{b + FLASH:.3f})'")
     if transition == "dip":
-        return ",".join(f"eq=brightness='-1*max(0,1-abs(t-{b:.3f})/{DIP})':eval=frame:"
-                        f"enable='between(t,{b - DIP:.3f},{b + DIP:.3f})'" for b in boundaries)
+        return (f"eq=brightness='-1*max(0,1-abs(t-{b:.3f})/{DIP})':eval=frame:"
+                f"enable='between(t,{b - DIP:.3f},{b + DIP:.3f})'")
+    if transition == "glitch":
+        on = f"enable='between(t,{b:.3f},{b + GLITCH:.3f})'"
+        return f"rgbashift=rh=-16:bh=16:{on},noise=alls=40:allf=t:{on}"
+    if transition == "blur":
+        return f"gblur=sigma=28:enable='between(t,{b - WHIP:.3f},{b + WHIP:.3f})'"
     return ""
+
+
+def cut_filter(boundaries: list[float], transition: str | list[str]) -> str:
+    """An ffmpeg filter chain for the cuts at `boundaries` (seconds), one transition for all of them or one each: ""
+    when they're all hard cuts. Every effect is eased in place around its cut, so the picture's length and the voice
+    sync don't change."""
+    kinds = [transition] * len(boundaries) if isinstance(transition, str) else transition
+    return ",".join(f for f in (_cut(b, k) for b, k in zip(boundaries, kinds)) if f)
 
 
 def grade(look: str) -> str:
@@ -184,8 +252,9 @@ def preview(job: Path, n: int, choice: dict, out: Path, log=print) -> Path:
     work.mkdir(exist_ok=True)
     try:
         words = {v.scene: v.words for v in voices}
-        (work / "text.ass").write_text(captions.build(ep.script, tl, words, choice.get("caption", "classic"), choice.get("graphics", [])),
-                                       encoding="utf-8")
+        (work / "text.ass").write_text(captions.build(ep.script, tl, words, choice.get("caption", "classic"),
+                                                      choice.get("graphics", []), choice.get("caption_size", 1.0),
+                                                      choice.get("caption_y")), encoding="utf-8")
         profile = LANGS.get(ep.script.lang, LANGS["en"])
         for _, file in _fonts(ep.script.lang):
             _install_font(profile, work / "fonts", file)

@@ -35,6 +35,9 @@ STYLES = {
     "pop": {"label": "Pop", "hi": "&H009B30FF&", "base": WHITE, "px": 112, "bord": 8, "edge": BLACK, "pop": (60, 118)},
     "neon": {"label": "Neon", "hi": "&H00FFE500&", "base": WHITE, "px": 96, "bord": 6, "edge": "&H00601A00&", "pop": (90, 104)},
     "minimal": {"label": "Minimal", "hi": WHITE, "base": "&H00C8C8C8&", "px": 84, "bord": 5, "edge": BLACK, "pop": (96, 100)},
+    "bold": {"label": "Bold green", "hi": "&H0040FF5A&", "base": WHITE, "px": 118, "bord": 9, "edge": BLACK, "pop": (70, 112)},
+    "fire": {"label": "Fire", "hi": "&H00148CFF&", "base": "&H00D8F4FF&", "px": 106, "bord": 7, "edge": "&H00101040&", "pop": (76, 110)},
+    "doc": {"label": "Documentary", "hi": "&H0090E0F0&", "base": WHITE, "px": 78, "bord": 4, "edge": "&H00202020&", "pop": (100, 100)},
 }
 
 
@@ -76,7 +79,7 @@ def label_events(text: str, start: float, end: float, family: str, lang: str) ->
 
 
 def caption_events(words: list[Word], at: float, family: str, lang: str, n: int, until: float,
-                   look: dict = STYLES["classic"]) -> list[str]:
+                   look: dict = STYLES["classic"], y: int = CAPTION_Y) -> list[str]:
     """The voiceover's words (times relative to `at`, the beat's start) as captions; the last group stays up to
     `until` at most."""
     out = []
@@ -100,15 +103,18 @@ def caption_events(words: list[Word], at: float, family: str, lang: str, n: int,
                    if wi == 0 and lo != hi else "")
             body = r"\N".join(" ".join(f"{{\\1c{look['hi'] if j == wi else look['base']}}}{texts[j]}" for j in idx)
                               for idx in per_row)
-            out.append(f"Dialogue: 1,{_ts(s)},{_ts(e)},Caption,,0,0,0,,{{\\an5\\pos({CX},{CAPTION_Y})\\fs{size}"
+            out.append(f"Dialogue: 1,{_ts(s)},{_ts(e)},Caption,,0,0,0,,{{\\an5\\pos({CX},{y})\\fs{size}"
                        f"{pop}}}{body}")
     return out
 
 
 def build(script: Script, tl: Timeline, voices: dict[int, list[Word]], style: str = "classic",
-          graphics: tuple[str, ...] | list[str] = ()) -> str:
-    """The whole text layer: hook, labels and captions for every beat; `style` is a key of STYLES."""
-    look = STYLES.get(style, STYLES["classic"])
+          graphics: tuple[str, ...] | list[str] = (), size: float = 1.0, y: float | None = None) -> str:
+    """The whole text layer: hook, labels and captions for every beat; `style` is a key of STYLES, `size` scales the
+    captions and `y` places their middle (a share of the height; None: CAPTION_Y)."""
+    look = dict(STYLES.get(style, STYLES["classic"]))
+    look["px"] = round(look["px"] * size)
+    cap_y = CAPTION_Y if y is None else round(HEIGHT * y)
     lang = script.lang
     profile = LANGS.get(lang, LANGS["en"])
     (body, _), (title, _) = _fonts(lang)
@@ -123,7 +129,7 @@ def build(script: Script, tl: Timeline, voices: dict[int, list[Word]], style: st
             events += label_events(scene.text, slot.start + 0.05, slot.end - 0.05, heavy, lang)
         words = voices.get(scene.n) or []
         if words:
-            events += caption_events(words, slot.start, heavy, lang, n, slot.end, look)
+            events += caption_events(words, slot.start, heavy, lang, n, slot.end, look, cap_y)
     if graphics:
         from . import graphics as gfx
 

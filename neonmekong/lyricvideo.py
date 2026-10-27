@@ -224,6 +224,40 @@ def place(frame: np.ndarray, sp: dict, cx: float, cy: float, gain: float = 1.0, 
 
 # ---------------------------------------------------------------- the scene
 
+LOOP = "loop.mp4"   # the song's animated cover (a seamless loop, crcontent/art.motion_background), in its folder
+
+
+class Loop:
+    """The frames of a looping clip, cover-cropped to w x h, at any video second (wrapping round). Read one at a time
+    (a whole loop at 1.25x 1080p would be ~2 GB): rendering asks in order, so it seeks only when the time jumps."""
+
+    def __init__(self, file: Path, w: int, h: int):
+        self.cap = cv2.VideoCapture(str(file))
+        self.count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS) or FPS
+        if self.count <= 0:
+            raise ValueError(f"{file.name} has no frames")
+        self.w, self.h, self.pos, self.last = w, h, -1, None
+
+    def at(self, t: float) -> np.ndarray:
+        i = int(t * self.fps) % self.count
+        if i == self.pos and self.last is not None:
+            return self.last
+        if i != self.pos + 1:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+        ok, img = self.cap.read()
+        if not ok:   # a short last frame or a bad seek: start the loop again rather than fail the render
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, img = self.cap.read()
+            i = 0
+        k = max(self.w / img.shape[1], self.h / img.shape[0])
+        img = cv2.resize(img, (max(self.w, round(img.shape[1] * k)), max(self.h, round(img.shape[0] * k))),
+                         interpolation=cv2.INTER_CUBIC)
+        y, x = (img.shape[0] - self.h) // 2, (img.shape[1] - self.w) // 2
+        self.pos, self.last = i, np.ascontiguousarray(img[y:y + self.h, x:x + self.w])
+        return self.last
+
+
 class Scene:
     def __init__(self, data: dict, v: Variant, chorus_lines: list[str], size: tuple[int, int], fps: int,
                  show_lyrics: bool = True, *, text_scale: float = 1.0, title_card: bool = True, pill: bool = True,
@@ -249,6 +283,8 @@ class Scene:
         own = thumbnail.custom_background(data, bw, bh)  # the song's own picture: no drawn river to shimmer
         self.own_background = own is not None
         self.canvas = crisp(np.asarray(own or thumbnail.background(pal, seed, bw, bh, shade=False))[..., ::-1].copy())
+        loop = Path(data["_dir"]) / LOOP if data.get("_dir") else None
+        self.loop = Loop(loop, bw, bh) if loop and loop.exists() else None   # the animated cover, over the still
         self.starts = [ln["start"] for ln in v.lines]
         # one picture per sung section (pictures.py), dissolving into each other; the cover / drawn city between
         folder = data.get("_dir")
@@ -389,9 +425,12 @@ class Scene:
                     if k and abs(self.pics[k - 1][1] - a) < 0.01:
                         before = self._view(self.pics[k - 1][2], self.pics[k - 1][3], 1.0, t, push)
                     else:
-                        before = self._view(self.canvas, self.cover_move, t / max(self.v.duration, 1.0), t, push)
+                        before = self._view(self._cover(t), self.cover_move, t / max(self.v.duration, 1.0), t, push)
                     return cv2.addWeighted(before, 1.0 - u, here, u, 0)
-        return self._view(self.canvas, self.cover_move, t / max(self.v.duration, 1.0), t, push)
+        return self._view(self._cover(t), self.cover_move, t / max(self.v.duration, 1.0), t, push)
+
+    def _cover(self, t: float) -> np.ndarray:
+        return self.loop.at(t) if self.loop else self.canvas
 
     def _beat(self, t: float) -> tuple[float, float, float, float]:
         """(brightness, zoom push, lyric glow, grade pulse) for this moment: the beat's pulse, scaled by the song's

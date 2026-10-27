@@ -27,6 +27,12 @@ SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}, "required":
 @pytest.fixture(autouse=True)
 def no_sleep(monkeypatch):
     monkeypatch.setattr(llm, "_sleep", lambda s: None)
+    monkeypatch.setattr(llm, "_usage_file", None)
+
+
+@pytest.fixture(autouse=True)
+def usage_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(llm, "_usage_file", tmp_path / "usage.json")
 
 
 @pytest.fixture
@@ -148,3 +154,29 @@ def test_missing_key_is_an_authentication_error(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(llm.AuthenticationError, match="GEMINI_API_KEY"):
         llm.make_client().messages.create(messages=[{"role": "user", "content": "x"}])
+
+
+DAILY = json.dumps({"error": {"message": "Quota exceeded for metric: generate_content_free_tier_requests, limit: 500, "
+                              "model: gemini-3.5-flash-lite. Generate content requests per day limit exceeded on "
+                              "Free Tier. Please retry in 10h6m38.68s."}})
+
+
+def test_usage_counts_requests_and_keeps_the_daily_block(client, monkeypatch):
+    calls = []
+    answers = [ok("{}"), Resp(429, text=DAILY)]
+    monkeypatch.setattr("requests.post", lambda url, **kw: calls.append(1) or answers.pop(0))
+    client.messages.create(model="m", messages=[{"role": "user", "content": "hi"}])
+    with pytest.raises(llm.RateLimitError):
+        client.messages.create(model="m", messages=[{"role": "user", "content": "hi"}])
+    assert len(calls) == 2   # a daily limit is not retried: retries would only spend more of it
+    row = llm.usage()["models"][0]
+    assert row["model"] == "m" and row["requests"] == 2 and row["limit"] == 500
+    assert 10 * 3600 < row["blocked_for"] <= 10 * 3600 + 400
+
+
+def test_usage_starts_again_on_a_new_pacific_day():
+    t = 1_800_000_000.0
+    llm.record("m", 200, now=t)
+    day, left = llm._pacific_day(t)
+    assert llm.usage(now=t)["models"][0]["requests"] == 1
+    assert llm.usage(now=t + left + 1)["models"] == [] and llm.usage(now=t + left + 1)["day"] != day

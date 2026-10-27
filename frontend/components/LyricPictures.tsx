@@ -246,6 +246,32 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
         </label>
       )}
       {card(rows[0])}
+      <div className="well grid gap-2 p-3 sm:grid-cols-[minmax(0,13rem)_1fr]">
+        <div className="grid aspect-video w-full place-items-center overflow-hidden rounded-lg bg-black">
+          {plan.loop ? (
+            <video src={songFileUrl(slug, plan.loop, bust)} className="size-full object-cover" autoPlay loop muted playsInline aria-label="Animated cover" />
+          ) : busy === "loop" ? <Spinner className="size-5" /> : <Clapperboard className="size-6 text-ink-soft" aria-hidden />}
+        </div>
+        <div className="grid content-start gap-2">
+          <div className="text-sm font-semibold">Animated cover <span className="font-normal text-ink-soft">(lofi room, loops behind the lyrics)</span></div>
+          <p className="m-0 text-sm text-ink-soft">
+            Gemini draws a cozy lofi room at night that moves: rain on the window, steam from the mug, a cat&apos;s tail, the lamp glow. It loops every 12 seconds wherever the cover would play, with the camera move above. Takes a minute or two and one Gemini request; reusing one from another song is free.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="primary" icon={<Paintbrush className="size-3.5" />} loading={busy === "loop"} disabled={!!busy && busy !== "loop"}
+              onClick={() => void run("loop", async () => saved(await api.drawLyricLoop(slug, !!plan.loop)))}>{plan.loop ? "Draw again" : "Draw animated cover"}</Button>
+            {plan.loop && <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} disabled={!!busy}
+              onClick={() => void run("loop", async () => saved(await api.removeLyricLoop(slug)))}>Remove</Button>}
+            {plan.other_loops.length > 0 && (
+              <select className="field-input h-9 py-0 text-sm" aria-label="Use the animated cover of another song" value="" disabled={!!busy}
+                onChange={(e) => { const from = e.target.value; if (from) void run("loop", async () => saved(await api.copyLyricLoop(slug, from))); }}>
+                <option value="">Use one from another song…</option>
+                {plan.other_loops.map((o) => <option key={o.slug} value={o.slug}>{o.title}</option>)}
+              </select>
+            )}
+          </div>
+        </div>
+      </div>
       <section className="grid gap-2" aria-label="Camera motion">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="m-0 text-base font-semibold">Camera motion <span className="font-normal text-ink-soft">(how each picture moves behind the lyrics)</span></h3>

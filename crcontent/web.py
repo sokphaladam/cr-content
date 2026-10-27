@@ -1379,8 +1379,13 @@ def shorts_trim_beat(name: str, n: int, req: ShortsTrim):
 class ShortsEdit(BaseModel):
     look: str | None = None        # a styles.LOOKS key, or "" for the channel default
     caption: str | None = None     # a captions.STYLES key
-    transition: str | None = None  # cut | flash | dip
+    transition: str | None = None  # shorts/edit.py TRANSITIONS
     graphics: list[str] | None = None  # motion graphics (shorts/graphics.py NAMES)
+    beats: dict[str, dict[str, str]] | None = None  # per-beat {look, transition} overrides
+    caption_size: float | None = None  # the fine-tune sliders (shorts/edit.py NUMBERS)
+    caption_y: float | None = None
+    music_volume: float | None = None
+    push: bool | None = None           # slow push-in on clips with no camera move
 
 
 @app.post("/api/shorts/{name}/edit")
@@ -1409,7 +1414,8 @@ def shorts_edit_suggest(name: str):
 
 
 @app.get("/api/shorts/{name}/edit/preview")
-def shorts_edit_preview(name: str, beat: int = 1, look: str = "", caption: str = "classic", graphics: str = ""):
+def shorts_edit_preview(name: str, beat: int = 1, look: str = "", caption: str = "classic", graphics: str = "",
+                        size: float = 1.0, y: float = 0.64):
     """One frame of beat `beat` as the render would draw it with this mood and caption look (the Edit panel)."""
     import tempfile
 
@@ -1420,13 +1426,66 @@ def shorts_edit_preview(name: str, beat: int = 1, look: str = "", caption: str =
     os.close(fd)  # Windows can't delete a file while the mkstemp handle is still open
     out = Path(tmp)
     try:
-        edit.preview(folder, beat, {"look": look, "caption": caption, "graphics": [g for g in graphics.split(",") if g]}, out)
+        (lo, hi), (ylo, yhi) = edit.NUMBERS["caption_size"], edit.NUMBERS["caption_y"]
+        edit.preview(folder, beat, {"look": look, "caption": caption, "graphics": [g for g in graphics.split(",") if g],
+                                    "caption_size": min(max(size, lo), hi), "caption_y": min(max(y, ylo), yhi)}, out)
         data = out.read_bytes()
     except (ValueError, RuntimeError, OSError) as e:
         raise HTTPException(400, str(e))
     finally:
         out.unlink(missing_ok=True)
     return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+class ShortsVoice(BaseModel):
+    voice: str  # an Edge voice of the Short's language, or "" for the channel's
+    rate: str = ""  # shorts.RATES, or "" for the channel's speed
+
+
+@app.post("/api/shorts/{name}/voice")
+def shorts_set_voice(name: str, req: ShortsVoice):
+    """Change who narrates this Short: every beat is voiced again, re-timed and checked again."""
+    from . import shorts
+
+    folder = _short_dir(name)
+    _short_idle(name)
+    try:
+        report = shorts.set_voice(folder, req.voice, req.rate, log=lambda line: None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": report["status"]}
+
+
+@app.post("/api/shorts/{name}/beats/{n}/voice")
+def shorts_upload_voice(name: str, n: int, file: UploadFile = File(...)):
+    """Beat `n` is spoken by your recording (uploaded or recorded in the page); re-timed and checked again."""
+    from . import shorts
+
+    folder = _short_dir(name)
+    _short_idle(name)
+    tmp = UPLOAD_DIR / f"voice-{uuid.uuid4().hex[:12]}{Path(file.filename or '').suffix.lower()}"
+    _save_upload(file, tmp)
+    try:
+        report = shorts.use_own_voice(folder, n, tmp, log=lambda line: None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"status": report["status"]}
+
+
+@app.delete("/api/shorts/{name}/beats/{n}/voice")
+def shorts_remove_voice(name: str, n: int):
+    """Beat `n` goes back to the narrator's voice."""
+    from . import shorts
+
+    folder = _short_dir(name)
+    _short_idle(name)
+    try:
+        report = shorts.remove_own_voice(folder, n, log=lambda line: None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": report["status"]}
 
 
 @app.get("/api/shorts/{name}/beats/{n}/source")
@@ -2362,6 +2421,12 @@ SERVICE_KEYS = {
 
 def _masked(value: str) -> str:
     return "" if not value else ("•" * 6 + value[-4:] if len(value) > 8 else "•" * 6)
+
+
+@app.get("/api/gemini/usage")
+def gemini_usage():
+    """Today's Gemini requests as this app counted them, and any limit Google has said is reached."""
+    return llm.usage()
 
 
 @app.get("/api/settings/keys")

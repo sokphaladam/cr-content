@@ -11,6 +11,7 @@ Every window of the beat's length is scored (own motion, sharpness, exposure; ne
 fade-in). The best window then goes to Gemini with the planned shot (match.py), and judged() applies what it saw:
 the wrong animal, no movement, a logo or an intro rejects it. Clips that fail are listed with the reason.
 """
+import json
 import math
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -76,9 +77,10 @@ def _samples(path: Path, seconds: float, start: float = 0.0) -> list[tuple[float
     import cv2
 
     probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                            "stream=width,height", "-of", "csv=p=0", str(path)], stdin=subprocess.DEVNULL,
-                           capture_output=True, text=True).stdout.strip().split(",")
-    w, h = int(probe[0]), int(probe[1])
+                            "stream=width,height", "-of", "json", str(path)], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True).stdout
+    stream = json.loads(probe)["streams"][0]   # json, not csv: some clips print width and height on separate lines
+    w, h = int(stream["width"]), int(stream["height"])
     out_h = round(SAMPLE_W * h / w / 2) * 2
     cmd = ["ffmpeg", "-v", "error", *(["-ss", f"{start:.2f}"] if start > 0 else []), "-i", str(path),
            "-t", f"{seconds:.2f}", "-an",

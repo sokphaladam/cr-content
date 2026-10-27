@@ -39,7 +39,7 @@ def make_job(ep, log=print, job: Path | None = None) -> Path:
     from ..pipeline import slugify
     from . import footage, preflight, settings, timing
 
-    cfg = settings.load()
+    cfg = job_cfg(job) if job else settings.load()   # built again: it keeps its narrator
     script = ep.script
     log(f"[1/{STEPS}] Ep {ep.ep}: \"{ep.title}\" ({script.lang}, {len(script.scenes)} beats)")
     for note in ep.notes:
@@ -98,8 +98,7 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
     voiced again and the timeline rebuilt (the other beats' audio is cached), the hook clip keeps its footage but
     gets its best window for the new length, and the pre-flight runs again. Your spreadsheet isn't changed: the
     change is noted on the page. Returns the new report."""
-    from ..longform import storyboard, voice
-    from . import hook, plan, preflight, settings, timing
+    from . import plan
 
     value = " ".join((value or "").split())
     if field not in FIELDS or not value:
@@ -109,7 +108,7 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
 
         value = opening(value)
     job = Path(job)
-    cfg = settings.load()
+    cfg = job_cfg(job)
     ep = plan.ShortPlan.load(job / "episode.json")
     scene = ep.script.scenes[0]
     old = scene.voiceover if field == "line" else scene.text
@@ -120,6 +119,32 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
     ep.notes.append(f"{FIELDS[field]} changed: \"{old}\" → \"{value}\"")
     ep.save(job / "episode.json")
     ep.script.save(job / "scenes.json")
+    report = _revoice(job, ep, cfg, log)
+    log(f"      {FIELDS[field]}: \"{old}\" -> \"{value}\"")
+    return report
+
+
+def job_cfg(job: Path) -> dict:
+    """The Shorts settings with this Short's narrator and speed (the Edit panel's) over the channel's."""
+    from . import edit, settings
+
+    cfg = settings.load()
+    choice = edit.load(job)
+    if choice["voice"]:  # an Edge voice; your own recordings still win over it
+        if cfg["voice"]["engine"] == "elevenlabs":
+            cfg["voice"]["engine"] = "edge"
+        cfg["voice"]["edge"][choice["voice"].split("-")[0]] = choice["voice"]
+    if choice["rate"]:
+        cfg["voice"]["edge"]["rate"] = choice["rate"]
+    return cfg
+
+
+def _revoice(job: Path, ep, cfg: dict, log) -> dict:
+    """Voice every beat again (unchanged ones come from the cache), rebuild the timeline, give the hook clip a window
+    that fits its new length, and run the pre-flight again. Returns the new report."""
+    from ..longform import storyboard, voice
+    from . import hook, preflight, timing
+
     (job / storyboard.APPROVAL).unlink(missing_ok=True)
     media = media_folder(ep.script.slug, cfg)
     voices = voice.make_voices(ep.script, media, job / "voice", cfg, log=log)
@@ -141,17 +166,102 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
     (job / "voice.json").write_text(json.dumps([v.to_json() for v in voices], ensure_ascii=False), encoding="utf-8")
     (job / "timeline.json").write_text(json.dumps(tl.to_json(), ensure_ascii=False, indent=2), encoding="utf-8")
     (job / "footage.json").write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
-    log(f"      {FIELDS[field]}: \"{old}\" -> \"{value}\"; {tl.total:.1f}s now")
+    log(f"      re-voiced: {tl.total:.1f}s now")
     return preflight.write(job, ep, tl, voices, entries, cfg, media, log=log)
+
+
+RATES = {"-10%": "Slower", "+0%": "Normal", "+5%": "Slightly fast", "+15%": "Fast"}   # as the app's voice picker
+
+
+def voices_for(lang: str) -> dict:
+    """The narrators the Edit panel offers for `lang`: {edge voice: its name}."""
+    from ..config import LANGS
+
+    return {v: v.split("-")[2].removesuffix("Neural") for v in LANGS.get(lang, LANGS["en"]).voices}
+
+
+def narrator(job: Path, lang: str) -> tuple[str, str]:
+    """(voice, rate) this Short is narrated with."""
+    from ..config import LANGS
+
+    edge = job_cfg(job)["voice"]["edge"]
+    return edge.get(lang) or LANGS.get(lang, LANGS["en"]).voices[0], edge.get("rate", "+0%")
+
+
+def set_voice(job: Path, name: str, rate: str = "", log=print) -> dict:
+    """This Short is narrated by Edge voice `name` at `rate` ("" = the channel's): every beat is voiced again and the
+    checks run again. Returns the new report."""
+    from . import edit, plan
+
+    job = Path(job)
+    ep = plan.ShortPlan.load(job / "episode.json")
+    if name and name not in voices_for(ep.script.lang):
+        raise ValueError(f"Unknown voice {name!r} for {ep.script.lang}.")
+    if rate and rate not in RATES:
+        raise ValueError(f"Unknown speed {rate!r}.")
+    edit.write(job, {**edit.load(job), "voice": name, "rate": rate})
+    log(f"      narrator: {name or 'channel default'} at {rate or 'the channel speed'}")
+    return _revoice(job, ep, job_cfg(job), log)
+
+
+def _set_aside(media: Path, n: int, exts) -> None:
+    """Move beat `n`'s own files with these extensions to <media>/removed/ (it may be your only copy: never deleted)."""
+    for old in media.glob(f"scene-{n:02d}.*"):
+        if old.suffix.lower() in exts:
+            (media / "removed").mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old), str(media / "removed" / f"{datetime.now():%Y%m%d-%H%M%S}-{old.name}"))
+
+
+def use_own_voice(job: Path, n: int, upload: Path, log=print) -> dict:
+    """Beat `n` is spoken by your recording (any audio ffmpeg reads, a browser's webm too), saved as
+    <media>/scene-NN.wav; the Short is re-timed and checked again. Returns the new report."""
+    import subprocess
+
+    from ..longform.voice import AUDIO_EXTS
+    from . import plan
+
+    job = Path(job)
+    cfg = job_cfg(job)
+    ep = plan.ShortPlan.load(job / "episode.json")
+    if not 1 <= n <= len(ep.script.scenes):
+        raise ValueError(f"There's no beat {n}.")
+    media = media_folder(ep.script.slug, cfg)
+    media.mkdir(parents=True, exist_ok=True)
+    tmp = media / f"part-scene-{n:02d}.wav"   # not scene-NN.*: _set_aside would move it
+    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(upload), "-vn", "-ac", "1", "-ar", "44100", str(tmp)],
+                       stdin=subprocess.DEVNULL, capture_output=True)
+    if r.returncode:
+        tmp.unlink(missing_ok=True)
+        raise ValueError("That isn't an audio file ffmpeg can read.")
+    _set_aside(media, n, AUDIO_EXTS)
+    tmp.replace(media / f"scene-{n:02d}.wav")
+    log(f"      beat {n}: your voice")
+    return _revoice(job, ep, cfg, log)
+
+
+def remove_own_voice(job: Path, n: int, log=print) -> dict:
+    """Beat `n` goes back to the narrator's voice; your recording moves to <media>/removed/."""
+    from ..longform.voice import AUDIO_EXTS, recording
+    from . import plan
+
+    job = Path(job)
+    cfg = job_cfg(job)
+    ep = plan.ShortPlan.load(job / "episode.json")
+    media = media_folder(ep.script.slug, cfg)
+    if not recording(media, n):
+        raise ValueError(f"Beat {n} isn't using your voice.")
+    _set_aside(media, n, AUDIO_EXTS)
+    log(f"      beat {n}: back to the narrator")
+    return _revoice(job, ep, cfg, log)
 
 
 def _load(job: Path):
     """(cfg, ep, tl, voices, entries, media) of a Short's job folder."""
     from ..longform.timing import Timeline
     from ..longform.voice import Voice
-    from . import plan, settings
+    from . import plan
 
-    cfg = settings.load()
+    cfg = job_cfg(job)
     ep = plan.ShortPlan.load(job / "episode.json")
     tl = Timeline.from_json(json.loads((job / "timeline.json").read_text(encoding="utf-8")))
     voices = [Voice.from_json(v) for v in json.loads((job / "voice.json").read_text(encoding="utf-8"))]
@@ -191,9 +301,7 @@ def use_own_clip(job: Path, n: int, upload: Path, name: str, log=print) -> dict:
     if not 1 <= n <= len(entries):
         raise ValueError(f"There's no beat {n}.")
     media.mkdir(parents=True, exist_ok=True)
-    for old in media.glob(f"scene-{n:02d}.*"):  # one file per beat: an earlier one is set aside, not deleted
-        (media / "removed").mkdir(exist_ok=True)
-        shutil.move(str(old), str(media / "removed" / f"{datetime.now():%Y%m%d-%H%M%S}-{old.name}"))
+    _set_aside(media, n, (*VIDEO_EXTS, *IMAGE_EXTS))  # one clip per beat (your voice recording for it stays)
     dest = media / f"scene-{n:02d}{ext}"
     shutil.copy(upload, dest)
     e = entries[n - 1]

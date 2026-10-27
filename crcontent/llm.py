@@ -12,8 +12,12 @@ The key is GEMINI_API_KEY (the app loads .env into the environment); LLM_MODEL p
 """
 import json
 import os
+import re
+import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import requests
 
@@ -178,6 +182,89 @@ class _Beta:
         self.messages = _Messages(client)
 
 
+# ---------- usage: Google reports no "requests left", so the app counts its own and keeps what a 429 says ----------
+
+_usage_lock = threading.Lock()
+_usage_file = None   # set by tests; else <data folder>/cache/gemini_usage.json
+
+
+def _usage_path() -> Path:
+    if _usage_file:
+        return Path(_usage_file)
+    from .config import CACHE_DIR
+    return CACHE_DIR / "gemini_usage.json"
+
+
+def _pacific_day(now: float) -> tuple[str, float]:
+    """(the quota day, seconds until it resets). Free-tier daily limits reset at midnight Pacific time.
+    shortcut: fixed UTC-8 (no tzdata here), so it is an hour off in US summer time; a 429's own retry time is exact."""
+    t = datetime.fromtimestamp(now, timezone.utc) - timedelta(hours=8)
+    nxt = datetime.combine(t.date() + timedelta(days=1), datetime.min.time(), timezone.utc)
+    return t.date().isoformat(), (nxt - t.replace(tzinfo=timezone.utc)).total_seconds()
+
+
+def _seconds(text: str) -> float | None:
+    """'10h6m38.6s' (from "Please retry in ...") as seconds."""
+    m = re.search(r"retry in ((?:\d+h)?(?:\d+m)?(?:[\d.]+s)?)", text)
+    if not m or not m.group(1):
+        return None
+    parts = {unit: n for n, unit in re.findall(r"([\d.]+)([hms])", m.group(1))}
+    return float(parts.get("h", 0)) * 3600 + float(parts.get("m", 0)) * 60 + float(parts.get("s", 0))
+
+
+def _load_usage(now: float) -> dict:
+    day, _ = _pacific_day(now)
+    try:
+        data = json.loads(_usage_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if data.get("day") != day:   # a new quota day: the counts start again, a block still running stays
+        data = {"day": day, "models": {m: {"requests": 0, **{k: v for k, v in u.items() if k != "requests"}}
+                                       for m, u in (data.get("models") or {}).items()
+                                       if (u.get("blocked_until") or 0) > now}}
+    return data
+
+
+def record(model: str, status: int, text: str = "", now: float | None = None) -> None:
+    """Count one request to `model` (every HTTP attempt counts against the quota); a 429 also keeps the limit it
+    names and when it lifts."""
+    now = time.time() if now is None else now
+    with _usage_lock:
+        data = _load_usage(now)
+        u = data["models"].setdefault(model, {"requests": 0})
+        u["requests"] += 1
+        if status == 429:
+            msg = _error(status, text).message
+            limit = re.search(r"limit: (\d+)", msg)
+            wait = _seconds(msg)
+            u.update(limit=int(limit.group(1)) if limit else u.get("limit"), message=msg[:300],
+                     blocked_until=now + wait if wait else now + 60, daily="per day" in msg.lower() or "PerDay" in msg)
+        elif status < 400:
+            u.pop("blocked_until", None)
+            u.pop("message", None)
+        try:
+            _usage_path().parent.mkdir(parents=True, exist_ok=True)
+            _usage_path().write_text(json.dumps(data), encoding="utf-8")
+        except OSError:
+            pass   # counting must never break a Gemini call
+
+
+def usage(now: float | None = None) -> dict:
+    """Today's requests per model, the limits Google has named, and any block still running."""
+    now = time.time() if now is None else now
+    with _usage_lock:
+        data = _load_usage(now)
+    day, resets_in = _pacific_day(now)
+    rows = []
+    for m, u in sorted(data["models"].items()):
+        until = u.get("blocked_until") or 0
+        rows.append({"model": m, "requests": u.get("requests", 0), "limit": u.get("limit"),
+                     "blocked_for": max(0, round(until - now)) if until > now else 0,
+                     "message": u.get("message", "") if until > now else ""})
+    return {"day": day, "resets_in": round(resets_in), "current": model_name(None),
+            "key_set": bool(os.getenv("GEMINI_API_KEY", "").strip()), "models": rows}
+
+
 class Client:
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "").strip()
@@ -196,7 +283,9 @@ class Client:
                     _sleep(RETRIES[attempt])
                     continue
                 raise APIConnectionError(str(e)) from e
-            if r.status_code == 429 or r.status_code >= 500:
+            record(model, r.status_code, r.text if r.status_code == 429 else "")
+            daily = r.status_code == 429 and ("per day" in r.text.lower() or "PerDay" in r.text)
+            if (r.status_code == 429 and not daily) or r.status_code >= 500:   # a daily limit won't lift in seconds
                 if attempt < len(RETRIES):
                     _sleep(RETRIES[attempt])
                     continue

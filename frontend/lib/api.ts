@@ -943,9 +943,20 @@ export interface LyricDrawStatus {
   total: number;
   error: string;
 }
+/** Today's Gemini requests as the app counted them (Google reports no "left"); limits come from its 429 errors. */
+export interface GeminiUsage {
+  day: string; // the quota day (Pacific time)
+  resets_in: number; // seconds until the daily counts reset
+  current: string; // the model the app calls
+  key_set: boolean;
+  models: { model: string; requests: number; limit: number | null; blocked_for: number; message: string }[];
+}
+
 export interface LyricPictures {
   slots: LyricPicture[];
   cover: string; // the song's background picture ("" = the drawn neon city)
+  loop: string; // the animated cover (a looping clip drawn by Gemini) played instead of it; "" = none
+  other_loops: { slug: string; title: string }[]; // other songs with an animated cover, to reuse here
   cover_prompt: string;
   meaning: string; // what the song is about, as Gemini read it ("" = the prompts came from keywords)
   motions: Record<string, string>; // camera move key -> label
@@ -1113,6 +1124,11 @@ export const api = {
   /** A short clip of a section's picture going through its camera move (`move` tries one that is not saved). */
   lyricMotionClip: (slug: string, id: string, move?: string) =>
     request<{ file: string }>(`/api/lyricvideo/${slug}/pictures/${id}/motion-clip${move !== undefined ? `?move=${encodeURIComponent(move)}` : ""}`, { method: "POST", timeout: 120_000 }),
+  drawLyricLoop: (slug: string, again = false) =>
+    request<LyricPictures>(`/api/lyricvideo/${slug}/loop${again ? "?again=true" : ""}`, { method: "POST", timeout: 600_000 }),
+  copyLyricLoop: (slug: string, source: string) =>
+    request<LyricPictures>(`/api/lyricvideo/${slug}/loop/from/${source}`, { method: "POST" }),
+  removeLyricLoop: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/loop`, { method: "DELETE" }),
   suggestLyricMotions: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/pictures/motion/suggest`, { method: "POST" }),
   resetLyricPictures: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/pictures/reset`, { method: "POST" }),
   uploadLyricPicture: (slug: string, id: string, file: File) => {
@@ -1155,6 +1171,7 @@ export const api = {
   cleanupRun: (groups: string[]) =>
     request<{ freed: number; files: number; failed: number }>("/api/settings/cleanup", { method: "POST", json: { groups }, timeout: 0 }),
   openLocation: (which: "data" | "videos") => request<{ opened: string }>("/api/settings/locations/open", { method: "POST", json: { which } }),
+  geminiUsage: () => request<GeminiUsage>("/api/gemini/usage"),
   saveServiceKeys: (keys: Partial<Record<ServiceKey, string>>) => request<ServiceKeys>("/api/settings/keys", { method: "PUT", json: { keys } }),
   publishAccounts: () => request<PublishAccounts>("/api/publish/accounts"),
   connectPlatform: (platform: Platform) => request<{ url: string }>(`/api/publish/${platform}/connect`, { method: "POST" }),
