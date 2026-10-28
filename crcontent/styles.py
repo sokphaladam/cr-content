@@ -169,6 +169,24 @@ LOOKS: dict[str, dict[str, str]] = {
         "colorbalance=rs=0.09:gs=-0.07:bs=0.07:rm=0.05:gm=-0.04:bm=0.02:rh=0.10:gh=0.03:bh=-0.09,"
         "eq=contrast=1.08:saturation=1.25:brightness=-0.03,vignette=angle=PI/6")},
     "mono": {"label": "Black & white", "vf": "hue=s=0,eq=contrast=1.15:brightness=-0.03,noise=alls=2:allf=t,vignette=angle=PI/6"},
+    "cyberpunk": {"label": "Cyberpunk", "vf": (  # magenta highlights over cyan-blue shadows, punchy colour
+        "colorbalance=rs=-0.04:gs=-0.06:bs=0.16:rm=0.06:gm=-0.06:bm=0.1:rh=0.16:gh=-0.04:bh=0.06,"
+        "eq=contrast=1.14:saturation=1.4:brightness=-0.02,vignette=angle=PI/5")},
+    "golden": {"label": "Golden hour", "vf": (  # low warm sun: amber highlights, soft peach shadows
+        "colorbalance=rs=0.05:gs=0.01:bs=-0.06:rm=0.08:gm=0.03:bm=-0.1:rh=0.12:gh=0.06:bh=-0.12,"
+        "eq=contrast=1.05:saturation=1.2,vignette=angle=PI/6")},
+    "pastel": {"label": "Soft pastel", "vf": (  # lifted blacks, gentle colour: dreamy and clean
+        "eq=contrast=0.9:saturation=0.85:brightness=0.03:gamma=1.06,colorbalance=rs=0.04:bs=0.05:rh=0.03:bh=0.04")},
+    "noir": {"label": "Film noir", "vf": (  # hard black and white with grain and a heavy vignette
+        "hue=s=0,curves=preset=strong_contrast,eq=brightness=-0.02,noise=alls=3:allf=t,vignette=angle=PI/4")},
+    "vintage": {"label": "Vintage 8mm", "vf": (  # faded, warm and grainy like old home film
+        "curves=preset=vintage,eq=saturation=0.85,noise=alls=3:allf=t,vignette=angle=PI/5")},
+    "ice": {"label": "Ice blue", "vf": (  # cold blue shadows and pale highlights
+        "colorbalance=rs=-0.06:bs=0.12:rm=-0.05:bm=0.1:rh=-0.04:bh=0.06,eq=contrast=1.08:saturation=0.9")},
+    "teal": {"label": "Teal & orange", "vf": (  # the blockbuster split: teal shadows, orange skin and highlights
+        "colorbalance=rs=-0.12:gs=0.02:bs=0.1:rh=0.14:gh=0.04:bh=-0.12,eq=contrast=1.12:saturation=1.12,"
+        "vignette=angle=PI/6")},
+    "crossprocess": {"label": "Cross-process", "vf": "curves=preset=cross_process,eq=saturation=1.05:brightness=-0.02"},
 }
 
 
@@ -177,7 +195,7 @@ def look_filter(name: str) -> str:
 
 
 # words in a song's mood, genre and video idea -> the look and lyric style they point to (a free, instant
-# suggestion; Claude's ideas and shot lists pick their own)
+# suggestion; Gemini's ideas and shot lists pick their own)
 LOOK_WORDS = {
     "film": ("nostalgic", "nostalgia", "retro", "vintage", "memory", "memories", "vhs", "hazy", "dreamy",
              "summer", "warm", "disco", "lofi", "lo-fi", "bittersweet", "polaroid", "90s", "80s", "70s"),
@@ -187,7 +205,14 @@ LOOK_WORDS = {
               "cold", "longing", "empty"),
     "dusk": ("neon", "night", "city lights", "cyberpunk", "synthwave", "nightclub", "midnight", "sunset"),
     "cinematic": ("epic", "cinematic", "orchestral", "dramatic", "drama", "anthem", "heroic", "rock"),
-    "mono": ("black and white", "noir", "monochrome"),
+    "mono": ("black and white", "monochrome"),
+    "noir": ("noir", "detective", "jazz", "smoky", "mystery"),
+    "cyberpunk": ("cyberpunk", "futuristic", "robot", "electronic", "edm", "techno"),
+    "golden": ("sunrise", "golden", "sunny", "hopeful", "joyful", "road trip", "beach"),
+    "pastel": ("pastel", "soft", "tender", "lullaby", "innocent", "sweet", "calm"),
+    "vintage": ("home video", "8mm", "old film", "family", "childhood", "retro film"),
+    "ice": ("winter", "frozen", "ice", "snow", "isolation", "distance"),
+    "teal": ("movie", "blockbuster", "action", "thriller", "adventure"),
 }
 LYRIC_WORDS = {
     "glitch": ("glitch", "glitchy", "static", "signal", "disconnected", "lost connection", "cyber", "digital",
@@ -199,7 +224,9 @@ LYRIC_WORDS = {
     "minimal": ("lofi", "lo-fi", "ambient", "acoustic", "chill", "soft", "minimal", "piano"),
     "playlist": ("dreamy", "dream pop", "j-pop", "jpop", "k-pop", "city pop", "bedroom pop", "indie"),
 }
-LOOK_WHY = {"film": "warm and nostalgic", "vibrant": "bright and upbeat", "moody": "dark and sad",
+LOOK_WHY = {"cyberpunk": "futuristic", "golden": "golden and warm", "pastel": "soft and gentle", "noir": "moody noir",
+            "vintage": "old-film", "ice": "cold and distant", "teal": "cinematic", "crossprocess": "punchy",
+            "film": "warm and nostalgic", "vibrant": "bright and upbeat", "moody": "dark and sad",
             "dusk": "neon night", "cinematic": "dramatic", "mono": "black and white", "natural": "clean and true"}
 # a flat pastel cover turns muddy under the dark grades (the app's One cover picks the same way)
 COVER_LOOKS = ("natural", "film", "vibrant")

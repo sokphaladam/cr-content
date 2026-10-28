@@ -443,7 +443,7 @@ ${o.description}
             {options ? "New ideas" : "Suggest titles"}
           </Button>
         </div>
-        {suggesting && <p className="m-0 text-sm text-ink-soft">Claude is writing titles and descriptions from different angles…</p>}
+        {suggesting && <p className="m-0 text-sm text-ink-soft">Gemini is writing titles and descriptions from different angles…</p>}
         {options && (
           <ul className={`m-0 grid list-none gap-2 p-0 ${suggesting ? "opacity-50" : ""}`}>
             {options.map((o, i) => (
@@ -543,7 +543,7 @@ const THUMB_STYLES: { value: ThumbStyle; label: string }[] = [
   { value: "magazine", label: "Magazine" }, // one-cover music videos: the character in front of huge words (else Bold)
 ];
 
-/** Cover image: get ideas (Claude headline x best frame x style) or pick a frame and headline, then redraw thumbnail.jpg. */
+/** Cover image: get ideas (Gemini headline x best frame x style) or pick a frame and headline, then redraw thumbnail.jpg. */
 function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (summary: VideoSummary) => void }) {
   const toast = useToast();
   // an older engine doesn't send the thumbnail fields: fall back to sensible defaults
@@ -647,7 +647,7 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
               {ideas ? "New ideas" : "Suggest covers"}
             </Button>
           </div>
-          {suggesting && <p className="m-0 text-sm text-ink-soft">Claude is picking frames, writing headlines and designing each cover… about a minute.</p>}
+          {suggesting && <p className="m-0 text-sm text-ink-soft">Gemini is picking frames, writing headlines and designing each cover… about a minute.</p>}
           {ideas && (
             <>
               <div className={`grid grid-cols-4 gap-1.5 ${suggesting ? "opacity-50" : ""}`}>
@@ -738,7 +738,7 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
           <span className="field-label">Style</span>
           <Segmented name="thumb-style" size="sm" value={style} options={THUMB_STYLES} onChange={setStyle} />
           {style === "designed" && (
-            <span className="text-sm text-ink-soft">Claude lays out the whole cover. New words keep the design; the first one takes a minute.</span>
+            <span className="text-sm text-ink-soft">Gemini lays out the whole cover. New words keep the design; the first one takes a minute.</span>
           )}
         </div>
         <div className="grid gap-1">

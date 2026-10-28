@@ -16,7 +16,7 @@ const drawAspect = (slot: SongArtSlot, fit: PictureFit, aspect: Aspect): Aspect 
 const edits = (slots: SongArtSlot[]) => slots.map(({ prompt, motion, effects, seed }) => ({ prompt, motion, effects, seed }));
 
 /**
- * A music video's pictures, planned and checked before the render: Claude plans them once (the only step that uses
+ * A music video's pictures, planned and checked before the render: Gemini plans them once (the only step that uses
  * credits), then each one can be drawn, redrawn, rewritten and previewed moving, all on this computer for free.
  * The render then uses exactly these pictures.
  */
@@ -120,7 +120,7 @@ export function SongPictures({
 
   async function planPictures() {
     setPlanning(true);
-    setMessage({ text: "Claude is planning the pictures from your lyrics… about 30 seconds." });
+    setMessage({ text: "Gemini is planning the pictures from your lyrics… about 30 seconds." });
     try {
       // keep your edited bible (the characters and world) when planning again in the same look
       const bible = plan && plan.style === style ? plan.bible : "";
@@ -196,7 +196,7 @@ export function SongPictures({
         </div>
         <div className="flex flex-wrap items-center gap-1">
           {plan && (
-            <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} loading={planning} disabled={drawingAll} onClick={planPictures} title="Claude plans new pictures (uses credits once)">
+            <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} loading={planning} disabled={drawingAll} onClick={planPictures} title="Gemini plans new pictures (uses credits once)">
               Plan again
             </Button>
           )}
@@ -210,14 +210,14 @@ export function SongPictures({
 
       {!plan && (
         <p className="m-0 text-sm text-ink-soft">
-          Planning asks Claude once, for a few cents. Drawing, redrawing and motion previews then run on your GPU for free, and Make video uses exactly the pictures
-          you approved, with no new Claude call.
+          Planning asks Gemini once, for a few cents. Drawing, redrawing and motion previews then run on your GPU for free, and Make video uses exactly the pictures
+          you approved, with no new Gemini call.
         </p>
       )}
       {stale && (
         <p className="m-0 rounded-md bg-amber-500/10 px-2 py-1.5 text-sm text-ink">
           You changed the look, the number of pictures, the idea or its shot list since these were planned. Plan again to see the new pictures, otherwise Make video will plan
-          them itself (one Claude call) without you checking them.
+          them itself (one Gemini call) without you checking them.
         </p>
       )}
 

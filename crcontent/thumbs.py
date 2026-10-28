@@ -1,13 +1,13 @@
-"""Smart covers: find the most eye-catching frames and ask Claude for click-worthy headlines."""
+"""Smart covers: find the most eye-catching frames and ask Gemini for click-worthy headlines."""
 import base64
 import json
 import subprocess
 from pathlib import Path
 
-import anthropic
+from . import llm
 
 from .captions import THUMB_STYLES, auto_emphasis
-from .config import CLAUDE_MODEL, LANGS
+from .config import LLM_MODEL, LANGS
 from .render import duration
 from .script import VideoScript, make_client
 
@@ -179,8 +179,8 @@ def _frame_jpeg(video: Path, at: float, width: int = 360) -> bytes:
 
 
 def plan_covers(video: Path, info: dict, lang: str, frames: list[float], count: int = 4, idea: str = "",
-                client: anthropic.Anthropic | None = None) -> list[dict]:
-    """Claude looks at the candidate frames and plans `count` covers: headline, highlight, style, and which frame
+                client: llm.Client | None = None) -> list[dict]:
+    """Gemini looks at the candidate frames and plans `count` covers: headline, highlight, style, and which frame
     (or, when the user's idea shows something no frame has, a stock photo search instead)."""
     profile = LANGS.get(lang, LANGS["en"])
     client = client or make_client()
@@ -204,16 +204,14 @@ def plan_covers(video: Path, info: dict, lang: str, frames: list[float], count: 
                 "phrases; `emphasis` is one whole space-separated phrase.")
     content.append({"type": "text", "text": ask})
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=3000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": COVERS_SCHEMA}},
         system=HEADLINES_SYSTEM,
         messages=[{"role": "user", "content": content}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to suggest thumbnails.")
+        raise RuntimeError("Gemini declined to suggest thumbnails.")
     covers = json.loads(next(b.text for b in response.content if b.type == "text"))["covers"]
     out = []
     for c in covers:
@@ -229,7 +227,7 @@ def plan_covers(video: Path, info: dict, lang: str, frames: list[float], count: 
 
 
 def basic_headlines(info: dict, count: int = 4, idea: str = "") -> list[dict]:
-    """Without Claude: the idea's own words, the title and the scene headlines (or first lyric lines), each with
+    """Without Gemini: the idea's own words, the title and the scene headlines (or first lyric lines), each with
     its strongest word highlighted."""
     seen, out = set(), []
     first = " ".join(idea.split()[:5]) if idea.strip() else ""
@@ -241,19 +239,19 @@ def basic_headlines(info: dict, count: int = 4, idea: str = "") -> list[dict]:
 
 
 def suggestions(video: Path, info: dict, lang: str, count: int = 4, idea: str = "") -> tuple[list[dict], str]:
-    """Cover ideas: Claude picks frames and writes headlines (following `idea` when given); without Claude, the
+    """Cover ideas: Gemini picks frames and writes headlines (following `idea` when given); without Gemini, the
     best frames paired with headlines from the script, rotating through the styles.
 
-    Returns (suggestions, note); the note says why Claude wasn't used, if it wasn't.
+    Returns (suggestions, note); the note says why Gemini wasn't used, if it wasn't.
     """
     frames = best_frames(video, max(count * 2, 6))
     try:
         covers = plan_covers(video, info, lang, frames, count, idea)
         if covers:
             return covers, ""
-        note = "Claude didn't return any covers, so these come from your script."
+        note = "Gemini didn't return any covers, so these come from your script."
     except Exception as e:  # no key, no credits, offline...: covers still work from the script itself
-        note = "Claude was unavailable, so these headlines come from your script."
+        note = "Gemini was unavailable, so these headlines come from your script."
         print(f"  ! thumbnail ideas: {type(e).__name__}: {e}")
     heads = basic_headlines(info, count, idea) or [{"text": info.get("title", ""), "emphasis": ""}]
     return [{"text": h["text"], "emphasis": h["emphasis"], "style": THUMB_STYLES[i % len(THUMB_STYLES)],

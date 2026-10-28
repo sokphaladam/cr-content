@@ -40,9 +40,9 @@ async function loadOptions() {
   state.options = await api("/api/options");
   const { keys, music } = state.options;
   $("#keys").innerHTML = [
-    keys.anthropic
-      ? `<span class="key">Claude connected</span>`
-      : `<span class="key missing" title="Add ANTHROPIC_API_KEY (sk-ant-...) to .env and restart">Claude key missing</span>`,
+    keys.ai
+      ? `<span class="key">Gemini connected</span>`
+      : `<span class="key missing" title="Add GEMINI_API_KEY to .env and restart">Gemini key missing</span>`,
     keys.stock
       ? `<span class="key">Stock footage: ${keys.stock === "pixabay" ? "Pixabay" : "Pexels"}</span>`
       : `<span class="key soft" title="Add a free PIXABAY_API_KEY to .env for real footage">Gradient backgrounds</span>`,
@@ -51,8 +51,8 @@ async function loadOptions() {
     (music.length ? `<option value="">Random track</option>` : "") +
     `<option value="none">No music</option>` +
     music.map((m) => `<option value="${esc(m)}">${esc(m.replace(/\.mp3$/i, ""))}</option>`).join("");
-  if (!keys.anthropic) {
-    setMsg($("#createMsg"), "Claude isn't connected, so scripts can't be written for you yet. Use “Write it myself”, or add your key to .env and restart.");
+  if (!keys.ai) {
+    setMsg($("#createMsg"), "Gemini isn't connected, so scripts can't be written for you yet. Use “Write it myself”, or add your key to .env and restart.");
   }
 }
 
@@ -200,7 +200,7 @@ $("#translateBtn").onclick = async () => {
   const target = otherLang(state.lang);
   const btn = $("#translateBtn");
   setBusy(btn, true, "Translating…");
-  setMsg($("#translateMsg"), "Claude is translating the narration, headlines and caption. Backgrounds stay the same.");
+  setMsg($("#translateMsg"), "Gemini is translating the narration, headlines and caption. Backgrounds stay the same.");
   try {
     const translated = await api("/api/translate", { method: "POST", body: { script, target } });
     showEdit(translated, target, state.topic);
@@ -276,7 +276,7 @@ function setupMedia(li, media) {
     mediaMsg(li, "Searching…");
     try {
       const data = await api(`/api/footage?q=${encodeURIComponent(q.value.trim())}&kind=${kind()}`);
-      mediaMsg(li, data.results.length ? "" : "Nothing found. Try simpler words, or ask Claude for ideas.");
+      mediaMsg(li, data.results.length ? "" : "Nothing found. Try simpler words, or ask Gemini for ideas.");
       results.innerHTML = data.results.map((r) => `
         <li><button type="button" class="result" data-id="${r.id}" data-kind="${r.kind}" data-source="${r.source}"
           style="background-image:url('${esc(r.thumb)}')" aria-label="Use this ${r.kind}${r.author ? " by " + esc(r.author) : ""}">
@@ -361,7 +361,7 @@ $("#createForm").onsubmit = async (e) => {
   const lang = document.querySelector('input[name="lang"]:checked').value;
   const topic = $("#topic").value.trim();
   const btn = $("#writeBtn");
-  setBusy(btn, true, "Claude is writing…");
+  setBusy(btn, true, "Gemini is writing…");
   setMsg($("#createMsg"), "This usually takes 15–40 seconds.");
   try {
     const script = await api("/api/script", {
@@ -372,7 +372,7 @@ $("#createForm").onsubmit = async (e) => {
   } catch (err) {
     setMsg($("#createMsg"), err.message, true);
   } finally {
-    setBusy(btn, false, "Write script with Claude");
+    setBusy(btn, false, "Write script with Gemini");
   }
 };
 

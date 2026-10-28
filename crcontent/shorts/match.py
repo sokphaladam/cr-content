@@ -1,7 +1,7 @@
-"""How well a clip shows a beat's planned shot, 0-10, judged by Claude on three frames of the part that will be shown.
+"""How well a clip shows a beat's planned shot, 0-10, judged by Gemini on three frames of the part that will be shown.
 
 Not only "is the animal there": the planned action and its key objects (water, splash, towel, sand) count. A clip
-without the key objects can't score above GENERIC_MAX, whatever Claude says, so a generic shot of the animal never
+without the key objects can't score above GENERIC_MAX, whatever Gemini says, so a generic shot of the animal never
 passes for a specific beat. The same look answers the hook rules too: does the animal move, is there a logo, text or
 an intro, and where is its head (the 9:16 crop is framed on it). Cached next to the clip, per shot and window.
 """
@@ -11,7 +11,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from ..config import CLAUDE_MODEL
+from ..config import LLM_MODEL
 from ..visuals import IMAGE_EXTS
 
 PASS = 7          # a clip that shows the planned shot
@@ -63,6 +63,18 @@ def capped(data: dict, key_objects: list[str]) -> dict:
     return {**data, "score": score, "missing": missing}
 
 
+def evidence(m: dict) -> dict:
+    """What the judge saw of the key objects, kept with the clip so the pre-flight can show it: {objects_seen, missing}."""
+    return {"objects_seen": list(m.get("objects_seen", [])), "missing": list(m.get("missing", []))}
+
+
+def unchecked() -> dict:
+    """The result for a clip Gemini was not asked about (shorts.json footage.check): it passes, centred."""
+    return {"score": PASS, "objects_seen": [], "missing": [], "animal": True, "in_motion": None,
+            "logo_or_text": False, "intro_or_title": False, "x": 0.5, "y": 0.5,
+            "seen": "(not checked)", "problem": ""}
+
+
 def check(path: Path, animal: str, shot: str, key_objects: list[str], start: float, length: float) -> dict:
     """{score, objects_seen, missing, animal, in_motion, logo_or_text, intro_or_title, x, y, seen, problem}."""
     key = hashlib.sha1(f"{animal}|{shot}|{','.join(key_objects)}|{start:.2f}|{length:.2f}".encode()).hexdigest()[:12]
@@ -88,10 +100,8 @@ def check(path: Path, animal: str, shot: str, key_objects: list[str], start: flo
           "fractions 0..1. seen: what the clip shows, in a few words. problem: what's missing for the planned shot, "
           "or \"\".")})
     response = make_client().beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=800,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": SCHEMA}},
         messages=[{"role": "user", "content": content}],
     )

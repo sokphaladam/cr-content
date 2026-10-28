@@ -19,6 +19,11 @@ DEFAULTS: dict = _merge(LONGFORM, {
         # PEXELS_API_KEY is set), then a placeholder card
         "sources": ["pixabay", "pexels"],
         "by_kind": {"species": ["pixabay", "pexels"], "archival": ["pixabay", "pexels"]},
+        # which beats Gemini looks at (match.py, one image call per candidate clip): "all" = every beat (default),
+        # "hook" = only the opening beat, "off" = none. Beats it skips take the first clip tagged with the animal, which
+        # is NOT safe for confusable animals: stock tags "mantis" on praying mantises, so a mantis shrimp Short got
+        # insect and aquarium clips on beats 2-4 when only the hook was checked.
+        "check": "all",
     },
     "render": {
         "width": 1080, "height": 1920, "fps": 30,
@@ -26,6 +31,7 @@ DEFAULTS: dict = _merge(LONGFORM, {
         "captions": True,
     },
     "music": {"dir": "assets/music/own", "volume": 0.25},
+    "analytics": {"ai_tags": False},  # True: Gemini tags the hook styles in analytics.tag; False: keyword rules
     "rules": {
         "hook_max": 2.0,                 # the opening beat (animal in motion + hook text) lasts at most this
         "length": {"min": 22.0, "max": 30.0},

@@ -14,10 +14,16 @@ import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from . import progress
 from .lyrics import SongScript
 from .tts import Word
 
 _model = None
+
+# where each stage of the lyric-timing job sits on its progress bar (the stage before, Demucs, ends at LOAD_FROM)
+LOAD_FROM, TRANSCRIBE_FROM, TRANSCRIBE_TO = 0.35, 0.40, 0.85
+MODEL_BYTES = {"tiny": 75_572_083, "base": 145_262_807, "small": 483_617_219, "medium": 1_528_008_539,
+               "large-v3": 3_087_371_615}  # Whisper's download sizes, to show how far a first-run download is
 
 
 @dataclass
@@ -111,7 +117,14 @@ def _load_model():
 
         cuda = torch.cuda.is_available()
         name = os.getenv("WHISPER_MODEL", "medium" if cuda else "base")
-        _model = stable_whisper.load_model(name, device="cuda" if cuda else "cpu")
+        file = Path(os.getenv("XDG_CACHE_HOME") or Path.home() / ".cache") / "whisper" / f"{name}.pt"
+        if not file.exists() and name in MODEL_BYTES:  # first run: Whisper downloads it, so show how far it is
+            progress.report(LOAD_FROM, f"Downloading the lyric-timing model ({name}, {MODEL_BYTES[name] >> 20} MB)")
+            with progress.WatchFile(file, MODEL_BYTES[name], LOAD_FROM, TRANSCRIBE_FROM, "Downloading the lyric-timing model"):
+                _model = stable_whisper.load_model(name, device="cuda" if cuda else "cpu")
+        else:
+            progress.report(LOAD_FROM, "Loading the lyric-timing model")
+            _model = stable_whisper.load_model(name, device="cuda" if cuda else "cpu")
     return _model
 
 
@@ -245,6 +258,8 @@ def transcribe_words(audio: Path, lang: str, extra: dict, total: float) -> list[
             end = min(total, start + CHUNK_SEC)
             if end - start < 1.0:
                 continue
+            progress.report(TRANSCRIBE_FROM + (TRANSCRIBE_TO - TRANSCRIBE_FROM) * k / len(starts),
+                            f"Listening to the song, part {k + 1} of {len(starts)}")
             clip = _cut(audio, start, end, Path(tmp) / f"chunk{k}.wav")
             # temperature 0 without fallback: the same answer every time, and no "creative" retries that invent
             # lyrics over instrumental parts; each chunk on its own so one misheard chunk can't steer the next
@@ -460,6 +475,7 @@ def whisper_timing(audio: Path, song: SongScript, lang: str, isolate_vocals: boo
     except Exception:  # anything going wrong here still deserves a real alignment, not even spacing
         traceback.print_exc()
         return _forced_timing(audio, lines, lang, extra, total)
+    progress.report(TRANSCRIBE_TO, "Matching the words to your lyrics and fixing doubtful lines")
     matched, weak = match_lyrics(lines, heard)
     if len(weak) * 2 > len(lines):  # under half the lines recognisable: the transcript can't be trusted
         return _forced_timing(audio, lines, lang, extra, total)

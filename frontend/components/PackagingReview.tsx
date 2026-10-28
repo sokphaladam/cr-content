@@ -65,7 +65,7 @@ export function PackagingReview({ detail, onPost }: { detail: VideoDetail; onPos
           {review ? "Review again" : "Review packaging"}
         </Button>
       </div>
-      {busy && <p className="m-0 text-sm text-ink-soft">Claude is looking at the thumbnail, title and opening…</p>}
+      {busy && <p className="m-0 text-sm text-ink-soft">Gemini is looking at the thumbnail, title and opening…</p>}
       {review && (
         <div className={`grid gap-3 ${busy ? "opacity-50" : ""}`}>
           <Score label="Title" {...review.title} />

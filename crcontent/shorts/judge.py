@@ -1,9 +1,9 @@
-"""The pre-flight judge: Claude rates the hook 1-10 and suggests 3 stronger first lines and 3 on-screen hook texts.
+"""The pre-flight judge: Gemini rates the hook 1-10 and suggests 3 stronger first lines and 3 on-screen hook texts.
 
-Claude sees the title, the whole voiceover, the hook beat's line and on-screen text, the plan's hook idea and three
+Gemini sees the title, the whole voiceover, the hook beat's line and on-screen text, the plan's hook idea and three
 frames of the hook clip as it will be shown. Each suggestion is tagged with a hook style (analytics.HOOK_STYLES), and
 the suggestions are then ranked by how that style really did on the channel: its Stayed to watch % from the last
-Studio import (analytics.py), Claude's own order breaking ties and ranking styles never measured. Every suggested
+Studio import (analytics.py), Gemini's own order breaking ties and ranking styles never measured. Every suggested
 first line is voiced to measure it (it must end by the hook rule's 2 s), and has to keep the loop natural.
 
 loop() is the loop check: do the last line and the first line read as one natural sentence when the Short replays?
@@ -13,7 +13,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from ..config import CLAUDE_MODEL
+from ..config import LLM_MODEL
 from . import analytics
 
 SYSTEM = """You judge the first 2 seconds of YouTube Shorts for an animal-facts channel. A scrolling viewer decides in
@@ -61,7 +61,7 @@ def _frames(chosen: dict, beat: float) -> list[str]:
 
 
 def opening(line: str) -> str:
-    """A suggested first line as the Short starts with it: Claude often writes it on from the last line, in lower
+    """A suggested first line as the Short starts with it: Gemini often writes it on from the last line, in lower
     case ("water. Most cats..."), but it's the first thing said."""
     line = line.strip()
     return line[:1].upper() + line[1:]
@@ -69,7 +69,7 @@ def opening(line: str) -> str:
 
 def rank_suggestions(items: list[dict], stats: dict[str, dict]) -> list[dict]:
     """`items` ({text, style}) best first by their style's Stayed to watch %, each with that number (None when the
-    style was never measured); Claude's order breaks ties."""
+    style was never measured); Gemini's order breaks ties."""
     out = []
     for k, it in enumerate(items):
         s = stats.get(it["style"]) or {}
@@ -79,7 +79,7 @@ def rank_suggestions(items: list[dict], stats: dict[str, dict]) -> list[dict]:
 
 
 def judge(ep, entries: list[dict], tl, log=print) -> dict | None:
-    """{score, reason, first_lines, hook_texts, ranked_by} or None without Claude."""
+    """{score, reason, first_lines, hook_texts, ranked_by} or None without Gemini."""
     from ..script import make_client
 
     script = ep.script
@@ -100,10 +100,8 @@ def judge(ep, entries: list[dict], tl, log=print) -> dict | None:
           "on-screen hook texts, each tagged with its hook style. Write them in the video's language.")})
     try:
         response = make_client().beta.messages.create(
-            model=CLAUDE_MODEL,
+            model=LLM_MODEL,
             max_tokens=3000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
             output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
             system=SYSTEM,
             messages=[{"role": "user", "content": content}],
@@ -112,13 +110,13 @@ def judge(ep, entries: list[dict], tl, log=print) -> dict | None:
         log(f"      ! hook judge unavailable ({type(e).__name__}: {str(e)[:120]})")
         return None
     if response.stop_reason == "refusal":
-        log("      ! Claude declined to judge the hook")
+        log("      ! Gemini declined to judge the hook")
         return None
     data = json.loads(next(b.text for b in response.content if b.type == "text"))
     return {"score": max(1, min(int(data["score"]), 10)), "reason": data["reason"].strip(),
             "first_lines": rank_suggestions([{**it, "text": opening(it["text"])} for it in data["first_lines"][:3]], stats),
             "hook_texts": rank_suggestions(data["hook_texts"][:3], stats),
-            "ranked_by": "your Stayed to watch % by hook style" if measured else "Claude (no Studio import yet)"}
+            "ranked_by": "your Stayed to watch % by hook style" if measured else "Gemini (no Studio import yet)"}
 
 
 LOOP_SCHEMA = {
@@ -147,7 +145,7 @@ def echoes(last: str, first: str) -> list[str]:
 
 def loop(ep, log=print) -> dict:
     """{natural, joined, problem, fix, echoes, by}: does the last line run into the first as one natural sentence?
-    Repeated words fail it whatever Claude says."""
+    Repeated words fail it whatever Gemini says."""
     last, first = ep.script.scenes[-1].voiceover.strip(), ep.script.scenes[0].voiceover.strip()
     rep = echoes(last, first)
     out = {"natural": not rep, "joined": f"{last} {first}", "problem": "", "fix": "", "echoes": rep, "by": "rules"}
@@ -155,10 +153,8 @@ def loop(ep, log=print) -> dict:
         from ..script import make_client
 
         response = make_client().beta.messages.create(
-            model=CLAUDE_MODEL,
+            model=LLM_MODEL,
             max_tokens=600,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
             output_config={"effort": "low", "format": {"type": "json_schema", "schema": LOOP_SCHEMA}},
             messages=[{"role": "user", "content": (
                 "A YouTube Short loops: when it ends, it replays from the start, so its last spoken line runs straight "
@@ -172,9 +168,9 @@ def loop(ep, log=print) -> dict:
         data = json.loads(next(b.text for b in response.content if b.type == "text"))
         out.update(natural=bool(data["natural"]) and not rep, joined=data["joined"].strip(),
                    problem=data["problem"].strip(), fix=opening(data["fix"]) if data["fix"].strip() else "",
-                   by="Claude")
+                   by="Gemini")
     except Exception as e:
-        log(f"      ! loop check without Claude ({type(e).__name__}): repeated words only")
+        log(f"      ! loop check without Gemini ({type(e).__name__}): repeated words only")
     if rep and not out["problem"]:
         out["problem"] = f"the join repeats \"{', '.join(rep)}\""
     return out

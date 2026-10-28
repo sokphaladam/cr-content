@@ -1,15 +1,15 @@
-"""Step 6 — AI judge (optional, "ai_judge" in highlights.json): Claude ranks the top candidates by hook strength.
+"""Step 6 — AI judge (optional, "ai_judge" in highlights.json): Gemini ranks the top candidates by hook strength.
 
-Each candidate goes as its lyrics plus a few frames of its 9:16 window; Claude returns, per candidate, its rank, why,
+Each candidate goes as its lyrics plus a few frames of its 9:16 window; Gemini returns, per candidate, its rank, why,
 an on-screen hook (max 8 words) and the upload text: a hook-first title, the description's opening line and
-question, hashtags and a pinned comment. The key comes from ANTHROPIC_API_KEY (.env or the
-environment), like every other Claude call in the app.
+question, hashtags and a pinned comment. The key comes from GEMINI_API_KEY (.env or the
+environment), like every other Gemini call in the app.
 """
 import base64
 import json
 from pathlib import Path
 
-from ..config import CLAUDE_MODEL, LANGS
+from ..config import LLM_MODEL, LANGS
 from .visual import frames
 
 SYSTEM = """You are a short-form music editor who picks which 15-30 second section of a song to post as a YouTube
@@ -78,9 +78,9 @@ def _clock(t: float) -> str:
 
 def rank(cands: list, video: Path, size: tuple[int, int], title: str, artist: str, lang: str, cfg: dict,
          about: str = "", log=print) -> list[dict] | None:
-    """Claude's ranking of `cands` ({candidate, rank, reason, hook_text, title, line, question, hashtags, comment,
+    """Gemini's ranking of `cands` ({candidate, rank, reason, hook_text, title, line, question, hashtags, comment,
     caption} each, by candidate index into
-    `cands`), or None when Claude isn't available (no key, offline, declined): the score ranking then stands."""
+    `cands`), or None when Gemini isn't available (no key, offline, declined): the score ranking then stands."""
     from ..script import make_client
 
     n_frames = cfg["ai_judge"]["frames"]
@@ -100,10 +100,8 @@ def rank(cands: list, video: Path, size: tuple[int, int], title: str, artist: st
         f"text and the upload text in {language}.")})
     try:
         response = make_client().beta.messages.create(
-            model=CLAUDE_MODEL,
+            model=LLM_MODEL,
             max_tokens=4000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
             output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
             system=SYSTEM,
             messages=[{"role": "user", "content": content}],
@@ -112,7 +110,7 @@ def rank(cands: list, video: Path, size: tuple[int, int], title: str, artist: st
         log(f"      ! AI judge unavailable ({e.__class__.__name__}: {str(e)[:160]}); using the score ranking")
         return None
     if response.stop_reason == "refusal":
-        log("      ! Claude declined to judge the clips; using the score ranking")
+        log("      ! Gemini declined to judge the clips; using the score ranking")
         return None
     data = json.loads(next(b.text for b in response.content if b.type == "text"))
     out = []

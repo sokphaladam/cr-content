@@ -1,7 +1,7 @@
 """Smart Highlights: pick a finished video's most attractive 15–30 s for Shorts / Reels, with covers and a report.
 
 audio structure (structure.py) + lyrics (lyrics_score.py) + visuals (visual.py) -> per-second scores -> candidate
-clips snapped to bars and lyric lines (rank.py) -> optional Claude judge (judge.py) -> covers (covers.py) ->
+clips snapped to bars and lyric lines (rank.py) -> optional Gemini judge (judge.py) -> covers (covers.py) ->
 vertical renders through the usual finalize step (clip.py) -> report.json + report.html (report.py).
 Weights and switches: <data folder>/highlights.json (settings.py).
 """
@@ -63,7 +63,7 @@ def make_highlights(target: Path, lyrics_file: Path | None = None, title: str = 
     verdicts: dict[int, dict] = {}
     order = list(range(len(pool)))
     if use_judge:
-        log(f"[6/7] AI judge (Claude ranks {len(pool)} candidates)")
+        log(f"[6/7] AI judge (Gemini ranks {len(pool)} candidates)")
         from . import judge
 
         about = ", ".join(x for x in (getattr(src.song, "genre", ""), getattr(src.song, "mood", "")) if x)
@@ -74,7 +74,7 @@ def make_highlights(target: Path, lyrics_file: Path | None = None, title: str = 
         if ranked:
             verdicts = {r["candidate"]: r for r in ranked}
             order = [r["candidate"] for r in ranked] + [k for k in order if k not in verdicts]
-            log("      Claude's order: " + ", ".join(str(k + 1) for k in order))
+            log("      Gemini's order: " + ", ".join(str(k + 1) for k in order))
     else:
         log("[6/7] AI judge: off (highlights.json \"ai_judge\")")
 
@@ -85,7 +85,7 @@ def make_highlights(target: Path, lyrics_file: Path | None = None, title: str = 
         folder = src.out / f"candidate_{k + 1}"
         folder.mkdir(exist_ok=True)
         v = verdicts.get(k, {})
-        # the cover says what the clip is about (its hook) when Claude wrote one; else the song's name
+        # the cover says what the clip is about (its hook) when Gemini wrote one; else the song's name
         made = covers.make_covers(src.clean or src.video, src.size, c.start, c.end, v.get("hook_text") or src.title,
                                   src.artist, folder, cfg)
         entries.append({"candidate": k + 1, "final_rank": pos, "score_rank": k + 1, **c.to_json(),

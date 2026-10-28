@@ -4,9 +4,9 @@ Per beat, in order:
 1. your own file (<media_dir>/<plan>-epNN/scene-XX.*), used as it is
 2. a beat that cuts back to the opening shot reuses the hook's clip
 3. the beat's short searches (queries.py: "cat bath", "wet cat", "cat faucet"), each in Pixabay then Pexels (when its
-   key is set): the best few clips of each are checked by Claude for the planned shot (match.py) until one scores
+   key is set): the best few clips of each are checked by Gemini for the planned shot (match.py) until one scores
    match.PASS or more; the hook beat's clips must also pass the motion rules (hook.py)
-4. nothing matched: Claude picks a simpler shot that stock likely has, and its searches are tried the same way
+4. nothing matched: Gemini picks a simpler shot that stock likely has, and its searches are tried the same way
 5. still nothing: a clip another Short used in the last 14 days, if that one matches (flagged)
 6. still nothing: the best clip found if it at least shows the animal (match.GENERIC_MAX), flagged "needs your own
    clip"; else a placeholder card
@@ -23,7 +23,7 @@ from pathlib import Path
 import requests
 
 from .. import visuals
-from ..config import CLAUDE_MODEL, OUTPUT_DIR
+from ..config import LLM_MODEL, OUTPUT_DIR
 from ..importer import _keywords
 from ..longform import footage as lf
 from ..render import duration
@@ -33,7 +33,7 @@ from .registry import Registry
 
 PLACEHOLDERS = ("card", "placeholder")
 PER_QUERY = 3            # clips checked from each search, so one loose search can't use up the beat's checks
-CHECKS = 12              # clips checked by Claude at most per beat on the planned shot
+CHECKS = 12              # clips checked by Gemini at most per beat on the planned shot
 SIMPLER_CHECKS = 8       # ... and on the simpler shot
 RECENT_TRIES = 3         # clips other Shorts used lately, checked at most when nothing else matched
 
@@ -47,7 +47,7 @@ ANIMAL_SCHEMA = {
 
 
 def name_animal(ep, log=print) -> None:
-    """ep.animal ("domestic house cat: small pet cat, not a big cat") and ep.animal_search ("cat"), from Claude, or
+    """ep.animal ("domestic house cat: small pet cat, not a big cat") and ep.animal_search ("cat"), from Gemini, or
     the word the title and Visual column use most."""
     if ep.animal:
         return
@@ -56,10 +56,8 @@ def name_animal(ep, log=print) -> None:
         from ..script import make_client
 
         response = make_client().beta.messages.create(
-            model=CLAUDE_MODEL,
+            model=LLM_MODEL,
             max_tokens=300,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
             output_config={"effort": "low", "format": {"type": "json_schema", "schema": ANIMAL_SCHEMA}},
             messages=[{"role": "user", "content": (
                 f"A short animal-facts video: \"{ep.title}\"\nIts shots:\n{shots}\n\nWhich animal is it about? "
@@ -74,7 +72,7 @@ def name_animal(ep, log=print) -> None:
     except Exception as e:
         words = Counter(w for line in [ep.title, *shots.splitlines()] for w in _keywords(line).split())
         ep.animal = ep.animal_search = (words.most_common(1)[0][0] if words else "animal")
-        log(f"      ! couldn't name the animal with Claude ({type(e).__name__}); using \"{ep.animal}\"")
+        log(f"      ! couldn't name the animal with Gemini ({type(e).__name__}); using \"{ep.animal}\"")
 
 
 def sources(cfg: dict) -> tuple[list[str], list[str]]:
@@ -132,6 +130,11 @@ class Picker:
         with self.lock:
             self.taken.discard(lf.key(item))
 
+    def checks(self, is_hook: bool) -> bool:
+        """Does Gemini look at this beat's clips? shorts.json footage.check: all (default) / hook / off."""
+        mode = self.cfg.get("footage", {}).get("check", "all")
+        return mode == "all" or (mode == "hook" and is_hook)
+
     def try_clip(self, item: dict, plan: dict, length: float, is_hook: bool, query: str, source: str) -> dict:
         """Download and judge one clip: an attempt {query, source, key, page, score, seen, missing, reject, ...}."""
         attempt = {"query": query, "source": source, "key": lf.key(item), "page": item.get("page", ""),
@@ -150,18 +153,21 @@ class Picker:
             start = scan.start
         else:
             start = clip_start(path, length)
-        try:
-            m = match.check(path, self.ep.animal, plan["shot"], plan["key_objects"], start, length)
-        except Exception as e:  # no Claude: unchecked, and it can't count as a match
-            attempt["reject"] = f"not checked ({type(e).__name__})"
-            return attempt
+        if self.checks(is_hook):
+            try:
+                m = match.check(path, self.ep.animal, plan["shot"], plan["key_objects"], start, length)
+            except Exception as e:  # no Gemini: unchecked, and it can't count as a match
+                attempt["reject"] = f"not checked ({type(e).__name__})"
+                return attempt
+        else:  # this beat is not sent to Gemini: its first tagged clip is used
+            m = match.unchecked()
         if scan:
             hook.judged(scan, m)
             attempt["motion"] = round(scan.own, 2)
         attempt.update(score=m["score"], seen=m.get("seen", ""), missing=m.get("missing", []),
                        problem=m.get("problem", ""), reject=scan.reject if scan else "")
         attempt["_pick"] = {**item, "file": str(path), "check": m["score"], "problem": m.get("problem", ""),
-                            "start": start, "focus": [m["x"], m["y"]],
+                            "start": start, "focus": [m["x"], m["y"]], **match.evidence(m),
                             **({"hook": scan.to_json()} if scan else {})}
         return attempt
 
@@ -222,14 +228,15 @@ class Picker:
         if not path:
             return False
         entry["chosen"], entry["flags"], entry["match"] = own_pick(path, length, is_hook, self.ep.animal,
-                                                                    entry["search"]["plan"])
+                                                                    entry["search"]["plan"], check=self.checks(is_hook))
         return True
 
 
-def own_pick(path: Path, length: float, is_hook: bool, animal: str, plan: dict) -> tuple[dict, list[str], int | None]:
+def own_pick(path: Path, length: float, is_hook: bool, animal: str, plan: dict,
+             check: bool = True) -> tuple[dict, list[str], int | None]:
     """(chosen, flags, match score) for your own clip or photo. It's always used, but held to the same planned shot
     as stock (match.py): under match.PASS it's flagged. A hook clip gets its best window for motion and the hook
-    rules (the animal moving, no logo or intro). The score is None when Claude couldn't look at it."""
+    rules (the animal moving, no logo or intro). The score is None when Gemini couldn't look at it."""
     chosen = {"source": "own", "kind": "photo" if path.suffix.lower() in IMAGE_EXTS else "video", "file": str(path),
               "page": "", "author": "you", "licence": "your own media", "licence_url": ""}
     flags = []
@@ -242,12 +249,15 @@ def own_pick(path: Path, length: float, is_hook: bool, animal: str, plan: dict) 
     elif is_hook:
         flags.append("your hook is a photo: rule 1 wants the animal in motion")
     start = scan.start if scan else clip_start(path, length)
+    if not check:  # shorts.json footage.check: Gemini does not look at this beat
+        return chosen, flags, None
     try:
         m = match.check(path, animal, plan["shot"], plan.get("key_objects", []), start, length)
     except Exception as e:
-        flags.append(f"your clip wasn't checked against the planned shot ({type(e).__name__}: Claude unavailable)")
+        flags.append(f"your clip wasn't checked against the planned shot ({type(e).__name__}: Gemini unavailable)")
         return chosen, flags, None
-    chosen.update(check=m["score"], problem=m.get("problem", ""), seen=m.get("seen", ""), focus=[m["x"], m["y"]])
+    chosen.update(check=m["score"], problem=m.get("problem", ""), seen=m.get("seen", ""), focus=[m["x"], m["y"]],
+                  **match.evidence(m))
     if scan and not scan.reject:
         hook.judged(scan, m)
         if scan.reject:
@@ -395,6 +405,6 @@ def placeholders(entries: list[dict]) -> list[int]:
 
 def weak(entries: list[dict]) -> list[int]:
     """The beats whose clip doesn't show the planned shot well enough (under match.PASS): stock or yours alike. Your
-    clip that Claude couldn't check (no score) isn't counted as weak."""
+    clip that Gemini couldn't check (no score) isn't counted as weak."""
     return [e["scene"] for e in entries
             if not (e["chosen"]["source"] == "own" and e.get("match") is None) and (e.get("match") or 0) < match.PASS]

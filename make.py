@@ -44,7 +44,7 @@ def main() -> int:
     p.add_argument("--style", default="", help="extra direction for the script, e.g. 'funny, for teenagers'")
     p.add_argument("--rate", default="+5%", help="speech speed, e.g. +10%% or -5%%")
     p.add_argument("--music", help="mp3 path, or 'none' (default: random file from assets/music)")
-    p.add_argument("--script", type=Path, help="render from an existing script.json (no Claude call)")
+    p.add_argument("--script", type=Path, help="render from an existing script.json (no Gemini call)")
     p.add_argument("--import", dest="import_file", type=Path, metavar="TXT",
                    help="pasted script in any format (Title/Visual/On-screen text/Voiceover...) to convert and render")
     p.add_argument("--to", choices=sorted(LANGS), help="translate --script into this language before rendering")
@@ -56,7 +56,7 @@ def main() -> int:
     p.add_argument("--voices", metavar="PREFIX", help="list available voices, e.g. 'km' or 'en-US'")
     p.add_argument("--song", action="store_true",
                    help="write and compose an original AI song about the topic (ElevenLabs Music)")
-    p.add_argument("--song-file", type=Path, metavar="JSON", help="compose from an existing song.json (no Claude call)")
+    p.add_argument("--song-file", type=Path, metavar="JSON", help="compose from an existing song.json (no Gemini call)")
     p.add_argument("--vocal", default="", help="singer voice for --song, e.g. 'breathy female pop vocal'")
     p.add_argument("--no-stems", action="store_true", help="skip vocal/instrumental stem separation")
     p.add_argument("--video", action="store_true", help="with --song/--song-file: also render the music video")
@@ -69,7 +69,7 @@ def main() -> int:
     p.add_argument("--title", default="", help="with --highlights: song title (default: from song.json)")
     p.add_argument("--artist", default="", help="with --highlights: artist name for the covers and captions")
     p.add_argument("--no-render", action="store_true", help="with --highlights: analyse, rank and report only")
-    p.add_argument("--no-judge", action="store_true", help="with --highlights: skip the Claude judge this time")
+    p.add_argument("--no-judge", action="store_true", help="with --highlights: skip the Gemini judge this time")
     p.add_argument("--script-video", type=Path, metavar="MD",
                    help="Script to Video: a 1920x1080 YouTube video from a script .md (voiceover, timing, footage), "
                         "up to the storyboard to approve (see crcontent/longform)")

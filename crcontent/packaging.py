@@ -1,7 +1,7 @@
 """Packaging: what decides whether a video gets clicked and watched, before anyone judges the content.
 
 - fluff_opening: the stock intros ("welcome back", "in this video") that lose viewers in the first seconds
-- review: Claude scores a finished video's title, thumbnail and opening together and writes stronger ones
+- review: Gemini scores a finished video's title, thumbnail and opening together and writes stronger ones
 - outliers: YouTube videos that got far more views than their channel has subscribers (5:1 or more) but are packaged
   or delivered weakly, so a better-made version of the same idea has a proven audience
 - journey: the creator's own progress note, worked honestly into descriptions (never into a video's opening)
@@ -12,10 +12,10 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import anthropic
+from . import llm
 import requests
 
-from .config import CLAUDE_MODEL, LANGS, ROOT
+from .config import LLM_MODEL, LANGS, ROOT
 from .script import VideoScript, make_client
 
 CHANNEL_FILE = ROOT / "channel.json"
@@ -147,7 +147,7 @@ Never suggest clickbait the video doesn't deliver. Write titles, headlines and t
 language; verdicts and fixes in English."""
 
 
-def review(job: Path, lang: str, client: anthropic.Anthropic | None = None) -> dict:
+def review(job: Path, lang: str, client: llm.Client | None = None) -> dict:
     """Scores and stronger alternatives for the video's title, thumbnail and opening, plus the stock intros found in
     the opening by fluff_opening (`fluff`)."""
     from .post import _context
@@ -174,16 +174,14 @@ def review(job: Path, lang: str, client: anthropic.Anthropic | None = None) -> d
     content.append({"type": "text", "text": f"Language: {LANGS.get(lang, LANGS['en']).name}\n"
                                             f"The video:\n{json.dumps(info, ensure_ascii=False, indent=2)}"})
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=4000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": REVIEW_SCHEMA}},
         system=REVIEW_SYSTEM,
         messages=[{"role": "user", "content": content}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to review this video.")
+        raise RuntimeError("Gemini declined to review this video.")
     out = json.loads(next(b.text for b in response.content if b.type == "text"))
     for k in ("title", "thumbnail", "opening"):
         out[k]["score"] = max(1, min(10, out[k]["score"]))
@@ -318,8 +316,8 @@ For each video:
 Write better_title, better_thumbnail and hook in the creator's language; the rest in English."""
 
 
-def judge_outliers(items: list[dict], lang: str, kind: str = "short", client: anthropic.Anthropic | None = None) -> list[dict]:
-    """Claude's packaging verdict and a remake plan for each outlier (up to 10), remake targets first."""
+def judge_outliers(items: list[dict], lang: str, kind: str = "short", client: llm.Client | None = None) -> list[dict]:
+    """Gemini's packaging verdict and a remake plan for each outlier (up to 10), remake targets first."""
     if not items:
         return []
     client = client or make_client()
@@ -335,16 +333,14 @@ def judge_outliers(items: list[dict], lang: str, kind: str = "short", client: an
     content.append({"type": "text", "text": f"The creator's language: {LANGS.get(lang, LANGS['en']).name}. "
                                             f"They will make it as a {kind}. Judge every video."})
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=8000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": JUDGE_SCHEMA}},
         system=JUDGE_SYSTEM,
         messages=[{"role": "user", "content": content}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to judge these videos.")
+        raise RuntimeError("Gemini declined to judge these videos.")
     verdicts = {v["n"]: v for v in json.loads(next(b.text for b in response.content if b.type == "text"))["videos"]}
     out = []
     for n, o in enumerate(items, 1):

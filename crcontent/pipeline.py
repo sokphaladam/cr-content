@@ -1,6 +1,7 @@
 """Topic (or script file) in -> finished vertical video + post metadata out."""
 import hashlib
 import json
+import os
 import platform
 import random
 import re
@@ -177,7 +178,7 @@ def draw_thumbnail(job: Path, text: str, at: float, lang: str, out: Path,
     return at
 
 
-COVER_STYLES = (*THUMB_STYLES, "designed")  # designed: a whole layout Claude draws around the picture
+COVER_STYLES = (*THUMB_STYLES, "designed")  # designed: a whole layout Gemini draws around the picture
 
 
 def _photo_for_cover(job: Path, at: float, image: Path | None, out: Path) -> Path:
@@ -193,7 +194,7 @@ def _photo_for_cover(job: Path, at: float, image: Path | None, out: Path) -> Pat
 
 
 def _design_about(job: Path) -> tuple[str, str]:
-    """(kind, description) of the job for Claude's cover design."""
+    """(kind, description) of the job for Gemini's cover design."""
     info = thumbs.brief(job)
     return info.get("kind", "video"), json.dumps(info, ensure_ascii=False, indent=2)
 
@@ -201,8 +202,8 @@ def _design_about(job: Path) -> tuple[str, str]:
 def draw_designed(job: Path, text: str, at: float, lang: str, out: Path, emphasis: str = "",
                   image: Path | None = None, design: Path | None = None, direction: str = "") -> float:
     """A designed cover in `out` (with its template next to it as .svg and what it says as .json): reuses `design`
-    (a template Claude made earlier) as is when its headline matches, re-sets the headline in the same design when it
-    doesn't, and asks Claude for a fresh design when there's none. Returns the frame time used."""
+    (a template Gemini made earlier) as is when its headline matches, re-sets the headline in the same design when it
+    doesn't, and asks Gemini for a fresh design when there's none. Returns the frame time used."""
     work = job / "work"
     work.mkdir(exist_ok=True)
     at = max(0.0, min(at, duration(thumbnail_source(job)) - 0.1))
@@ -600,7 +601,7 @@ def draw_magazine(job: Path, text: str, lang: str, out: Path) -> bool:
 def make_thumbnail(job: Path, text: str, at: float, lang: str, style: str = "bold", emphasis: str = "",
                    image: str = "", design: str = "") -> Path:
     """(Re)draw job/thumbnail.jpg and remember the choices in meta.json. `image`: a project-relative photo to use
-    instead of a video frame ("" = the frame at `at`). style "designed": Claude's layout; `design` names the
+    instead of a video frame ("" = the frame at `at`). style "designed": Gemini's layout; `design` names the
     suggestion it starts from (e.g. "suggest/thumb_2.svg"), otherwise the current one is kept or a new one made."""
     out = job / "thumbnail.jpg"
     photo = ROOT / image if image else None
@@ -637,7 +638,7 @@ def _cover_photo(query: str, size: tuple[int, int], used: set[str]) -> str:
 
 
 def suggest_thumbnails(job: Path, lang: str, count: int = 4, idea: str = "") -> tuple[list[dict], str]:
-    """Render `count` cover ideas to job/suggest/ and save the list. Claude looks at the best frames and writes the
+    """Render `count` cover ideas to job/suggest/ and save the list. Gemini looks at the best frames and writes the
     headlines, following your `idea` for the cover when there is one; a cover whose picture isn't in the video
     gets a stock photo instead."""
     ideas, note = thumbs.suggestions(thumbnail_source(job), thumbs.brief(job), lang, count, idea)
@@ -653,7 +654,7 @@ def suggest_thumbnails(job: Path, lang: str, count: int = 4, idea: str = "") -> 
                                            cover["emphasis"], ROOT / cover["image"] if cover["image"] else None), 2)
     designs = [c.pop("direction", "") for c in ideas]
     if not note and any(c["text"].strip() for c in ideas):
-        # Claude planned these: it also designs each one as a finished layout (in parallel); a cover whose design
+        # Gemini planned these: it also designs each one as a finished layout (in parallel); a cover whose design
         # fails keeps its classic look
         kind, about = _design_about(job)
         work = job / "work"
@@ -713,7 +714,7 @@ def plan_scene_art(script: VideoScript, log: Callable[[str], None] = print) -> b
             if (not sc.media or sc.media.startswith("cache/gen/")) and not sc.art_prompt.strip()]
     if not todo:
         return False
-    log("      planning the pictures (Claude)")
+    log("      planning the pictures (Gemini)")
     bible, shots, subject = director.plan_scenes(script.title, [{"narration": sc.narration, "visual_query": sc.visual_query}
                                                                 for sc in script.scenes], script.art_style, bible=script.art_bible)
     script.art_bible = script.art_bible or bible
@@ -730,11 +731,17 @@ def plan_scene_art(script: VideoScript, log: Callable[[str], None] = print) -> b
 CHECK_PASS = 8  # a picture of a real subject scoring this (out of 10) is right; below, another take is drawn
 MAX_TAKES = 3  # takes drawn at most per picture, keeping the best (each ~25 s on an RTX 3060)
 REAL_PASS = 7  # a stock clip or photo must score this to stand in for a drawing that came out wrong
+def picture_check_on() -> bool:
+    """Gemini's check of each AI picture (and the real-photo reference that goes with it) is off unless
+    PICTURE_CHECK=1 is in .env: it costs one image call per take."""
+    return os.getenv("PICTURE_CHECK", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 WRONG = 6  # a drawing scoring under this is the wrong animal/thing: real footage or a real photo is used instead
 
 
 def _verdict(path: Path, subject: str, prompt: str = "") -> tuple[int, str]:
-    """Claude's check of how well `path` (a picture, or a video: a frame from its middle) shows `subject`, kept in a
+    """Gemini's check of how well `path` (a picture, or a video: a frame from its middle) shows `subject`, kept in a
     file next to it, so the same picture is never paid for twice."""
     from . import director
 
@@ -764,7 +771,7 @@ def subject_focus(path: Path | None) -> tuple[float, float] | None:
 
 def real_subject_media(subject: str, used: set[str], log: Callable[[str], None] = print) -> Path | None:
     """Real footage of `subject` ("name: visible features") when the image model can't draw it: a stock clip, else
-    a Wikimedia Commons photo, each checked by Claude to really show it (stock sites' searches are loose: "mantis
+    a Wikimedia Commons photo, each checked by Gemini to really show it (stock sites' searches are loose: "mantis
     shrimp" also finds a praying mantis and sushi). Skips files in `used` and adds the one it returns."""
     from . import commons
     from .visuals import download_stock, search
@@ -800,7 +807,7 @@ _no_reference: set[str] = set()  # subjects with no real photo found (this run),
 
 def subject_reference(subject: str, log: Callable[[str], None] = print) -> Path | None:
     """A real photo of `subject` that drawings of it copy the look of (IP-Adapter): what real_subject_media finds
-    (checked by Claude), as a square around the subject. Found once per subject and kept in cache/ref."""
+    (checked by Gemini), as a square around the subject. Found once per subject and kept in cache/ref."""
     from PIL import Image
 
     from .config import CACHE_DIR
@@ -830,14 +837,14 @@ def subject_reference(subject: str, log: Callable[[str], None] = print) -> Path 
 def draw_checked(prompt: str, style: str, size: tuple[int, int], seed: int | None = None, subject: str = "",
                  avoid: str = "", log: Callable[[str], None] = print) -> tuple[Path, int, int | None, str]:
     """Draw a scene picture; when it shows the video's real `subject` ("name: visible features"), it is drawn from a
-    real photo of it (subject_reference) and Claude checks it looks right; a wrong one is drawn again with another seed
+    real photo of it (subject_reference) and Gemini checks it looks right; a wrong one is drawn again with another seed
     (MAX_TAKES at most, the best kept). `avoid`: what the image model must not draw instead (its negative prompt).
     Returns (picture, seed, score or None, problem)."""
     from . import director, imagegen
 
     seed = seed or imagegen.default_seed(prompt)
     name = subject.split(":")[0].strip().lower()
-    checking = bool(name) and name.split()[-1] in prompt.lower()  # this picture shows the subject
+    checking = picture_check_on() and bool(name) and name.split()[-1] in prompt.lower()  # shows the subject
     reference = None
     if checking:
         try:
@@ -852,7 +859,7 @@ def draw_checked(prompt: str, style: str, size: tuple[int, int], seed: int | Non
             return path, s, None, ""
         try:
             score, problem = _verdict(path, subject, prompt)
-        except Exception as e:  # no Claude: keep the picture unchecked rather than fail the video
+        except Exception as e:  # no Gemini: keep the picture unchecked rather than fail the video
             log(f"      ! couldn't check the picture ({type(e).__name__}); keeping it")
             return path, s, None, ""
         if best is None or score > (best[2] or 0):
@@ -1221,9 +1228,9 @@ _CLOTHES = ("hoodie", "sweater", "sundress", "dress", "t-shirt", "shirt", "jacke
 
 
 def suggest_cover_prompt(song, idea: str = "", lyrics: str = "") -> str:
-    """A starter prompt for a song's cover picture, without Claude: the character and outfit the idea describes,
+    """A starter prompt for a song's cover picture, without Gemini: the character and outfit the idea describes,
     one object that says what the song is about (COVER_PROPS), the mood, the idea's weather, framing and the
-    background colour last. Edit it in the pictures panel and redraw; Plan pictures (Claude) writes its own."""
+    background colour last. Edit it in the pictures panel and redraw; Plan pictures (Gemini) writes its own."""
     text = idea.lower()
     he = re.search(r"\b(he|him|his|boy|man|guy)\b", text) and not re.search(r"\b(she|her|girl|woman)\b", text)
     hair = re.search(rf"\b((?:long|short|shoulder-length|wavy|curly|straight)\s+)?({'|'.join(_HAIR_COLOURS)})\s+hair\b",
@@ -1255,6 +1262,57 @@ def suggest_cover_prompt(song, idea: str = "", lyrics: str = "") -> str:
     return ", ".join(p for p in parts if p)
 
 
+# words in the idea, title or lyrics -> a place for the background video (first match wins)
+BACKGROUND_PLACES = [
+    (("rain", "storm", "umbrella", "monsoon", "ភ្លៀង"), "rain-streaked window at night, blurred city lights outside"),
+    (("ocean", "sea", "wave", "beach", "shore"), "empty shoreline, slow waves rolling in"),
+    (("star", "stars", "galaxy", "moon", "space", "sky"), "wide night sky full of stars, slow drifting clouds"),
+    (("road", "drive", "highway", "car", "train", "travel"), "view through a moving window along an empty road"),
+    (("city", "street", "neon", "downtown", "tokyo"), "empty city street, neon signs reflecting on wet ground"),
+    (("sakura", "cherry blossom", "petal", "spring", "flower"), "cherry blossom branches swaying, petals drifting"),
+    (("snow", "winter", "frost", "christmas"), "quiet snowfall over a still landscape"),
+    (("forest", "tree", "woods", "leaves", "autumn"), "sunlit forest, leaves falling slowly"),
+    (("home", "room", "bed", "window", "letter", "memory", "memories"), "quiet bedroom by a window, curtains moving"),
+    (("fire", "flame", "campfire", "burning"), "campfire glowing in the dark, embers rising"),
+    (("dance", "party", "club", "tonight"), "dark club with soft moving light beams and haze"),
+]
+
+
+def suggest_background_prompt(song, idea: str = "", lyrics: str = "") -> str:
+    """A starter prompt for a text-to-video tool: a looping, text-free background that fits the song's mood and what
+    it is about (the idea first, then the title and lyrics), with a palette, light and slow camera move. No Gemini."""
+    mood = song.mood.lower()
+    place = ""
+    for source in (idea.lower(), song.title.lower(), lyrics.lower()):
+        place = next((tag for words, tag in BACKGROUND_PLACES
+                      if any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)" if w.isascii() else re.escape(w), source)
+                             for w in words)), "")
+        if place:
+            break
+    if not place:
+        place = "abstract soft light and haze drifting through an empty dreamy space"
+    if re.search(r"sad|melanchol|lonely|longing|yearning|heartbreak|grief", mood):
+        feel = "melancholic, lonely, tender; muted blue and violet palette, low soft light; very slow camera drift"
+    elif re.search(r"nostalgi|bittersweet|wistful", mood):
+        feel = "nostalgic, hazy, bittersweet; warm faded film tones, golden light; slow gentle push-in"
+    elif re.search(r"romantic|tender|love", mood):
+        feel = "warm, romantic, intimate; soft pink and amber palette, glowing bokeh; slow floating camera"
+    elif re.search(r"happy|euphoric|upbeat|joy|playful|energetic", mood):
+        feel = "bright, joyful, energetic; saturated colours, sunlit; smooth moving camera"
+    elif re.search(r"dream|psych|hazy|float|ethereal|synth", mood):
+        feel = ("dreamy, hazy, floating; soft purple, pink and teal palette, glowing light leaks and bokeh; "
+                "slow drifting camera")
+    elif re.search(r"dark|angry|intense|dramatic", mood):
+        feel = "dark, intense, cinematic; deep shadows with one strong accent colour; slow dramatic move"
+    else:
+        feel = f"{mood or 'calm'} mood; cohesive soft palette, gentle light; slow camera drift"
+    weather = ", ".join(a.replace("_", " ") for a in atmospheres(idea))
+    parts = [f"Cinematic background video for a lyric video: {place}", feel, weather and f"with {weather}",
+             "no people in focus, no text, no logos, no subtitles, empty space in the centre for lyrics",
+             "seamless loop, 16:9 (or 9:16), shallow depth of field, 5-8 seconds"]
+    return ". ".join(p for p in parts if p)
+
+
 def cover_scene(song, idea: str = "") -> str:
     """The direction for a song's single cover picture (director.plan_song follows it exactly): the character, one
     object that says what the song is about, an expression that fits its mood and the idea's weather, on a flat
@@ -1270,7 +1328,9 @@ def cover_scene(song, idea: str = "") -> str:
             f"(e.g. 'holding an old radio against her chest with both hands'): never in front of the face, never "
             f"floating, and the whole face visible; and an expression and "
             f"pose that match the song's mood ({song.mood}: no smile for a sad or lonely song; hands near the face, "
-            f"on the object or at the sides, never reaching at the camera)"
+            f"on the object or at the sides, never reaching at the camera; hands are the model's weak spot, so keep "
+            f"them small, simple and half hidden by the object or sleeves, never open palms or spread fingers "
+            f"in the foreground)"
             + (f", with {weather}" if weather else "")
             + f". A stylish outfit with {colour} accents, on a plain flat {colour} background with nothing else in it. "
             f"Keep the prompt under 35 words. Start with 1girl or 1boy, solo, then the hair colour and style (so the "
@@ -1438,13 +1498,13 @@ def plan_fits(plan: dict | None, style: str, pace: str, idea: str, slots: list[d
 
 def _new_art_plan(song, slots: list[dict], style: str, pace: str, aspect: str, idea: str,
                   log: Callable[[str], None], bible: str = "", direction: dict | None = None) -> dict:
-    """Claude's picture plan for the slots (one call); falls back to the sections' search words without Claude."""
+    """Gemini's picture plan for the slots (one call); falls back to the sections' search words without Gemini."""
     from . import director
 
     bible = bible or (direction or {}).get("bible", "")  # the shot list's characters and world
     if pace == "cover":  # the cover's colour can come from the idea, which song_slots doesn't know
         slots = [{**s, "scene": cover_scene(song, idea)} for s in slots]
-    log(f"      planning {len(slots)} pictures (Claude)")
+    log(f"      planning {len(slots)} pictures (Gemini)")
     try:
         written, plans = director.plan_song(song.title, song.mood, song.genre, slots, style, aspect, idea, bible)
         bible = bible or written  # yours, if you gave one
@@ -1457,7 +1517,7 @@ def _new_art_plan(song, slots: list[dict], style: str, pace: str, aspect: str, i
                                            "push_in", []))
     if pace == "cover":  # held for the whole song: the breathing move and floating lights, on a flat background
         tags = f"simple background, {cover_colour(song.title, idea)} background"
-        if not bible:  # Claude couldn't plan it: the idea's character and the song's object, as tags
+        if not bible:  # Gemini couldn't plan it: the idea's character and the song's object, as tags
             lyrics = " ".join(line for sec in song.sections for line in sec.lyrics)
             plans = [director.ShotPlan(suggest_cover_prompt(song, idea, lyrics), "breathe", [])]
         plans = [director.ShotPlan(p.prompt if tags in p.prompt else f"{p.prompt.rstrip(' ,.')}, {tags}", "breathe",
@@ -1495,7 +1555,7 @@ def song_art(song_dir: Path, song, spans: list[tuple[float, float]], shots: list
              aspect: str, idea: str, size: tuple[int, int], workdir: Path, log: Callable[[str], None] = print,
              pace: str = "normal", direction: dict | None = None, fit: str = "") -> list[tuple[Path, "object"]]:
     """One AI picture per few shots of each section, prompted from the lyrics sung over them: the song's saved plan
-    (checked and edited before the render) when it fits, else a new one from Claude, saved with the song.
+    (checked and edited before the render) when it fits, else a new one from Gemini, saved with the song.
     Returns (picture, director's ShotPlan) per shot; shots in a slot share its picture with different moves."""
     from dataclasses import replace
 
@@ -1563,7 +1623,7 @@ def make_song(topic: str | None = None, *, song: "SongScript | None" = None, son
         song = SongScript.load(song_path)
         log(f"[1/3] Loaded song: {song.title}")
     else:
-        log(f"[1/3] Writing song with Claude: {topic!r} ({LANGS[lang].name}, {seconds}s)")
+        log(f"[1/3] Writing song with Gemini: {topic!r} ({LANGS[lang].name}, {seconds}s)")
         song = generate_song(topic, lang=lang, seconds=seconds, style=style, vocal=vocal)
         log(f"      -> {song.title} ({song.genre}, {song.bpm} bpm, {len(song.sections)} sections, {song.seconds}s)")
 
@@ -1845,7 +1905,7 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
             query = section.visual_query or f"{song.mood} {song.genre}"
             footage = picker.pick(query)
             if footage or not pool:
-                if not footage and not pool:  # nothing found: Claude draws this section, then borrow a clip
+                if not footage and not pool:  # nothing found: Gemini draws this section, then borrow a clip
                     footage = art.try_background(f"{query}\nA {song.mood} {song.genre} song, {section.name}: "
                                                  + " / ".join(section.lyrics[:4]), size, log)
                 if not footage:
@@ -1975,7 +2035,7 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
         script = VideoScript.load(script_path)
         log(f"[1/5] Loaded script: {script.title}")
     else:
-        log(f"[1/5] Writing script with Claude: {topic!r} ({profile.name})")
+        log(f"[1/5] Writing script with Gemini: {topic!r} ({profile.name})")
         script = generate_script(topic, lang=lang, scenes=scenes, seconds=seconds, style=style)
         log(f"      -> {script.title} ({len(script.scenes)} scenes)")
 
@@ -2014,7 +2074,7 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
         try:
             if plan_scene_art(script, log):
                 script.save(job / "script.json")
-        except Exception as e:  # no Claude: draw from the search words instead
+        except Exception as e:  # no Gemini: draw from the search words instead
             log(f"      ! couldn't plan the pictures ({type(e).__name__}: {str(e)[:120]}); drawing from the search words")
     # every scene's own clip first, then the second clips of split scenes: the live preview picks in this order too
     picked: list[Path | None] = []
@@ -2033,8 +2093,8 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
     real_used: set[str] = set()
 
     def wrong(picture: Path, prompt: str) -> bool:
-        """An AI picture meant to show the real subject that doesn't (Claude's check, cached with the picture)."""
-        if not name or name.split()[-1].lower() not in prompt.lower():
+        """An AI picture meant to show the real subject that doesn't (Gemini's check, cached with the picture)."""
+        if not picture_check_on() or not name or name.split()[-1].lower() not in prompt.lower():
             return False
         try:
             return _verdict(picture, subject, prompt)[0] < WRONG
@@ -2070,7 +2130,7 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
                     log(f"      ! scene {i + 1}: couldn't draw it ({type(e).__name__}: {str(e)[:120]}); using stock")
             if not footage:  # the opening scene is the frame people see in the feed: the brightest, liveliest clip
                 footage = picker.pick(scene.visual_query, hook=i == 0)
-            if not footage:  # no stock clip: Claude draws the scene instead of a plain gradient
+            if not footage:  # no stock clip: Gemini draws the scene instead of a plain gradient
                 footage = art.try_background(f"{scene.visual_query}\n{scene.narration}", frame_size(None), log)
             log(f"      scene {i + 1}: {scene.visual_query!r} -> {footage.name if footage else 'gradient'}")
         picked.append(footage)

@@ -1,9 +1,9 @@
 """Content Rewards campaigns (Whop): turn a campaign's brief, content requirements and reference materials into
 ready-to-post clips.
 
-1. read_campaign: Claude reads the pasted campaign page into a Campaign (brief, requirements, reference links).
+1. read_campaign: Gemini reads the pasted campaign page into a Campaign (brief, requirements, reference links).
 2. prepare_references: download the reference videos (yt-dlp) and transcribe their speech (Whisper).
-3. plan_clips: Claude picks the strongest moments that fit the brief and writes post text that meets the rules.
+3. plan_clips: Gemini picks the strongest moments that fit the brief and writes post text that meets the rules.
 4. render_clip: cut each moment to 9:16 with captions and an on-screen hook, as a normal output video (so it can
    get a thumbnail, be uploaded or scheduled like any other).
 
@@ -21,7 +21,7 @@ from typing import Callable, Literal
 import requests
 from pydantic import BaseModel, Field
 
-from .config import CLAUDE_MODEL, LANGS, OUTPUT_DIR, ROOT
+from .config import LLM_MODEL, LANGS, OUTPUT_DIR, ROOT
 from .tts import Word
 
 CAMPAIGNS_DIR = ROOT / "campaigns"
@@ -215,16 +215,14 @@ def _claude(system: str, prompt: str, schema: dict, max_tokens: int = 8000) -> d
 
     client = make_client()
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=max_tokens,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": schema}},
         system=system,
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined this request.")
+        raise RuntimeError("Gemini declined this request.")
     return json.loads(next(b.text for b in response.content if b.type == "text"))
 
 
@@ -495,7 +493,7 @@ def _post_text(c: Campaign, plan: ClipPlan) -> str:
     r = c.requirements
     desc = plan.description.strip()
     lower = desc.lower()
-    for phrase in r.must_include:  # Claude was asked to work them in; make sure
+    for phrase in r.must_include:  # Gemini was asked to work them in; make sure
         if phrase.strip() and phrase.lower() not in lower:
             desc += f"\n{phrase.strip()}"
     if r.mentions:

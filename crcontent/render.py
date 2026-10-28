@@ -109,7 +109,7 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
                  size: tuple[int, int] = (WIDTH, HEIGHT), look: str = "", drift: int = 0, layout: str = "fill",
                  footage2: Path | None = None, broll: list[tuple[Path, float, float]] = (),
                  bright: bool = False, impacts: list[float] = (), cuts: list[float] = (),
-                 focus: tuple[float, float] | None = None) -> None:
+                 focus: tuple[float, float] | None = None, push: bool = False, speed: float = 1.0) -> None:
     """One scene: background cropped to `size` (9:16 by default) and looped/trimmed to the narration length.
 
     voice=None renders a silent track (music videos add the song in finalize); `start` skips into a video
@@ -119,7 +119,9 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
     `layout`: fill (cropped to the frame), fit (the whole clip over a blurred copy of itself) or split (`footage`
     on top, `footage2` below). `broll`: (clip or photo, at, seconds) cutaways that cover the frame for a while.
     `focus`: where the subject is in a video clip (x, y as fractions), so a fill crop keeps it in the frame instead
-    of cutting it off-centre.
+    of cutting it off-centre. `push`: a video clip gets a slow push-in (for one with no camera move of its own).
+    `speed`: a video clip plays this many times faster (2 = twice as fast, 0.5 = slow motion): a beat that shows a
+    stretch of the clip longer or shorter than the voice (trimmed with a start and an end) fits its length.
     """
     W, H = size
     fit = _cover(W, H, focus)
@@ -141,13 +143,14 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
         # outline and box, so they read on bright frames anyway
         grade = CLEAN_GRADE
     photo = bool(footage and footage.suffix.lower() in IMAGE_EXTS)
+    retime = f"setpts=PTS/{speed:.4f}," if footage and not photo and abs(speed - 1.0) > 0.01 else ""
     inputs = _media_input(footage, length, start, size)
     if layout == "split":
         inputs += _media_input(footage2, length, 0.0, size)
         half = H // 2 // 2 * 2
         vf = f"[0:v]{_cover(W, half)}[top];[1:v]{_cover(W, H - half)}[bot];[top][bot]vstack,{grade}[base]"
     elif layout == "fit" and footage:
-        vf = (f"[0:v]fps={FPS},split[a][b];[a]{_cover(W, H)},boxblur=24:2,eq=brightness=-0.18[bg];"
+        vf = (f"[0:v]{retime}fps={FPS},split[a][b];[a]{_cover(W, H)},boxblur=24:2,eq=brightness=-0.18[bg];"
               f"[b]scale={W}:{H}:force_original_aspect_ratio=decrease,setsar=1[fg];"
               f"[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p,{grade}[base]")
     elif photo:
@@ -159,8 +162,14 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
               f"zoompan=z='min(1+{0.08 / max(frames, 1):.6f}*on,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
               # RGB to YUV with the BT.709 matrix (FFmpeg's default is BT.601; finalize tags the video BT.709)
               f":d=1:s={W}x{H}:fps={FPS},setsar=1,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,{grade}[base]")
+    elif footage and push:
+        # a clip whose camera never moves: the same slow push-in a photo gets, from a 2x cover so it stays sharp
+        frames = round(length * FPS)
+        vf = (f"[0:v]{retime}{_cover(W * 2, H * 2, focus)},"
+              f"zoompan=z='min(1+{0.06 / max(frames, 1):.6f}*on,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+              f":d=1:s={W}x{H}:fps={FPS},setsar=1,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,{grade}[base]")
     elif footage:
-        vf = f"[0:v]{fit},{grade}[base]"
+        vf = f"[0:v]{retime}{fit},{grade}[base]"
     else:
         vf = f"[0:v]{fit}[base]"
 

@@ -3,7 +3,7 @@
 plan.py (Scripts / Plan sheets -> ShortPlan) -> Script to Video's own steps at 9:16 (settings.py, shorts.json):
 voice per beat -> timing.py (the timeline from the real audio; hook and length rules) -> footage.py (your media, then
 Pixabay, then a placeholder card; the hook beat re-picked by hook.py for an animal in motion) -> preflight.py (the
-rule checks, Claude's hook judge ranked by analytics.py, a storyboard) ... you approve ... -> render.py (captions.py
+rule checks, Gemini's hook judge ranked by analytics.py, a storyboard) ... you approve ... -> render.py (captions.py
 text layer, the loop tail, -14 LUFS, NVENC/CPU) -> extras.py (cover.png, metadata.txt, post.txt).
 
 make_job() runs steps 1-5 for one episode and stops at the pre-flight report; render_job() only runs once it's
@@ -23,6 +23,15 @@ def media_folder(slug: str, cfg: dict) -> Path:
     return folder(cfg["footage"]["media_dir"]) / slug
 
 
+def _placeholder_page(job: Path, message: str) -> None:
+    """A preflight.html for a Short still being built (or that stopped), so the page never opens on a 404."""
+    from html import escape
+
+    (job / "preflight.html").write_text(
+        "<!doctype html><meta charset=utf-8><body style=\"font:16px system-ui;padding:2rem;color:#ddd;"
+        f"background:#0f131a\"><h2>Pre-flight not ready</h2><p>{escape(message)}</p>", encoding="utf-8")
+
+
 def make_job(ep, log=print, job: Path | None = None) -> Path:
     """Steps 1-5 for one ShortPlan, in a new output folder (or again in `job`). Returns the job folder."""
     from ..config import OUTPUT_DIR
@@ -30,7 +39,7 @@ def make_job(ep, log=print, job: Path | None = None) -> Path:
     from ..pipeline import slugify
     from . import footage, preflight, settings, timing
 
-    cfg = settings.load()
+    cfg = job_cfg(job) if job else settings.load()   # built again: it keeps its narrator
     script = ep.script
     log(f"[1/{STEPS}] Ep {ep.ep}: \"{ep.title}\" ({script.lang}, {len(script.scenes)} beats)")
     for note in ep.notes:
@@ -47,6 +56,18 @@ def make_job(ep, log=print, job: Path | None = None) -> Path:
     ep.save(job / "episode.json")
     script.save(job / "scenes.json")
     media = media_folder(script.slug, cfg)
+    _placeholder_page(job, "This Short is still being built. If it stays like this, the run was stopped before the "
+                           "report was written: make it again from the spreadsheet.")
+    try:
+        return _make_steps(ep, script, cfg, job, media, log)
+    except BaseException as err:
+        _placeholder_page(job, f"Building this Short failed: {str(err).strip() or type(err).__name__}")
+        raise
+
+
+def _make_steps(ep, script, cfg, job: Path, media: Path, log) -> Path:
+    from ..longform import voice
+    from . import footage, preflight, timing
 
     log(f"[2/{STEPS}] Voiceover ({cfg['voice']['engine']})")
     voices = voice.make_voices(script, media, job / "voice", cfg, log=log)
@@ -77,8 +98,7 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
     voiced again and the timeline rebuilt (the other beats' audio is cached), the hook clip keeps its footage but
     gets its best window for the new length, and the pre-flight runs again. Your spreadsheet isn't changed: the
     change is noted on the page. Returns the new report."""
-    from ..longform import storyboard, voice
-    from . import hook, plan, preflight, settings, timing
+    from . import plan
 
     value = " ".join((value or "").split())
     if field not in FIELDS or not value:
@@ -88,7 +108,7 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
 
         value = opening(value)
     job = Path(job)
-    cfg = settings.load()
+    cfg = job_cfg(job)
     ep = plan.ShortPlan.load(job / "episode.json")
     scene = ep.script.scenes[0]
     old = scene.voiceover if field == "line" else scene.text
@@ -99,6 +119,32 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
     ep.notes.append(f"{FIELDS[field]} changed: \"{old}\" → \"{value}\"")
     ep.save(job / "episode.json")
     ep.script.save(job / "scenes.json")
+    report = _revoice(job, ep, cfg, log)
+    log(f"      {FIELDS[field]}: \"{old}\" -> \"{value}\"")
+    return report
+
+
+def job_cfg(job: Path) -> dict:
+    """The Shorts settings with this Short's narrator and speed (the Edit panel's) over the channel's."""
+    from . import edit, settings
+
+    cfg = settings.load()
+    choice = edit.load(job)
+    if choice["voice"]:  # an Edge voice; your own recordings still win over it
+        if cfg["voice"]["engine"] == "elevenlabs":
+            cfg["voice"]["engine"] = "edge"
+        cfg["voice"]["edge"][choice["voice"].split("-")[0]] = choice["voice"]
+    if choice["rate"]:
+        cfg["voice"]["edge"]["rate"] = choice["rate"]
+    return cfg
+
+
+def _revoice(job: Path, ep, cfg: dict, log) -> dict:
+    """Voice every beat again (unchanged ones come from the cache), rebuild the timeline, give the hook clip a window
+    that fits its new length, and run the pre-flight again. Returns the new report."""
+    from ..longform import storyboard, voice
+    from . import hook, preflight, timing
+
     (job / storyboard.APPROVAL).unlink(missing_ok=True)
     media = media_folder(ep.script.slug, cfg)
     voices = voice.make_voices(ep.script, media, job / "voice", cfg, log=log)
@@ -106,11 +152,12 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
     entries = json.loads((job / "footage.json").read_text(encoding="utf-8"))
     hook_pick = entries[0]["chosen"]
     if hook_pick["kind"] == "video" and hook_pick["source"] not in ("card", "placeholder"):
-        # keep the window Claude matched to the shot while the clip is long enough for the new length; only a clip
+        # keep the window Gemini matched to the shot while the clip is long enough for the new length; only a clip
         # too short for it gets a new window (the best for motion alone could miss what the shot needs: the water)
         from ..render import duration
 
-        if float(hook_pick.get("start", 0.0)) + tl.slots[0].length > duration(Path(hook_pick["file"])):
+        if float(hook_pick.get("start", 0.0)) + tl.slots[0].length * float(hook_pick.get("speed") or 1.0) \
+                > duration(Path(hook_pick["file"])):
             s = hook.scan(Path(hook_pick["file"]), tl.slots[0].length)
             hook_pick.update(start=s.start, hook=s.to_json())
         for e in entries[1:]:
@@ -119,17 +166,102 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
     (job / "voice.json").write_text(json.dumps([v.to_json() for v in voices], ensure_ascii=False), encoding="utf-8")
     (job / "timeline.json").write_text(json.dumps(tl.to_json(), ensure_ascii=False, indent=2), encoding="utf-8")
     (job / "footage.json").write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
-    log(f"      {FIELDS[field]}: \"{old}\" -> \"{value}\"; {tl.total:.1f}s now")
+    log(f"      re-voiced: {tl.total:.1f}s now")
     return preflight.write(job, ep, tl, voices, entries, cfg, media, log=log)
+
+
+RATES = {"-10%": "Slower", "+0%": "Normal", "+5%": "Slightly fast", "+15%": "Fast"}   # as the app's voice picker
+
+
+def voices_for(lang: str) -> dict:
+    """The narrators the Edit panel offers for `lang`: {edge voice: its name}."""
+    from ..config import LANGS
+
+    return {v: v.split("-")[2].removesuffix("Neural") for v in LANGS.get(lang, LANGS["en"]).voices}
+
+
+def narrator(job: Path, lang: str) -> tuple[str, str]:
+    """(voice, rate) this Short is narrated with."""
+    from ..config import LANGS
+
+    edge = job_cfg(job)["voice"]["edge"]
+    return edge.get(lang) or LANGS.get(lang, LANGS["en"]).voices[0], edge.get("rate", "+0%")
+
+
+def set_voice(job: Path, name: str, rate: str = "", log=print) -> dict:
+    """This Short is narrated by Edge voice `name` at `rate` ("" = the channel's): every beat is voiced again and the
+    checks run again. Returns the new report."""
+    from . import edit, plan
+
+    job = Path(job)
+    ep = plan.ShortPlan.load(job / "episode.json")
+    if name and name not in voices_for(ep.script.lang):
+        raise ValueError(f"Unknown voice {name!r} for {ep.script.lang}.")
+    if rate and rate not in RATES:
+        raise ValueError(f"Unknown speed {rate!r}.")
+    edit.write(job, {**edit.load(job), "voice": name, "rate": rate})
+    log(f"      narrator: {name or 'channel default'} at {rate or 'the channel speed'}")
+    return _revoice(job, ep, job_cfg(job), log)
+
+
+def _set_aside(media: Path, n: int, exts) -> None:
+    """Move beat `n`'s own files with these extensions to <media>/removed/ (it may be your only copy: never deleted)."""
+    for old in media.glob(f"scene-{n:02d}.*"):
+        if old.suffix.lower() in exts:
+            (media / "removed").mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old), str(media / "removed" / f"{datetime.now():%Y%m%d-%H%M%S}-{old.name}"))
+
+
+def use_own_voice(job: Path, n: int, upload: Path, log=print) -> dict:
+    """Beat `n` is spoken by your recording (any audio ffmpeg reads, a browser's webm too), saved as
+    <media>/scene-NN.wav; the Short is re-timed and checked again. Returns the new report."""
+    import subprocess
+
+    from ..longform.voice import AUDIO_EXTS
+    from . import plan
+
+    job = Path(job)
+    cfg = job_cfg(job)
+    ep = plan.ShortPlan.load(job / "episode.json")
+    if not 1 <= n <= len(ep.script.scenes):
+        raise ValueError(f"There's no beat {n}.")
+    media = media_folder(ep.script.slug, cfg)
+    media.mkdir(parents=True, exist_ok=True)
+    tmp = media / f"part-scene-{n:02d}.wav"   # not scene-NN.*: _set_aside would move it
+    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(upload), "-vn", "-ac", "1", "-ar", "44100", str(tmp)],
+                       stdin=subprocess.DEVNULL, capture_output=True)
+    if r.returncode:
+        tmp.unlink(missing_ok=True)
+        raise ValueError("That isn't an audio file ffmpeg can read.")
+    _set_aside(media, n, AUDIO_EXTS)
+    tmp.replace(media / f"scene-{n:02d}.wav")
+    log(f"      beat {n}: your voice")
+    return _revoice(job, ep, cfg, log)
+
+
+def remove_own_voice(job: Path, n: int, log=print) -> dict:
+    """Beat `n` goes back to the narrator's voice; your recording moves to <media>/removed/."""
+    from ..longform.voice import AUDIO_EXTS, recording
+    from . import plan
+
+    job = Path(job)
+    cfg = job_cfg(job)
+    ep = plan.ShortPlan.load(job / "episode.json")
+    media = media_folder(ep.script.slug, cfg)
+    if not recording(media, n):
+        raise ValueError(f"Beat {n} isn't using your voice.")
+    _set_aside(media, n, AUDIO_EXTS)
+    log(f"      beat {n}: back to the narrator")
+    return _revoice(job, ep, cfg, log)
 
 
 def _load(job: Path):
     """(cfg, ep, tl, voices, entries, media) of a Short's job folder."""
     from ..longform.timing import Timeline
     from ..longform.voice import Voice
-    from . import plan, settings
+    from . import plan
 
-    cfg = settings.load()
+    cfg = job_cfg(job)
     ep = plan.ShortPlan.load(job / "episode.json")
     tl = Timeline.from_json(json.loads((job / "timeline.json").read_text(encoding="utf-8")))
     voices = [Voice.from_json(v) for v in json.loads((job / "voice.json").read_text(encoding="utf-8"))]
@@ -169,9 +301,7 @@ def use_own_clip(job: Path, n: int, upload: Path, name: str, log=print) -> dict:
     if not 1 <= n <= len(entries):
         raise ValueError(f"There's no beat {n}.")
     media.mkdir(parents=True, exist_ok=True)
-    for old in media.glob(f"scene-{n:02d}.*"):  # one file per beat: an earlier one is set aside, not deleted
-        (media / "removed").mkdir(exist_ok=True)
-        shutil.move(str(old), str(media / "removed" / f"{datetime.now():%Y%m%d-%H%M%S}-{old.name}"))
+    _set_aside(media, n, (*VIDEO_EXTS, *IMAGE_EXTS))  # one clip per beat (your voice recording for it stays)
     dest = media / f"scene-{n:02d}{ext}"
     shutil.copy(upload, dest)
     e = entries[n - 1]
@@ -184,6 +314,99 @@ def use_own_clip(job: Path, n: int, upload: Path, name: str, log=print) -> dict:
     e["reuses_opening"] = False
     log(f"      beat {n}: your clip {dest.name}")
     return _refresh(job, ep, tl, voices, entries, cfg, media, log)
+
+
+_OWN_FLAGS = ("your clip: shot match", "your hook clip:", "needs your own clip: the best stock match")
+
+
+MIN_SPEED, MAX_SPEED = 0.5, 2.0   # how much faster or slower than real time a trimmed stretch may play
+
+
+def trim_window(total: float, length: float, start: float, end: float | None) -> tuple[float, float, float]:
+    """(start, end, speed) of a trim in a clip `total` seconds long for a beat `length` long. With no `end` the beat
+    shows `length` seconds at normal speed; otherwise the stretch start..end is played at the speed that makes it fit
+    the beat, held between MIN_SPEED and MAX_SPEED (so it can be 0.5x to 2x the beat's length) and inside the clip."""
+    lo, hi = length * MIN_SPEED, length * MAX_SPEED
+    start = min(max(float(start), 0.0), max(total - lo, 0.0))
+    window = length if end is None else float(end) - start
+    window = min(max(window, lo), hi, max(total - start, lo))
+    speed = window / length
+    if abs(speed - 1.0) < 0.02:   # near enough to real time: no retiming
+        window, speed = length, 1.0
+    return round(start, 2), round(start + window, 2), round(speed, 3)
+
+
+def trim_beat(job: Path, n: int, start: float, apply: bool = False, log=print, end: float | None = None) -> dict:
+    """Beat `n` shows its clip from `start` to `end` seconds. The beat's length is the voice's, so a stretch longer or
+    shorter than that plays faster or slower to fit (0.5x to 2x); with no `end` it shows `length` seconds of the clip
+    as it is. Gemini scores that stretch against the beat's planned shot, and for the hook the motion rules run on it.
+    With apply=False nothing is saved (the trim panel's Check); with apply=True the beat keeps it and the pre-flight
+    runs again. Returns {start, end, speed, clip, length, score, seen, problem, reject, applied, ...}."""
+    from ..render import duration
+    from . import hook, match
+    from .footage import PLACEHOLDERS
+
+    job = Path(job)
+    cfg, ep, tl, voices, entries, media = _load(job)
+    if not 1 <= n <= len(entries):
+        raise ValueError(f"There's no beat {n}.")
+    e = entries[n - 1]
+    c = e["chosen"]
+    if e.get("reuses_opening"):
+        raise ValueError(f"Beat {n} is the opening shot again: trim beat 1 and it follows.")
+    if c.get("kind") != "video" or c.get("source") in PLACEHOLDERS:
+        raise ValueError(f"Beat {n} doesn't show a video clip: there's nothing to trim.")
+    path, length = Path(c["file"]), tl.slots[n - 1].length
+    total = duration(path)
+    start, end, speed = trim_window(total, length, start, end)
+    window = end - start
+    shot = (e.get("search") or {}).get("plan") or {"shot": ep.script.scenes[n - 1].visual, "key_objects": []}
+    animal = ep.animal or ep.animal_search or "animal"
+    out = {"start": start, "end": end, "speed": speed, "clip": round(total, 2), "length": round(length, 2), "score": None, "seen": "",
+           "problem": "", "reject": "", "applied": False, "key_objects": shot.get("key_objects", []),
+           "objects_seen": [], "missing": [], "pass": match.PASS, "cap": match.GENERIC_MAX}
+    scan = hook.scan_window(path, start, window) if n == 1 else None
+    try:
+        m = match.check(path, animal, shot["shot"], shot.get("key_objects", []), start, window)
+    except Exception as ex:  # no Gemini: the window can still be used, unscored
+        m = None
+        out["problem"] = f"not checked ({type(ex).__name__}: Gemini unavailable)"
+    if m:
+        out.update(score=m["score"], seen=m.get("seen", ""), problem=m.get("problem", ""), **match.evidence(m))
+        if scan:
+            hook.judged(scan, m)
+    if scan:
+        out["reject"] = scan.reject
+    if not apply:
+        return out
+
+    flags = [f for f in e["flags"] if not f.startswith(_OWN_FLAGS)]
+    own = c["source"] == "own"
+    if scan and scan.reject:
+        flags.append(f"{'your hook clip' if own else 'the hook clip'}: {scan.reject}")
+    c["start"] = start
+    c["trimmed"] = True
+    if speed != 1.0:
+        c["end"], c["speed"] = end, speed
+    else:
+        c.pop("end", None), c.pop("speed", None)
+    if scan:
+        c["hook"] = scan.to_json()
+    if m:
+        c.update(check=m["score"], problem=m.get("problem", ""), seen=m.get("seen", ""), focus=[m["x"], m["y"]],
+                 **match.evidence(m))
+        e["match"] = m["score"]
+        if m["score"] < match.PASS:
+            missing = f" (no {', '.join(m['missing'])})" if m.get("missing") else ""
+            flags.append(f"your clip: shot match {m['score']}/10{missing} for \"{shot['shot']}\": {m.get('seen', '')}"
+                         if own else f"needs your own clip: the best stock match is {m['score']}/10{missing} for "
+                                     f"\"{shot['shot']}\"")
+    e["flags"] = flags
+    log(f"      beat {n}: clip {start:.2f}s to {end:.2f}s" + (f" at {speed:.2f}x" if speed != 1.0 else "")
+        + f", shot match {out['score']}")
+    _refresh(job, ep, tl, voices, entries, cfg, media, log)
+    out["applied"] = True
+    return out
 
 
 def remove_own_clip(job: Path, n: int, log=print) -> dict:
@@ -210,6 +433,26 @@ def remove_own_clip(job: Path, n: int, log=print) -> dict:
         e["match"], e["flags"] = 0, ["needs your own clip: build the episode again to search stock for it"]
     log(f"      beat {n}: back to {e['chosen']['source']}")
     return _refresh(job, ep, tl, voices, entries, cfg, media, log)
+
+
+def set_edit(job: Path, choice: dict, log=print) -> dict:
+    """Save the Edit panel's choices (mood, caption look, cut style). They only change the render, so the checks stand
+    and the approval is asked for again. Returns the saved choices."""
+    from ..longform import storyboard
+    from . import edit
+
+    job = Path(job)
+    saved = edit.save(job, choice)
+    (job / storyboard.APPROVAL).unlink(missing_ok=True)
+    log(f"      edit: {saved}")
+    return saved
+
+
+def suggest_edit(job: Path) -> dict:
+    """What the Edit panel's "Suggest edit" fills in (see edit.suggest); nothing is saved."""
+    from . import edit
+
+    return edit.suggest(Path(job))
 
 
 def report_status(job: Path) -> dict:

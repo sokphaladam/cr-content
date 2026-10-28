@@ -171,7 +171,7 @@ export interface VideoScript {
   pinned_comment?: string; // to paste under the video and pin
   art_style?: ArtStyle | ""; // "" = stock footage; else every scene without chosen media is drawn in this look
   art_bible?: string; // the director's notes (characters, world, palette) that keep the pictures consistent
-  art_subject?: string; // the real subject every picture must get right ("name: visible features"), checked by Claude
+  art_subject?: string; // the real subject every picture must get right ("name: visible features"), checked by Gemini
   art_avoid?: string; // what the image model must not draw instead (look-alikes)
 }
 
@@ -208,7 +208,9 @@ export interface SongScript {
   hashtags: string[];
 }
 
-export type Look = "natural" | "cinematic" | "film" | "moody" | "vibrant" | "dusk" | "mono";
+export type Look =
+  | "natural" | "cinematic" | "film" | "moody" | "vibrant" | "dusk" | "mono"
+  | "cyberpunk" | "golden" | "pastel" | "noir" | "vintage" | "ice" | "teal" | "crossprocess";
 export type LyricPreset = "classic" | "neon" | "bold_pop" | "cinematic" | "minimal" | "retro" | "boxed" | "playlist" | "glitch";
 export type CutPace = "slow" | "normal" | "fast";
 /** Old-tape treatments for a section (crcontent/fx.py TAPES / FRAMES). */
@@ -233,7 +235,7 @@ export interface SongDirection {
   bible: string;
   sections: DirectedSection[];
   notes: string[]; // what can't be done literally, and what is done instead
-  look?: Look | ""; // Claude's suggestions when it was made (applied to the settings then)
+  look?: Look | ""; // Gemini's suggestions when it was made (applied to the settings then)
   lyric_preset?: LyricPreset | "";
   lyric_font?: string;
 }
@@ -261,7 +263,7 @@ export interface StyleCatalog {
 export type PicturePace = "fewer" | "normal" | "more" | "cover";
 export type PictureFit = "fit" | "fill"; // a cover picture: the whole character on its colour, or filling the screen
 
-/** One planned picture of a music video (crcontent/pipeline.py song_slots + Claude's prompt). */
+/** One planned picture of a music video (crcontent/pipeline.py song_slots + Gemini's prompt). */
 export interface SongArtSlot {
   section: string;
   lyrics: string; // what is sung while it's on screen
@@ -301,12 +303,13 @@ export interface MusicVideoSettings {
   picture_fit?: PictureFit; // a cover picture: fit (whole) or fill (the whole screen); undefined = the song's last choice
 }
 
-/** The look and lyric style that fit a song, from its mood, genre and the idea (instant, no Claude call). */
+/** The look and lyric style that fit a song, from its mood, genre and the idea (instant, no Gemini call). */
 export interface StyleSuggestion {
   look: Look;
   lyric_preset: LyricPreset;
   reason: string; // "nostalgic, hazy, dreamy song"
   prompt: string; // a starter prompt for the cover picture: paste it into the picture and redraw
+  video_prompt: string; // a starter prompt for a looping background video that fits the song's mood and meaning
 }
 
 export interface VideoIdeaSuggestion {
@@ -320,7 +323,7 @@ export interface Options {
   langs: Record<Lang, { name: string; voices: string[] }>;
   music: string[];
   music_use?: Record<string, MusicUse>; // each track's licence for monetized videos (missing on an older engine)
-  keys: { anthropic: boolean; stock: "" | "pexels" | "pixabay"; elevenlabs: boolean; jamendo?: boolean };
+  keys: { ai: boolean; stock: "" | "pexels" | "pixabay"; elevenlabs: boolean; jamendo?: boolean };
   styles?: StyleCatalog; // missing on an older engine
   captions?: { presets: Record<string, Partial<CaptionStyle> & { label: string }> };
 }
@@ -329,7 +332,7 @@ export type Aspect = "16:9" | "9:16";
 
 export interface Job {
   id: string;
-  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short";
+  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short" | "lyric_video";
   status: "queued" | "running" | "done" | "error";
   step: number;
   progress?: number | null; // how far the current step is, 0..1 (null/absent: no measure for it)
@@ -346,6 +349,7 @@ export interface Job {
   comment?: CommentState | null; // publish (youtube): how posting the video's comment went
   thumbnail?: ThumbnailState | null; // publish (youtube): how setting the cover as its thumbnail went
   channel_name?: string; // publish (youtube): the channel it went to
+  slug?: string; // lyric_video: the song folder
 }
 
 export type Platform = "youtube" | "tiktok" | "facebook" | "instagram";
@@ -433,7 +437,7 @@ export type PublishAccounts = Record<Platform, PublishAccount> & {
   youtube_categories?: Record<string, string>; // id -> name (missing on an older engine)
 };
 
-export type ServiceKey = "ANTHROPIC_API_KEY" | "ANTHROPIC_WORKSPACE_ID" | "PIXABAY_API_KEY" | "PEXELS_API_KEY" | "ELEVENLABS_API_KEY" | "JAMENDO_CLIENT_ID" | "YOUTUBE_API_KEY";
+export type ServiceKey = "GEMINI_API_KEY" | "PIXABAY_API_KEY" | "PEXELS_API_KEY" | "ELEVENLABS_API_KEY" | "JAMENDO_CLIENT_ID" | "YOUTUBE_API_KEY";
 
 /** A free instrumental track on Jamendo (crcontent/music.py search()). */
 export interface MusicResult {
@@ -622,7 +626,7 @@ export interface VideoDetail extends VideoSummary {
 /** One Smart Highlights candidate (crcontent/highlights report.json). Files are inside the source video's folder. */
 export interface HighlightCandidate {
   candidate: number;
-  final_rank: number; // 1 = the pick (Claude's order when the judge ran, else the score's)
+  final_rank: number; // 1 = the pick (Gemini's order when the judge ran, else the score's)
   score_rank: number;
   start: number; // seconds into the source video
   end: number;
@@ -643,7 +647,7 @@ export interface HighlightCandidate {
 
 export interface HighlightsReport {
   title: string;
-  judge: boolean; // Claude ranked them
+  judge: boolean; // Gemini ranked them
   chosen: number[]; // candidate numbers that were rendered
   candidates: HighlightCandidate[]; // in final order
   page: string; // report.html, inside the video's folder
@@ -657,7 +661,7 @@ export interface PostSuggestion {
   hashtags: string[];
 }
 
-export type ThumbStyle = "bold" | "box" | "stacked" | "designed" | "magazine"; // designed: a full layout Claude draws; magazine: a one-cover video's character in front of huge words
+export type ThumbStyle = "bold" | "box" | "stacked" | "designed" | "magazine"; // designed: a full layout Gemini draws; magazine: a one-cover video's character in front of huge words
 
 export interface ThumbSuggestion {
   text: string;
@@ -671,7 +675,7 @@ export interface ThumbSuggestion {
 
 export interface ThumbSuggestions {
   items: ThumbSuggestion[];
-  note: string; // set when Claude wasn't available and headlines came from the script
+  note: string; // set when Gemini wasn't available and headlines came from the script
   idea?: string; // the cover idea they were made for
 }
 
@@ -800,7 +804,7 @@ export async function pickFolder(title: string, start?: string): Promise<string 
 export class ApiError extends Error {}
 
 // Quick calls give up after this long, so a request lost while the engine restarts can't hang the UI.
-// Claude, upload and render calls pass `timeout: 0` (no limit).
+// Gemini, upload and render calls pass `timeout: 0` (no limit).
 const TIMEOUT_MS = 15_000;
 
 async function request<T>(path: string, init: RequestInit & { json?: unknown; timeout?: number } = {}): Promise<T> {
@@ -833,7 +837,7 @@ async function request<T>(path: string, init: RequestInit & { json?: unknown; ti
 /** URL for a project-relative file (uploads/..., cache/...) or an output folder file. */
 export const fileUrl = (projectPath: string) =>
   `${API_BASE}/${projectPath.split("/").map(encodeURIComponent).join("/")}`;
-/** "Review packaging": Claude's scores for the title, thumbnail and opening, and stronger versions of each. */
+/** "Review packaging": Gemini's scores for the title, thumbnail and opening, and stronger versions of each. */
 export interface PackagingReview {
   title: { score: number; verdict: string };
   thumbnail: { score: number; verdict: string };
@@ -846,7 +850,7 @@ export interface PackagingReview {
   current_title: string;
 }
 
-/** A YouTube video with far more views than its channel has subscribers, and Claude's remake plan for it. */
+/** A YouTube video with far more views than its channel has subscribers, and Gemini's remake plan for it. */
 export interface Outlier {
   id: string;
   url: string;
@@ -874,6 +878,108 @@ export interface TopicIdea {
   hook: string; // the opening line, payoff first
 }
 
+/** Lyric video tab (songs/<slug>/, made by the neonmekong pipeline). */
+export interface LyricSong {
+  slug: string;
+  title: string;
+  analyzed: boolean;
+  rendered: boolean;
+}
+export interface LyricSongDetail {
+  slug: string;
+  title: string;
+  analyzed: boolean;
+  song: Record<"title" | "genre" | "mood_phrase" | "scene_theme" | "subscribe_line" | "plan" | "generated_on" | "playlist" | "lyric_style" | "mood_grade" | "beat_pulse" | "pulse_parts" | "pulse_when" | "neon_intro" | "now_playing", string>;
+  sections: { tag: string; kind: string; start: number; end: number }[]; // the sung sections, in seconds
+  styles: Record<string, string>; // lyric style key -> label
+  grades: Record<string, string>; // mood grade key -> label
+  pulse: { levels: Record<string, string>; parts: Record<string, string>; when: Record<string, string> }; // the beat effect's choices
+  suggestion: { grade: string; style: string; pulse: string; reason: string } | null; // what fits the song
+  chorus: { start: number | null; end: number | null };
+  bpm: number | null;
+  duration: number | null;
+  vocal_start: number | null;
+  palette: string[];
+  warnings: string[];
+  lyrics: string;
+  video_prompt: string; // a starter prompt for a looping background video that fits the song's mood and meaning
+  audio: string; // the song's audio file in its folder, for playing the preview ("" = none)
+  background: string; // the song's own background picture in its folder ("" = the drawn neon city)
+  files: string[];
+  upload_text: string;
+  has_instrumental: boolean;
+}
+/** One picture of a lyric video: a sung section's picture, shown behind its lyrics. */
+/** A group of files Settings > Clean up can delete (crcontent/cleanup.py). */
+export interface CleanupGroup {
+  id: string;
+  label: string;
+  hint: string;
+  cost: string; // what deleting them costs
+  files: number;
+  bytes: number;
+  examples: string[];
+}
+
+export interface LyricPicture {
+  id: string;
+  tag: string; // "Chorus"
+  kind: string;
+  start: number; // seconds into the song
+  end: number;
+  lyrics: string; // what is sung meanwhile
+  prompt: string; // the suggested (or edited) picture prompt
+  file: string; // in the song's pictures/ folder ("" = shows the cover)
+  motion: string; // the camera move over it ("" = the slow drift); suggested from the section, or chosen
+  motion_edited?: boolean;
+}
+/** The picture being drawn now: the model loading, then each step of the drawing and its detail pass. */
+export interface LyricDrawStatus {
+  state: "idle" | "running" | "done" | "error";
+  pid: string;
+  phase: "queued" | "loading" | "drawing" | "detail" | "done" | "error" | "";
+  text: string;
+  done: number;
+  total: number;
+  error: string;
+}
+/** Today's Gemini requests as the app counted them (Google reports no "left"); limits come from its 429 errors. */
+export interface GeminiUsage {
+  day: string; // the quota day (Pacific time)
+  resets_in: number; // seconds until the daily counts reset
+  current: string; // the model the app calls
+  key_set: boolean;
+  models: { model: string; requests: number; limit: number | null; blocked_for: number; message: string }[];
+}
+
+export interface LyricPictures {
+  slots: LyricPicture[];
+  cover: string; // the song's background picture ("" = the drawn neon city)
+  loop: string; // the animated cover (a looping clip drawn by Gemini) played instead of it; "" = none
+  other_loops: { slug: string; title: string }[]; // other songs with an animated cover, to reuse here
+  cover_prompt: string;
+  meaning: string; // what the song is about, as Gemini read it ("" = the prompts came from keywords)
+  motions: Record<string, string>; // camera move key -> label
+  traditions: Record<string, { label: string; hint: string }>; // art traditions for the anime look ("" = plain anime)
+  tradition: string; // the one this song's pictures are drawn in ("custom" = the user's own words)
+  custom_look: string;
+  custom_avoid: string;
+  cover_motion: string; // the camera move over the cover (the song-long background); "" = the slow drift
+  tradition_suggested: string; // what suits the song's mood
+}
+
+export const songFileUrl = (slug: string, file: string, bust = "") =>
+  `${API_BASE}/songs/${encodeURIComponent(slug)}/${file}${bust ? `?v=${bust}` : ""}`;
+
+/** One frame of the lyric video at `t` seconds in this lyric style and mood grade (nothing is saved). */
+export interface LyricLook { style: string; grade: string; neon: boolean; playing: boolean; pulse: string; parts: string; when: string }
+export const lyricPreviewUrl = (slug: string, t: number, o: LyricLook, bust = "") =>
+  `${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/preview?${new URLSearchParams({ t: String(t), style: o.style, grade: o.grade, neon: o.neon ? "1" : "", playing: o.playing ? "1" : "", pulse: o.pulse, parts: o.parts, when: o.when, v: bust })}`;
+
+/** The lyric video playing live from `t` (a motion-JPEG stream for an <img>), in this look. */
+export const lyricStreamUrl = (slug: string, t: number, o: LyricLook) =>
+  `${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/preview/stream?${new URLSearchParams({ t: String(t), style: o.style, grade: o.grade, neon: o.neon ? "1" : "", playing: o.playing ? "1" : "", pulse: o.pulse, parts: o.parts, when: o.when })}`;
+
 export const outputUrl = (folder: string, file: string) =>
   `${API_BASE}/media/${encodeURIComponent(folder)}/${file}`;
 
@@ -884,7 +990,7 @@ export const api = {
   /** Ideas for the next Shorts in a mix of hook formats, none a near-repeat of the library's recent titles. */
   topicIdeas: (niche: string, lang: Lang) =>
     request<{ topics: TopicIdea[] }>("/api/topic-ideas", { method: "POST", json: { niche, lang }, timeout: 0 }),
-  /** Proven ideas, weakly packaged: YouTube videos about `query` with 5x+ views per subscriber, judged by Claude. */
+  /** Proven ideas, weakly packaged: YouTube videos about `query` with 5x+ views per subscriber, judged by Gemini. */
   outliers: (query: string, lang: Lang, length: "short" | "long" | "any") =>
     request<{ videos: Outlier[]; found: number; note?: string }>("/api/outliers", { method: "POST", json: { query, lang, length }, timeout: 0 }),
   importScript: (text: string) =>
@@ -992,10 +1098,57 @@ export const api = {
     request<{ id: string; updated: string }>(`/api/drafts/${encodeURIComponent(id)}`, { method: "PUT", json: d }),
   deleteDraft: (id: string) => request<unknown>(`/api/drafts/${encodeURIComponent(id)}`, { method: "DELETE" }),
   job: (id: string) => request<Job>(`/api/jobs/${id}`),
+  lyricSongs: () => request<LyricSong[]>("/api/lyricvideo"),
+  lyricSong: (slug: string) => request<LyricSongDetail>(`/api/lyricvideo/${slug}`),
+  createLyricSong: (audio: File, lyrics: string, title: string, style: string) => {
+    const form = new FormData();
+    form.append("audio", audio);
+    form.append("lyrics", lyrics);
+    form.append("title", title);
+    form.append("style", style);
+    return request<{ slug: string; job: string }>("/api/lyricvideo", { method: "POST", body: form, timeout: 0 });
+  },
+  editLyricSong: (slug: string, body: { song: Partial<LyricSongDetail["song"]>; chorus_start?: number; chorus_end?: number }) =>
+    request<LyricSongDetail>(`/api/lyricvideo/${slug}`, { method: "PUT", json: body }),
+  renderLyricSong: (slug: string, body: { draft: boolean; ai: "template" | "gemini"; no_video: boolean }) =>
+    request<{ job: string }>(`/api/lyricvideo/${slug}/render`, { method: "POST", json: body }),
+  setLyricBackground: (slug: string, image: File) => {
+    const form = new FormData();
+    form.append("image", image);
+    return request<LyricSongDetail>(`/api/lyricvideo/${slug}/background`, { method: "POST", body: form, timeout: 0 });
+  },
+  removeLyricBackground: (slug: string) => request<LyricSongDetail>(`/api/lyricvideo/${slug}/background`, { method: "DELETE" }),
+  lyricPictures: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/pictures`),
+  editLyricPictures: (slug: string, prompts: Record<string, string>, motions: Record<string, string> = {}) =>
+    request<LyricPictures>(`/api/lyricvideo/${slug}/pictures`, { method: "PUT", json: { prompts, motions } }),
+  /** A short clip of a section's picture going through its camera move (`move` tries one that is not saved). */
+  lyricMotionClip: (slug: string, id: string, move?: string) =>
+    request<{ file: string }>(`/api/lyricvideo/${slug}/pictures/${id}/motion-clip${move !== undefined ? `?move=${encodeURIComponent(move)}` : ""}`, { method: "POST", timeout: 120_000 }),
+  drawLyricLoop: (slug: string, again = false) =>
+    request<LyricPictures>(`/api/lyricvideo/${slug}/loop${again ? "?again=true" : ""}`, { method: "POST", timeout: 600_000 }),
+  copyLyricLoop: (slug: string, source: string) =>
+    request<LyricPictures>(`/api/lyricvideo/${slug}/loop/from/${source}`, { method: "POST" }),
+  removeLyricLoop: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/loop`, { method: "DELETE" }),
+  suggestLyricMotions: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/pictures/motion/suggest`, { method: "POST" }),
+  resetLyricPictures: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/pictures/reset`, { method: "POST" }),
+  uploadLyricPicture: (slug: string, id: string, file: File) => {
+    const form = new FormData();
+    form.append("image", file);
+    return request<LyricPictures>(`/api/lyricvideo/${slug}/pictures/${id}/upload`, { method: "POST", body: form, timeout: 0 });
+  },
+  /** Starts drawing a picture (returns at once); follow it with lyricDrawStatus. */
+  drawLyricPicture: (slug: string, id: string, body: { prompt: string; style: ArtStyle; seed?: number; tradition?: string; custom_look?: string; custom_avoid?: string }) =>
+    request<{ started: string }>(`/api/lyricvideo/${slug}/pictures/${id}/draw`, { method: "POST", json: body }),
+  lyricDrawStatus: (slug: string) => request<LyricDrawStatus>(`/api/lyricvideo/${slug}/pictures/draw-status`),
+  rewriteLyricPrompt: (slug: string, id: string, prompt: string, instruction: string) =>
+    request<{ prompt: string; by: string }>(`/api/lyricvideo/${slug}/pictures/${id}/rewrite`, { method: "POST", json: { prompt, instruction }, timeout: 120_000 }),
+  removeLyricPicture: (slug: string, id: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/pictures/${id}`, { method: "DELETE" }),
+  deleteLyricSong: (slug: string) => request<{ deleted: string }>(`/api/lyricvideo/${slug}`, { method: "DELETE" }),
+  reanalyzeLyricSong: (slug: string) => request<{ job: string }>(`/api/lyricvideo/${slug}/reanalyze`, { method: "POST" }),
   videos: () => request<VideoSummary[]>("/api/videos"),
   video: (name: string) => request<VideoDetail>(`/api/videos/${encodeURIComponent(name)}`),
   makeThumbnail: (name: string, cover: { text: string; at: number; style: ThumbStyle; emphasis: string; image: string; design?: string }) =>
-    // a designed cover may ask Claude for a new layout, which takes a minute or two
+    // a designed cover may ask Gemini for a new layout, which takes a minute or two
     request<VideoSummary>(`/api/videos/${encodeURIComponent(name)}/thumbnail`, { method: "POST", json: cover, timeout: cover.style === "designed" ? 0 : 60_000 }),
   suggestThumbnails: (name: string, idea = "") =>
     request<ThumbSuggestions>(`/api/videos/${encodeURIComponent(name)}/thumbnail/suggest`, { method: "POST", json: { idea }, timeout: 0 }),
@@ -1014,7 +1167,11 @@ export const api = {
   // moving a big library to another drive takes a while: no time limit
   moveLocations: (data: string, videos: string) =>
     request<Locations & { left_behind: number; restarting: boolean }>("/api/settings/locations", { method: "PUT", json: { data, videos }, timeout: 0 }),
+  cleanupScan: () => request<{ groups: CleanupGroup[]; bytes: number }>("/api/settings/cleanup", { timeout: 0 }),
+  cleanupRun: (groups: string[]) =>
+    request<{ freed: number; files: number; failed: number }>("/api/settings/cleanup", { method: "POST", json: { groups }, timeout: 0 }),
   openLocation: (which: "data" | "videos") => request<{ opened: string }>("/api/settings/locations/open", { method: "POST", json: { which } }),
+  geminiUsage: () => request<GeminiUsage>("/api/gemini/usage"),
   saveServiceKeys: (keys: Partial<Record<ServiceKey, string>>) => request<ServiceKeys>("/api/settings/keys", { method: "PUT", json: { keys } }),
   publishAccounts: () => request<PublishAccounts>("/api/publish/accounts"),
   connectPlatform: (platform: Platform) => request<{ url: string }>(`/api/publish/${platform}/connect`, { method: "POST" }),

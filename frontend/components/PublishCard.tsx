@@ -152,7 +152,7 @@ function YouTubeExtras({ detail }: { detail: VideoDetail }) {
               </button>
             </>
           ) : comment ? (
-            " Written by Claude from the video's sources; edit it to make it yours."
+            " Written by Gemini from the video's sources; edit it to make it yours."
           ) : null}
         </span>
       )}

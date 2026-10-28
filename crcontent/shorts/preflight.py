@@ -1,4 +1,4 @@
-"""The pre-flight report, before anything renders: the rule checks, Claude's hook judge, the loop check and a
+"""The pre-flight report, before anything renders: the rule checks, Gemini's hook judge, the loop check and a
 storyboard (one frame per beat, as the Short frames it, with how its footage was searched). preflight.json holds it
 all; preflight.html shows it (it opens from disk; served by the engine it can also apply a suggestion and approve).
 
@@ -12,10 +12,13 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
 from ..longform.storyboard import CSS as STORYBOARD_CSS
+from ..longform.voice import recording
+from ..render import duration
 from ..visuals import IMAGE_EXTS
-from . import match, timing
+from . import edit, match, timing
 from .footage import PLACEHOLDERS, placeholders, weak
 from .plan import HASHTAG
 
@@ -34,8 +37,8 @@ def loop_line(ep, loop: dict) -> dict:
     detail = f"\"{loop['joined']}\""
     if not loop["natural"]:
         detail += f": {loop['problem'] or 'not one natural sentence'}"
-    elif loop["by"] != "Claude":
-        detail += " (only checked for repeated words: Claude isn't available)"
+    elif loop["by"] != "Gemini":
+        detail += " (only checked for repeated words: Gemini isn't available)"
     if not ep.loop_marked:
         detail += " (no [loops] marker in the sheet)"
     return {"check": "loop line", "ok": loop["natural"], "detail": detail}
@@ -89,7 +92,7 @@ def status(report: dict) -> dict:
         reasons.insert(0, f"hook judge {j['score']}/10 (needs {JUDGE_READY} or more)")
     state = "needs work" if reasons else "ready" if j else "not judged"
     if not j:
-        reasons.append("the hook judge needs Claude (ANTHROPIC_API_KEY in Settings)")
+        reasons.append("the hook judge needs Gemini (GEMINI_API_KEY in Settings)")
     return {"state": state, "reasons": reasons}
 
 
@@ -144,6 +147,55 @@ details.how a { color:var(--accent); }
   border:1px solid var(--line); background:var(--card); color:var(--ink); }
 .mine label.upload.wanted { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:650; }
 .mine label.upload.off { opacity:.5; cursor:default; }
+.trim { margin-top:8px; padding:8px; border:1px dashed var(--line); border-radius:10px; }
+.trim video { width:100%; aspect-ratio:9/16; object-fit:cover; border-radius:8px; background:#000; display:block; }
+.trim input[type=range] { width:100%; margin:4px 0 0; }
+.trim .rl { display:flex; justify-content:space-between; font-size:12px; color:var(--soft); margin-top:8px; }
+.trim .span { position:relative; height:8px; border-radius:4px; background:var(--line); margin-top:8px; }
+.trim .span i { position:absolute; top:0; bottom:0; border-radius:4px; background:var(--accent); }
+.trim .read { font-size:12px; color:var(--soft); font-variant-numeric:tabular-nums; }
+.trim .result { font-size:13px; margin-top:6px; } .trim .result.bad { color:var(--warn); }
+.trim .row { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+.meter { position:relative; height:8px; border-radius:4px; background:var(--line); margin:8px 0 4px; }
+.meter i { position:absolute; left:0; top:0; bottom:0; border-radius:4px; background:var(--warn); }
+.meter.good i { background:var(--ok); }
+.meter b { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--soft); opacity:.7; }
+.chips { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+.chip { font-size:12px; padding:2px 8px; border-radius:99px; border:1px solid var(--line); color:var(--soft); }
+.chip.seen { border-color:var(--ok); color:var(--ok); } .chip.miss { border-color:var(--warn); color:var(--warn); }
+.chip.extra { opacity:.7; }
+.edit { display:grid; grid-template-columns:repeat(3, 1fr) minmax(150px, 190px); gap:10px; align-items:start; }
+.edit label { display:block; font-size:12px; color:var(--soft); }
+.edit select, .edit button { width:100%; margin-top:4px; font:inherit; padding:6px; border-radius:8px;
+  border:1px solid var(--line); background:var(--card); color:var(--ink); }
+.edit img { width:100%; aspect-ratio:9/16; object-fit:cover; border-radius:10px; background:#000; grid-row:1 / span 8; grid-column:4; }
+.edit .tl { grid-column:1 / span 3; display:flex; gap:3px; }
+.edit .tl button { width:auto; min-width:0; margin:0; padding:8px 0; font-size:12px; font-variant-numeric:tabular-nums; }
+.edit .tl button.on { border-color:var(--accent); color:var(--accent); font-weight:700; }
+.edit .tl button.own { background:color-mix(in srgb, var(--accent) 18%, var(--card)); }
+.edit .tune { grid-column:1 / span 3; display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; align-items:end; }
+.edit .tune input[type=range] { width:100%; margin-top:6px; }
+.edit .tune output { color:var(--ink); font-variant-numeric:tabular-nums; }
+.edit label.check { display:flex; align-items:center; gap:6px; color:var(--ink); font-size:14px; }
+.edit .narr { grid-column:1 / span 3; display:grid; grid-template-columns:1fr 1.4fr; gap:10px; align-items:end; }
+.edit .narr button.setvoice { grid-column:1 / span 2; background:var(--accent); border-color:var(--accent); color:#fff; font-weight:650; }
+.edit .vrow { display:flex; gap:6px; align-items:center; }
+.edit .vrow select { flex:1; }
+.edit .vrow button.listen { width:40px; flex:none; }
+.edit .speeds { display:flex; margin-top:4px; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.edit .speeds button { margin:0; border:0; border-radius:0; background:transparent; color:var(--soft); font-weight:600; white-space:nowrap; }
+.edit .speeds button.on { background:var(--line); color:var(--ink); }
+.voicebox audio { width:100%; height:32px; }
+.voicebox button.rec.on { background:var(--warn); border-color:var(--warn); color:#fff; }
+.edit .beatpick { grid-column:1 / span 3; }
+.edit .why { grid-column:1 / span 3; margin:0; padding-left:18px; font-size:13px; color:var(--soft); }
+.edit .why:empty { display:none; }
+.edit button.suggestedit { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:650; }
+.edit .gfx { grid-column:1 / span 3; display:flex; flex-wrap:wrap; gap:6px 14px; font-size:14px; }
+.edit .gfx b { font-size:12px; color:var(--soft); width:100%; font-weight:600; }
+.edit .gfx label { display:flex; align-items:center; gap:6px; font-size:14px; color:var(--ink); }
+@media (max-width: 760px) { .edit { grid-template-columns:1fr; } .edit img { grid-row:auto; grid-column:auto; max-width:220px; }
+  .edit .beatpick, .edit .tl, .edit .tune, .edit .narr { grid-column:auto; } .edit .tune { grid-template-columns:1fr 1fr; } }
 .approve { font:14px ui-monospace, Consolas, monospace; background:var(--bg); border:1px solid var(--line);
   border-radius:8px; padding:8px 10px; overflow-wrap:anywhere; }
 @media (max-width: 760px) { .sugs { grid-template-columns:1fr; } }
@@ -193,15 +245,15 @@ document.addEventListener('click', async (e) => {
 });
 // your own clip for a beat: upload (or replace) it, or remove it to go back to the stock pick; the checks run again
 const busyAll = (on) => {
-  document.querySelectorAll('button.apply, button.remove, #approve').forEach((x) => { x.disabled = on; });
+  document.querySelectorAll('button.apply, button.remove, button.trimopen, button.trimcheck, button.trimuse, button.rec, button.voiceremove, button.setvoice, #approve').forEach((x) => { x.disabled = on; });
   document.querySelectorAll('.mine input[type=file]').forEach((x) => { x.disabled = on; x.parentElement.classList.toggle('off', on); });
 };
 if (!live) busyAll(true);
-async function changeClip(beat, method, body, doing) {
+async function changeClip(beat, method, body, doing, what = 'clip') {
   busyAll(true);
   status.textContent = `${doing} for beat ${beat}, then every check runs again (about half a minute)…`;
   try {
-    const r = await fetch(`/api/shorts/${encodeURIComponent(job)}/beats/${beat}/clip`, { method, body });
+    const r = await fetch(`/api/shorts/${encodeURIComponent(job)}/beats/${beat}/${what}`, { method, body });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
     location.reload();
@@ -211,8 +263,211 @@ document.querySelectorAll('.mine input[type=file]').forEach((input) => input.add
   const file = input.files[0];
   if (!file || !live) return;
   const form = new FormData(); form.append('file', file);
-  changeClip(input.dataset.beat, 'POST', form, `Uploading ${file.name}`);
+  const voice = input.classList.contains('voicefile');
+  changeClip(input.dataset.beat, 'POST', form, `Uploading ${file.name}`, voice ? 'voice' : 'clip');
 }));
+// your own voice on a beat: record it here (press again to stop) or upload it; "Use the narrator" puts the TTS back
+let recorder = null;
+document.querySelectorAll('button.rec').forEach((b) => b.addEventListener('click', async () => {
+  if (!live) return;
+  if (recorder) { if (recorder.button === b) recorder.stop(); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (err) { status.textContent = 'No microphone: ' + err.message; return; }
+  const parts = [];
+  recorder = new MediaRecorder(stream); recorder.button = b;
+  recorder.ondataavailable = (ev) => parts.push(ev.data);
+  recorder.onstop = () => {
+    stream.getTracks().forEach((t) => t.stop());
+    recorder = null; b.classList.remove('on'); b.textContent = '● Record voice';
+    const form = new FormData(); form.append('file', new Blob(parts, { type: 'audio/webm' }), 'voice.webm');
+    changeClip(b.dataset.beat, 'POST', form, 'Saving your voice', 'voice');
+  };
+  recorder.start(); b.classList.add('on'); b.textContent = '■ Stop';
+  const line = b.closest('.beat').querySelector('.vo').textContent;
+  status.textContent = `Recording beat ${b.dataset.beat}: read "${line}", then press Stop.`;
+}));
+document.querySelectorAll('button.voiceremove').forEach((b) => b.addEventListener('click', () => {
+  if (live) changeClip(b.dataset.beat, 'DELETE', null, 'Going back to the narrator', 'voice');
+}));
+// the judge's score as a bar (ticks at the cap for a clip without the key objects, and at the pass mark) and the key
+// objects it looked for: green = seen, red = missing, grey = other things in frame
+const meterEl = (score, pass, cap) => {
+  const m = document.createElement('div'); m.className = 'meter' + (score >= pass ? ' good' : '');
+  const fill = document.createElement('i'); fill.style.width = score * 10 + '%'; m.append(fill);
+  [cap, pass].forEach((t) => { const b = document.createElement('b'); b.style.left = t * 10 + '%'; m.append(b); });
+  return m;
+};
+const chipsEl = (wanted, missing, seen) => {
+  const box = document.createElement('div'); box.className = 'chips';
+  const add = (text, cls) => { const c = document.createElement('span'); c.className = 'chip ' + cls; c.textContent = text; box.append(c); };
+  (wanted || []).forEach((o) => (missing || []).includes(o) ? add('\u2717 ' + o, 'miss') : add('\u2713 ' + o, 'seen'));
+  (seen || []).filter((o) => !(wanted || []).some((w) => w.toLowerCase() === o.toLowerCase())).slice(0, 6).forEach((o) => add(o, 'extra'));
+  return box;
+};
+// edit panel: mood, caption look and cut style; the frame shows the grade and captions as the render will
+const editBox = $('.edit');
+if (editBox) {
+  const gfx = () => [...editBox.querySelectorAll('input[name=gfx]:checked')].map((x) => x.value);
+  const sel = (n) => editBox.querySelector('select[name=' + n + ']'), pic = editBox.querySelector('img'), note = $('#editnote');
+  const inp = (n) => editBox.querySelector('input[name=' + n + ']');
+  // per-beat overrides ({beat: {look, transition}}): the two "this beat" menus show and set the previewed beat's
+  const beats = JSON.parse(editBox.dataset.beats || '{}');
+  const segs = editBox.querySelectorAll('.tl button');
+  const showBeat = () => {
+    const n = sel('beat').value, o = beats[n] || {};
+    sel('blook').value = o.look || ''; sel('bcut').value = o.transition || '';
+    sel('bcut').disabled = n === '1';  // nothing cuts into the opening beat
+    segs.forEach((s) => { s.classList.toggle('on', s.dataset.beat === n); s.classList.toggle('own', !!beats[s.dataset.beat]); });
+  };
+  const keepBeat = () => {
+    const o = {};
+    if (sel('blook').value) o.look = sel('blook').value;
+    if (sel('bcut').value) o.transition = sel('bcut').value;
+    if (Object.keys(o).length) beats[sel('beat').value] = o; else delete beats[sel('beat').value];
+    showBeat();
+  };
+  segs.forEach((s) => s.addEventListener('click', () => {
+    sel('beat').value = s.dataset.beat; showBeat(); frame();
+    const card = document.getElementById('beat-' + s.dataset.beat);
+    if (card) card.animate([{ outline: '2px solid var(--accent)' }, { outline: '2px solid transparent' }], 1200);
+  }));
+  ['blook', 'bcut'].forEach((n) => sel(n).addEventListener('change', () => { keepBeat(); frame(); }));
+  ['caption_size', 'caption_y', 'music_volume'].forEach((n) => {
+    inp(n).addEventListener('input', () => { inp(n).previousElementSibling.textContent = Number(inp(n).value).toFixed(2); });
+    if (n !== 'music_volume') inp(n).addEventListener('change', () => frame());
+  });
+  const frame = () => {
+    const look = (beats[sel('beat').value] || {}).look || sel('look').value;
+    const q = new URLSearchParams({ beat: sel('beat').value, look, caption: sel('caption').value, graphics: gfx().join(','),
+      size: inp('caption_size').value, y: inp('caption_y').value });
+    note.textContent = live ? 'Drawing the frame...' : 'Open this page from the app to preview the edit.';
+    if (live) {
+      pic.onload = () => { note.textContent = ''; };
+      pic.onerror = () => { note.textContent = 'No preview for this beat.'; };
+      pic.src = `/api/shorts/${encodeURIComponent(job)}/edit/preview?${q}`;
+    }
+  };
+  ['look', 'caption'].forEach((n) => sel(n).addEventListener('change', frame));
+  sel('beat').addEventListener('change', () => { showBeat(); frame(); });
+  editBox.querySelectorAll('input[name=gfx]').forEach((x) => x.addEventListener('change', frame));
+  // fill the panel in with what suits this Short (the preview shows it; Save edit keeps it)
+  editBox.querySelector('button.suggestedit').addEventListener('click', async () => {
+    if (!live) return;
+    note.textContent = 'Reading the script and its pace…';
+    const r = await fetch(`/api/shorts/${encodeURIComponent(job)}/edit/suggest`, { method: 'POST' });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { note.textContent = data.detail || `HTTP ${r.status}`; return; }
+    sel('look').value = data.look; sel('caption').value = data.caption; sel('transition').value = data.transition;
+    editBox.querySelectorAll('input[name=gfx]').forEach((x) => { x.checked = data.graphics.includes(x.value); });
+    $('#editwhy').innerHTML = '';
+    Object.values(data.reasons).forEach((text) => { const li = document.createElement('li'); li.textContent = text; $('#editwhy').append(li); });
+    note.textContent = `Suggested: ${data.summary}. Press Save edit to keep it.`;
+    frame();
+  });
+  editBox.querySelector('button.saveedit').addEventListener('click', async () => {
+    if (!live) return;
+    note.textContent = 'Saving...';
+    const r = await fetch(`/api/shorts/${encodeURIComponent(job)}/edit`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ look: sel('look').value, caption: sel('caption').value, transition: sel('transition').value, graphics: gfx(),
+        beats, caption_size: Number(inp('caption_size').value), caption_y: Number(inp('caption_y').value),
+        music_volume: Number(inp('music_volume').value), push: inp('push').checked }) });
+    const data = await r.json().catch(() => ({}));
+    note.textContent = r.ok ? 'Saved. Approve to render with it.' : (data.detail || `HTTP ${r.status}`);
+  });
+  // the narrator: voice + speed as in the app's picker; ▶ plays the first line, a change offers to voice it again
+  const narr = editBox.querySelector('.narr'), setBtn = narr.querySelector('button.setvoice');
+  const listen = narr.querySelector('button.listen'), player = new Audio();
+  let rate = narr.dataset.rate;
+  const changed = () => { setBtn.hidden = sel('voice').value === narr.dataset.voice && rate === narr.dataset.rate; };
+  narr.querySelectorAll('.speeds button').forEach((b) => b.addEventListener('click', () => {
+    rate = b.dataset.rate;
+    narr.querySelectorAll('.speeds button').forEach((x) => x.classList.toggle('on', x === b));
+    changed();
+  }));
+  sel('voice').addEventListener('change', changed);
+  player.onended = player.onpause = () => { listen.textContent = '▶'; };
+  listen.addEventListener('click', async () => {
+    if (!live) return;
+    if (!player.paused) { player.pause(); return; }
+    listen.textContent = '…';
+    try {
+      const r = await fetch('/api/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: narr.dataset.sample, voice: sel('voice').value, rate }) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+      player.src = URL.createObjectURL(await r.blob());
+      await player.play(); listen.textContent = '■';
+    } catch (err) { listen.textContent = '▶'; note.textContent = 'No preview: ' + err.message; }
+  });
+  setBtn.addEventListener('click', async () => {
+    if (!live) return;
+    busyAll(true);
+    status.textContent = 'Voicing every beat with the new voice, then every check runs again (about a minute)…';
+    try {
+      const r = await fetch(`/api/shorts/${encodeURIComponent(job)}/voice`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: sel('voice').value, rate }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      location.reload();
+    } catch (err) { status.textContent = 'That didn\'t work: ' + err.message; busyAll(false); }
+  });
+  showBeat();
+  frame();
+}
+// trim: pick where the beat's clip starts and where it ends (the beat's length is the voice's, so a stretch longer or
+// shorter than that plays faster or slower to fit: 0.5x to 2x), play it, score it, keep it
+document.querySelectorAll('.trim').forEach((box) => {
+  const beat = box.dataset.beat, len = Number(box.dataset.length), dur = Number(box.dataset.dur);
+  const lo = len * 0.5, hi = len * 2;
+  const v = box.querySelector('video'), rs = box.querySelector('input.rs'), re = box.querySelector('input.re');
+  const read = box.querySelector('.read'), out = box.querySelector('.result'), bar = box.querySelector('.span i');
+  const num = (x) => Number(x.value);
+  const speed = () => (num(re) - num(rs)) / len;
+  // keep the stretch between half and twice the beat, inside the clip: moving one end pushes the other when it must
+  const fix = (moved) => {
+    let s = num(rs), e = num(re);
+    if (moved === 's') { s = Math.min(s, dur - lo); e = Math.min(Math.max(e, s + lo), s + hi, dur); }
+    else { e = Math.max(e, lo); s = Math.max(Math.min(s, e - lo), e - hi, 0); }
+    rs.value = s.toFixed(2); re.value = e.toFixed(2);
+  };
+  const show = () => {
+    const s = num(rs), e = num(re), x = speed();
+    bar.style.left = (s / dur * 100) + '%'; bar.style.width = ((e - s) / dur * 100) + '%';
+    const how = Math.abs(x - 1) < 0.02 ? 'normal speed' : (x > 1 ? `${x.toFixed(2)}x faster` : `${x.toFixed(2)}x slow motion`);
+    read.textContent = `${s.toFixed(2)}s → ${e.toFixed(2)}s of ${dur.toFixed(1)}s · ${(e - s).toFixed(2)}s shown in the ${len.toFixed(2)}s beat · ${how}`;
+    v.playbackRate = Math.min(Math.max(x, 0.5), 2);
+  };
+  const play = () => { show(); out.textContent = ''; v.currentTime = num(rs); v.play().catch(() => {}); };
+  rs.addEventListener('input', () => { fix('s'); play(); });
+  re.addEventListener('input', () => { fix('e'); show(); v.currentTime = Math.max(num(re) - Math.min(1, num(re) - num(rs)), num(rs)); v.play().catch(() => {}); });
+  v.addEventListener('timeupdate', () => { if (v.currentTime >= num(re)) v.currentTime = num(rs); });
+  box.closest('.beat').querySelector('button.trimopen').addEventListener('click', () => {
+    box.hidden = !box.hidden;
+    if (box.hidden) v.pause(); else { if (!v.src) v.src = v.dataset.src; fix('s'); show(); v.currentTime = num(rs); v.play().catch(() => {}); }
+  });
+  const send = async (apply) => {
+    busyAll(true); out.className = 'result'; out.textContent = apply ? 'Keeping it and running every check again…' : 'Scoring this stretch…';
+    try {
+      const res = await fetch(`/api/shorts/${encodeURIComponent(job)}/beats/${beat}/trim`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start: num(rs), end: num(re), apply }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      if (apply) { location.reload(); return; }
+      const bits = [data.score === null ? 'not scored (Gemini unavailable)' : `shot match ${data.score}/10`];
+      if (data.seen) bits.push(data.seen);
+      if (data.problem) bits.push(data.problem);
+      if (data.reject) bits.push('hook rule: ' + data.reject);
+      out.textContent = '';
+      if (data.score !== null) out.append(meterEl(data.score, data.pass, data.cap));
+      out.append(bits.join(' · '));
+      if (data.score !== null) out.append(chipsEl(data.key_objects, data.missing, data.objects_seen));
+      out.classList.toggle('bad', (data.score !== null && data.score < Number(box.dataset.pass)) || !!data.reject);
+    } catch (err) { out.textContent = 'That did not work: ' + err.message; out.classList.add('bad'); }
+    busyAll(false);
+  };
+  box.querySelector('button.trimcheck').addEventListener('click', () => live && send(false));
+  box.querySelector('button.trimuse').addEventListener('click', () => live && send(true));
+});
 document.querySelectorAll('button.remove').forEach((b) => b.addEventListener('click', () => {
   if (live) changeClip(b.dataset.beat, 'DELETE', null, 'Going back to the stock clip');
 }));
@@ -307,6 +562,78 @@ def _how(entry: dict) -> str:
     return f"<details class=\"how\"><summary>How it was searched ({n} clips checked)</summary>{body}</details>"
 
 
+def _objects_html(ent: dict) -> str:
+    """The judge's verdict on a beat: a 0-10 bar (ticks at the cap and the pass mark) and its key objects, seen or
+    missing; "" when the beat wasn't judged."""
+    score = ent.get("match")
+    if score is None:
+        return ""
+    c = ent["chosen"]
+    plan = (ent.get("search") or {}).get("plan") or {}
+    wanted, missing = plan.get("key_objects", []), c.get("missing", [])
+    chips = [f"<span class=\"chip {'miss' if o in missing else 'seen'}\">{'✗' if o in missing else '✓'} {e(o)}</span>"
+             for o in wanted]
+    wanted_l = {o.lower() for o in wanted}
+    chips += [f"<span class=\"chip extra\">{e(o)}</span>" for o in c.get("objects_seen", [])[:6]
+              if o.lower() not in wanted_l]
+    return (f"<div class=\"meter{' good' if score >= match.PASS else ''}\" title=\"shot match {score}/10\">"
+            f"<i style=\"width:{score * 10}%\"></i><b style=\"left:{match.GENERIC_MAX * 10}%\"></b>"
+            f"<b style=\"left:{match.PASS * 10}%\"></b></div>"
+            + (f"<div class=\"chips\">{''.join(chips)}</div>" if chips else ""))
+
+
+def _edit_html(entries: list[dict], choice: dict, lang: str, tl, job: Path, sample: str) -> str:
+    """The Edit panel: a timeline of the beats, mood, caption look and cut style for the Short and per beat, the
+    fine-tune sliders and the narrator, with a frame preview."""
+    def select(name: str, options: dict, current: str) -> str:
+        return (f"<select name=\"{name}\">" + "".join(
+            f"<option value=\"{e(k)}\"{' selected' if k == current else ''}>{e(v)}</option>"
+            for k, v in options.items()) + "</select>")
+
+    def slider(name: str, label: str, value: float, step: float) -> str:
+        lo, hi = edit.NUMBERS[name]
+        return (f"<label>{label} <output>{value:.2f}</output><input type=\"range\" name=\"{name}\" min=\"{lo}\" "
+                f"max=\"{hi}\" step=\"{step}\" value=\"{value:.2f}\"></label>")
+
+    from . import RATES, graphics, narrator, settings, voices_for
+
+    opts = edit.options()
+    voice, rate = narrator(job, lang)
+    speeds = "".join(f"<button type=\"button\" data-rate=\"{k}\" class=\"{'on' if k == rate else ''}\">{v}</button>"
+                     for k, v in RATES.items())
+    beat = select("beat", {str(x["scene"]): f"Beat {x['scene']}" for x in entries}, "1")
+    timeline = "".join(f"<button class=\"seg{' own' if str(s.scene) in choice['beats'] else ''}\" data-beat=\"{s.scene}\" "
+                       f"style=\"flex:{s.length:.2f}\" title=\"Beat {s.scene}: {s.length:.1f}s\">{s.scene}</button>"
+                       for s in tl.slots)
+    same = {"": "Same as the Short"}
+    music = choice["music_volume"] if choice["music_volume"] is not None else float(settings.load()["music"]["volume"])
+    gfx = "".join(f"<label><input type=\"checkbox\" name=\"gfx\" value=\"{k}\"{' checked' if k in choice['graphics'] else ''}>"
+                  f"{e(v)}</label>" for k, v in graphics.NAMES.items())
+    return (f"<div class=\"edit\" data-beats=\"{e(json.dumps(choice['beats']))}\">"
+            f"<div class=\"tl\" title=\"The Short's beats, as long as they play: pick one to preview and edit it\">{timeline}</div>"
+            f"<label class=\"beatpick\">Preview beat{beat}</label>"
+            f"<label>Mood{select('look', opts['look'], choice['look'])}</label>"
+            f"<label>Captions{select('caption', opts['caption'], choice['caption'])}</label>"
+            f"<label>Cuts{select('transition', opts['transition'], choice['transition'])}</label>"
+            f"<label>This beat's mood{select('blook', {**same, **{k: v for k, v in opts['look'].items() if k}}, '')}</label>"
+            f"<label>Cut into this beat{select('bcut', {**same, **opts['transition']}, '')}</label><span></span>"
+            f"<div class=\"gfx\"><b>Motion graphics</b>{gfx}</div>"
+            "<div class=\"tune\">"
+            + slider("caption_size", "Caption size", choice["caption_size"], 0.05)
+            + slider("caption_y", "Caption height", choice["caption_y"], 0.01)
+            + slider("music_volume", "Music volume", music, 0.05)
+            + f"<label class=\"check\"><input type=\"checkbox\" name=\"push\"{' checked' if choice['push'] else ''}>"
+              "Slow push-in on still shots</label></div>"
+            f"<div class=\"narr\" data-sample=\"{e(sample)}\" data-voice=\"{e(voice)}\" data-rate=\"{e(rate)}\">"
+            f"<label>Voice<span class=\"vrow\">{select('voice', voices_for(lang), voice)}"
+            "<button type=\"button\" class=\"listen\" title=\"Listen to this voice\">▶</button></span></label>"
+            f"<label>Speed<span class=\"speeds\">{speeds}</span></label>"
+            "<button class=\"setvoice\" hidden>Voice the Short again</button></div>"
+            "<img alt=\"\"><button class=\"suggestedit\">✨ Suggest edit</button>"
+            "<button class=\"saveedit\">Save edit</button><span class=\"hint\" id=\"editnote\"></span>"
+            "<ul class=\"why\" id=\"editwhy\"></ul></div>")
+
+
 def page(job: Path, ep, tl, entries: list[dict], report: dict, frames: list[str]) -> str:
     st = report["status"]
     badge = {"ready": ("ready", "Ready"), "needs work": ("work", "Needs work"),
@@ -329,7 +656,7 @@ def page(job: Path, ep, tl, entries: list[dict], report: dict, frames: list[str]
                            + (f"<div class=\"stat\">The judge on it: {fix['score']}/10. {e(fix['reason'])}</div>"
                               if fix.get("score") is not None else "") + "</div>")
     else:
-        judge_html = "<p class=\"hint\">The hook judge needs Claude (ANTHROPIC_API_KEY in Settings).</p>"
+        judge_html = "<p class=\"hint\">The hook judge needs Gemini (GEMINI_API_KEY in Settings).</p>"
     lp = report["loop"]
     loop_html = f"<p>\"{e(lp['joined'])}\"</p>"
     if not lp["natural"]:
@@ -356,17 +683,47 @@ def page(job: Path, ep, tl, entries: list[dict], report: dict, frames: list[str]
         flagged = ent["flags"] or (score is not None and score < match.PASS)
         mine = c["source"] == "own"
         tools = (f"<div class=\"mine\"><label class=\"upload{' wanted' if flagged and not mine else ''}\">"
-                 f"<input type=\"file\" accept=\"video/*,image/*\" data-beat=\"{scene.n}\" hidden>"
+                 f"<input class=\"clipfile\" type=\"file\" accept=\"video/*,image/*\" data-beat=\"{scene.n}\" hidden>"
                  f"{'Replace my clip' if mine else 'Upload your clip'}</label>"
                  + (f"<button class=\"remove\" data-beat=\"{scene.n}\">Remove my clip</button>" if mine else "")
                  + "</div>")
+        my_voice = recording(Path(report["media"]), scene.n)
+        voice_html = (f"<div class=\"mine voicebox\">"
+                      + (f"<audio controls preload=\"none\" src=\"voice/{e(slot.voice)}?v={slot.length:.2f}\"></audio>"
+                         if slot.voice else "")
+                      + f"<button class=\"rec\" data-beat=\"{scene.n}\">● Record voice</button>"
+                      f"<label class=\"upload\"><input class=\"voicefile\" type=\"file\" accept=\"audio/*\" "
+                      f"data-beat=\"{scene.n}\" hidden>{'Replace my voice' if my_voice else 'Upload voice'}</label>"
+                      + (f"<button class=\"voiceremove\" data-beat=\"{scene.n}\">Use the narrator</button>"
+                         if my_voice else "") + "</div>")
+        trim = ""
+        if c.get("kind") == "video" and c["source"] not in PLACEHOLDERS and not ent.get("reuses_opening"):
+            clip_len = duration(Path(c["file"]))
+            if clip_len >= slot.length * 0.5 + 0.1:
+                tools = tools.replace("</div>", "<button class=\"trimopen\">Trim</button></div>", 1)
+                from . import trim_window
+
+                t_start, t_end, _ = trim_window(clip_len, slot.length, float(c.get("start", 0.0)), c.get("end"))
+                trim = (f"<div class=\"trim\" hidden data-beat=\"{scene.n}\" data-length=\"{slot.length:.3f}\" "
+                        f"data-dur=\"{clip_len:.3f}\" data-pass=\"{match.PASS}\">"
+                        f"<video muted playsinline controls preload=\"none\" "
+                        f"data-src=\"/api/shorts/{e(quote(job.name))}/beats/{scene.n}/source\"></video>"
+                        f"<div class=\"span\"><i></i></div>"
+                        f"<div class=\"rl\"><span>Start</span></div>"
+                        f"<input class=\"rs\" type=\"range\" min=\"0\" max=\"{clip_len:.2f}\" step=\"0.05\" value=\"{t_start:.2f}\">"
+                        f"<div class=\"rl\"><span>End</span></div>"
+                        f"<input class=\"re\" type=\"range\" min=\"0\" max=\"{clip_len:.2f}\" step=\"0.05\" value=\"{t_end:.2f}\">"
+                        f"<div class=\"read\"></div>"
+                        f"<div class=\"row\"><button class=\"trimcheck\">Check match</button>"
+                        f"<button class=\"trimuse\">Use this stretch</button></div>"
+                        f"<div class=\"result\"></div></div>")
         beats.append(
-            f"<div class=\"beat{' flagged' if flagged else ''}\"><img src=\"storyboard/{frame}\" alt=\"\">"
+            f"<div class=\"beat{' flagged' if flagged else ''}\" id=\"beat-{scene.n}\"><img src=\"storyboard/{frame}\" alt=\"\">"
             f"<div class=\"head\"><span class=\"n\">{scene.n}</span><span class=\"time\">{slot.start:.1f}–"
             f"{slot.end:.1f}s</span></div><div class=\"ontext\">{e(scene.text)}</div>"
             f"<div class=\"vo\">{e(scene.voiceover)}</div><div class=\"visual\">{e(scene.visual)}</div>"
-            f"<div class=\"src\">{e(src)}{badge_html}{opening}{link}</div>"
-            + (f"<div class=\"flags\">{flags}</div>" if flags else "") + tools + _how(ent) + "</div>")
+            f"<div class=\"src\">{e(src)}{badge_html}{opening}{link}</div>{_objects_html(ent)}"
+            + (f"<div class=\"flags\">{flags}</div>" if flags else "") + tools + voice_html + trim + _how(ent) + "</div>")
     changes = [n for n in ep.notes if n.startswith(("First line changed", "On-screen hook changed"))]
     changes_html = ("<div class=\"panel\"><h2>Changed here</h2><ul>" + "".join(f"<li>{e(c)}</li>" for c in changes)
                     + "</ul><p class=\"hint\">Your spreadsheet still has the old text: copy these into it.</p></div>"
@@ -386,6 +743,11 @@ def page(job: Path, ep, tl, entries: list[dict], report: dict, frames: list[str]
 {''.join(f'<p class="hint">Not searched: {e(s)}.</p>' for s in skipped)}</div>
 <div class="panel"><h2>Hook judge</h2>{judge_html}</div>
 <div class="panel"><h2>Loop: the last line into the first</h2>{loop_html}</div>
+<div class="panel"><h2>Edit</h2>{_edit_html(entries, edit.load(job), ep.script.lang, tl, job,
+                                             next((s.voiceover for s in ep.script.scenes if s.voiceover), ep.title))}
+<p class="hint">Mood grades every beat, captions restyle the spoken words, cuts add an effect between beats. Pick a
+ beat on the timeline to preview it and give it its own mood or cut. Changing the narrator voices the whole Short again;
+ a beat's <b>Record voice</b> or <b>Upload voice</b> puts your own voice on it.</p></div>
 <div class="panel"><h2>Storyboard</h2><div class="beats">{''.join(beats)}</div>
 <p class="hint">Press <b>Upload your clip</b> on a beat to use your own video or photo; files you put in
  {e(report['media'])}\\scene-XX.mp4 are picked up when the episode is built again.</p></div>

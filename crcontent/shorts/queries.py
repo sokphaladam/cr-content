@@ -1,4 +1,4 @@
-"""Stock searches for every beat, written by Claude from the Visual column.
+"""Stock searches for every beat, written by Gemini from the Visual column.
 
 Stock libraries tag clips with a few plain words ("wet cat", "cat bath"), so each beat gets QUERIES_MIN-QUERIES_MAX
 short searches of 2-3 words, always naming the animal, most specific first; plus the planned shot's key objects (what
@@ -9,7 +9,7 @@ its own searches.
 import json
 import re
 
-from ..config import CLAUDE_MODEL
+from ..config import LLM_MODEL
 from ..importer import _keywords
 
 QUERIES_MIN, QUERIES_MAX = 4, 6
@@ -41,15 +41,13 @@ def _ask(prompt: str, schema: dict, max_tokens: int = 4000) -> dict:
     from ..script import make_client
 
     response = make_client().beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=max_tokens,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined")
+        raise RuntimeError("Gemini declined")
     return json.loads(next(b.text for b in response.content if b.type == "text"))
 
 
@@ -68,7 +66,7 @@ def _clean(plan: dict, animal: str) -> dict:
 
 
 def local_plan(scene, animal: str) -> dict:
-    """Searches from the Visual column's words alone (no Claude)."""
+    """Searches from the Visual column's words alone (no Gemini)."""
     words = [w for w in _keywords(scene.visual).split() if w != animal][:4]
     queries = [f"{animal} {w}" for w in words] + [animal]
     return {"beat": scene.n, "shot": scene.visual, "queries": queries[:QUERIES_MAX], "key_objects": [],
@@ -93,7 +91,7 @@ def plan(ep, log=print) -> list[dict]:
         out[0]["reuse_opening"] = False
         return out
     except Exception as e:
-        log(f"      ! couldn't plan the searches with Claude ({type(e).__name__}); using the Visual column's words")
+        log(f"      ! couldn't plan the searches with Gemini ({type(e).__name__}); using the Visual column's words")
         return [local_plan(s, animal) for s in scenes]
 
 
@@ -115,5 +113,5 @@ def simpler(ep, failed: list[tuple[dict, str]], log=print) -> dict[int, dict]:
             "when a cat drinking water from a glass or bowl tells the same thing). reuse_opening: false.", PLAN_SCHEMA)
         return {b["beat"]: _clean(b, animal) for b in got["beats"]}
     except Exception as e:
-        log(f"      ! couldn't ask Claude for simpler shots ({type(e).__name__})")
+        log(f"      ! couldn't ask Gemini for simpler shots ({type(e).__name__})")
         return {}

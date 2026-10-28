@@ -19,10 +19,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-import anthropic
+from . import llm
 import openpyxl
 
-from .config import ASSETS_DIR, CLAUDE_MODEL
+from .config import ASSETS_DIR, LLM_MODEL
 from .facts import pinned_comment, sources_line
 from .importer import _keywords, detect_lang, strip_emoji
 from .script import Scene, VideoScript, make_client
@@ -168,8 +168,8 @@ PLAN_SCHEMA = {
 }
 
 
-def plan_footage(episode: Episode, client: anthropic.Anthropic | None = None) -> None:
-    """Ask Claude to turn each scene's Visual description into a stock-footage search, built around the Key Visual,
+def plan_footage(episode: Episode, client: llm.Client | None = None) -> None:
+    """Ask Gemini to turn each scene's Visual description into a stock-footage search, built around the Key Visual,
     and to pick the background track that fits the Music / Mood (one call per episode)."""
     client = client or make_client()
     script = episode.script
@@ -191,15 +191,13 @@ def plan_footage(episode: Episode, client: anthropic.Anthropic | None = None) ->
            if script.mood and tracks else "music: \"\".")
     )
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=2000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": PLAN_SCHEMA}},
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to plan footage.")
+        raise RuntimeError("Gemini declined to plan footage.")
     plan = json.loads(next(b.text for b in response.content if b.type == "text"))
     for scene, q in zip(script.scenes, plan["queries"]):
         if q.strip():
@@ -211,11 +209,11 @@ def plan_footage(episode: Episode, client: anthropic.Anthropic | None = None) ->
 
 
 def plan_all(episodes: list[Episode], log: Callable[[str], None] = print) -> None:
-    """plan_footage for several episodes at once; without Claude the keyword searches stay."""
+    """plan_footage for several episodes at once; without Gemini the keyword searches stay."""
     if not episodes:
         return
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        log("  footage searches from the Visual column (Claude isn't connected)")
+    if not os.getenv("GEMINI_API_KEY"):
+        log("  footage searches from the Visual column (Gemini isn't connected)")
         return
     client = make_client()
     with ThreadPoolExecutor(max_workers=min(len(episodes), 6)) as pool:
@@ -224,7 +222,7 @@ def plan_all(episodes: list[Episode], log: Callable[[str], None] = print) -> Non
                 log(f"  Ep {e.ep}: footage searches from the Visual column ({err})")
 
 
-def _try_plan(e: Episode, client: anthropic.Anthropic) -> str:
+def _try_plan(e: Episode, client: llm.Client) -> str:
     try:
         plan_footage(e, client)
         return ""

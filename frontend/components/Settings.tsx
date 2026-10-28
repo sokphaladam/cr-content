@@ -1,11 +1,11 @@
 "use client";
 
-import { CalendarClock, Copy, Download, ExternalLink, FolderOpen, KeyRound, LogOut, Monitor, Moon, Plus, Sun, X } from "lucide-react";
+import { CalendarClock, Copy, Download, ExternalLink, FolderOpen, KeyRound, LogOut, Monitor, Moon, Plus, Sun, Trash2, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useAppearance } from "@/lib/appearance";
 import { checkNow, install, setAutoCheck, startUpdates, useAutoCheck, useUpdates } from "@/lib/updates";
 import { AddonProgress, DownloadProgress, useArtStatus } from "./ArtControls";
-import { api, ART_STYLES, getAutostart, isMac, pickFolder, setAutostart, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
+import { api, ART_STYLES, getAutostart, isMac, pickFolder, setAutostart, type CleanupGroup, type GeminiUsage, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
 import { Button, IconButton, Segmented, useToast } from "./ui";
 
 export const PLATFORM_NAMES: Record<Platform, string> = { youtube: "YouTube", tiktok: "TikTok", facebook: "Facebook", instagram: "Instagram" };
@@ -14,14 +14,7 @@ export const PLATFORMS: Platform[] = ["youtube", "tiktok", "facebook", "instagra
 const META: Platform[] = ["facebook", "instagram"];
 
 const SERVICES: { key: ServiceKey; name: string; does: string; url: string; optional?: boolean }[] = [
-  { key: "ANTHROPIC_API_KEY", name: "Claude", does: "Writes scripts, lyrics, titles, descriptions and cover ideas.", url: "https://platform.claude.com/settings/keys" },
-  {
-    key: "ANTHROPIC_WORKSPACE_ID",
-    name: "Claude workspace ID",
-    does: "Only for an organization key that isn't scoped to a workspace.",
-    url: "https://platform.claude.com/settings/workspaces",
-    optional: true,
-  },
+  { key: "GEMINI_API_KEY", name: "Gemini", does: "Writes scripts, lyrics, titles, descriptions and cover ideas. Has a free tier.", url: "https://aistudio.google.com/apikey" },
   { key: "PIXABAY_API_KEY", name: "Pixabay", does: "Free stock footage and photos for your scenes.", url: "https://pixabay.com/api/docs/" },
   { key: "PEXELS_API_KEY", name: "Pexels", does: "A second stock footage library, used when Pixabay isn't set.", url: "https://www.pexels.com/api/", optional: true },
   { key: "ELEVENLABS_API_KEY", name: "ElevenLabs", does: "Composes AI songs. Needs Music API access.", url: "https://elevenlabs.io/app/settings/api-keys" },
@@ -134,6 +127,56 @@ function BackgroundRow() {
 
 /* ---------- Services (API keys) ---------- */
 
+const hm = (sec: number) => `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+
+/** How much Gemini the app has used today, counted here (Google doesn't say what's left), refreshed every 30 s. */
+function GeminiUsageRow() {
+  const [u, setU] = useState<GeminiUsage | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => api.geminiUsage().then((x) => live && setU(x)).catch(() => {});
+    load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      live = false;
+      clearInterval(id);
+    };
+  }, []);
+  if (!u || !u.key_set) return null;
+  const rows = u.models.some((m) => m.model === u.current) ? u.models : [{ model: u.current, requests: 0, limit: null, blocked_for: 0, message: "" }, ...u.models];
+  return (
+    <div className="grid gap-2 px-4 py-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-base font-semibold">Gemini usage today</span>
+        <span className="text-sm text-ink-soft">Free limits reset in about {hm(u.resets_in)} (midnight Pacific time)</span>
+      </div>
+      <ul className="m-0 grid list-none gap-2 p-0">
+        {rows.map((m) => {
+          const pct = m.limit ? Math.min(100, (m.requests / m.limit) * 100) : 0;
+          return (
+            <li key={m.model} className="grid gap-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-semibold">{m.model}{m.model === u.current ? <span className="font-normal text-ink-soft"> (in use)</span> : null}</span>
+                <span className={`tabular-nums ${m.blocked_for ? "font-semibold text-danger" : "text-ink-soft"}`}>
+                  {m.blocked_for ? `Limit reached · works again in ${hm(m.blocked_for)}` : `${m.requests}${m.limit ? ` / ${m.limit}` : ""} requests`}
+                </span>
+              </div>
+              {m.limit ? (
+                <div role="progressbar" aria-label={`${m.model} requests used today`} aria-valuemin={0} aria-valuemax={m.limit} aria-valuenow={m.requests} className="h-2 overflow-hidden rounded-full bg-line">
+                  <div className={`h-full rounded-full ${m.blocked_for || pct >= 90 ? "bg-danger" : "bg-cobalt"}`} style={{ width: `${m.blocked_for ? 100 : pct}%` }} />
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="m-0 text-sm leading-snug text-ink-soft">
+        Counted by this app, so calls from other apps on the same key don&apos;t show. The limit appears once Google has named it in an error. Each model has its own daily limit.
+      </p>
+    </div>
+  );
+}
+
 function ServiceRow({ service, state, onSaved }: { service: (typeof SERVICES)[number]; state?: ServiceKeys[ServiceKey]; onSaved: (keys: ServiceKeys) => void }) {
   const toast = useToast();
   const [editing, setEditing] = useState(false);
@@ -222,6 +265,7 @@ const SECTIONS = [
   { id: "scene-art", label: "AI features" },
   { id: "appearance", label: "Appearance" },
   { id: "storage", label: "Storage" },
+  { id: "cleanup", label: "Clean up" },
   { id: "about", label: "About & updates" },
 ];
 
@@ -560,6 +604,101 @@ const FOLDERS: Record<FolderKey, { name: string; does: string; pick: string }> =
   },
   videos: { name: "Finished videos", does: "Every rendered video, with its thumbnail and post text.", pick: "Choose the folder for finished videos" },
 };
+
+const size = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(Math.round(b / 1e6), b ? 1 : 0)} MB`);
+/** Groups that can't be undone start unticked; the rest only cost a download or a redraw. */
+const KEEP_BY_DEFAULT = new Set(["old", "removed"]);
+
+function CleanUp() {
+  const toast = useToast();
+  const [groups, setGroups] = useState<CleanupGroup[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [error, setError] = useState("");
+  const [sure, setSure] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const scan = () => {
+    setGroups(null);
+    setError("");
+    api
+      .cleanupScan()
+      .then((r) => {
+        setGroups(r.groups);
+        setPicked(new Set(r.groups.filter((g) => !KEEP_BY_DEFAULT.has(g.id)).map((g) => g.id)));
+      })
+      .catch((e) => setError((e as Error).message));
+  };
+  useEffect(() => {
+    const t = setTimeout(scan, 0); // a timer callback, so the first scan isn't a setState in the effect body
+    return () => clearTimeout(t);
+  }, []);
+
+  if (!groups) return <p className={`m-0 p-4 text-base ${error ? "text-danger" : "text-ink-soft"}`}>{error || "Looking for files nothing uses…"}</p>;
+  if (groups.length === 0) return <p className="m-0 p-4 text-base text-ink-soft">Nothing to clean up: every file is in use.</p>;
+  const total = groups.filter((g) => picked.has(g.id)).reduce((n, g) => n + g.bytes, 0);
+
+  async function run() {
+    setBusy(true);
+    try {
+      const r = await api.cleanupRun([...picked]);
+      toast(`Freed ${size(r.freed)} (${r.files} files)${r.failed ? `. ${r.failed} are open in another program and stayed.` : ""}`, "success");
+      scan();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+    setSure(false);
+    setBusy(false);
+  }
+
+  return (
+    <>
+      {groups.map((g) => (
+        <label key={g.id} className="grid cursor-pointer gap-1 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:gap-x-3">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 accent-cobalt"
+            checked={picked.has(g.id)}
+            disabled={busy}
+            onChange={(e) => {
+              setSure(false);
+              setPicked((p) => {
+                const next = new Set(p);
+                if (e.target.checked) next.add(g.id);
+                else next.delete(g.id);
+                return next;
+              });
+            }}
+          />
+          <span className="min-w-0">
+            <span className="block text-md font-semibold">{g.label}</span>
+            <span className="block text-base text-ink-soft">{g.hint}</span>
+            <span className="block text-sm text-ink-soft">If deleted: {g.cost}</span>
+            <span className="block truncate text-sm text-ink-soft">
+              {g.files} files, e.g. {g.examples.join(", ")}
+            </span>
+          </span>
+          <span className="text-md font-semibold tabular-nums sm:text-right">{size(g.bytes)}</span>
+        </label>
+      ))}
+      <div className="flex flex-wrap items-center gap-2 p-4">
+        <Button
+          size="sm"
+          variant={sure ? "primary" : "secondary"}
+          icon={<Trash2 className="size-3.5" />}
+          loading={busy}
+          disabled={busy || total === 0}
+          onClick={() => (sure ? void run() : setSure(true))}
+        >
+          {sure ? `Click again to delete ${size(total)}` : total ? `Free ${size(total)}` : "Pick something to free"}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={scan}>
+          Check again
+        </Button>
+        <span className="text-sm text-ink-soft">Deleted files don&apos;t go to the recycle bin. Videos you have finished are never touched.</span>
+      </div>
+    </>
+  );
+}
 
 function Storage() {
   const toast = useToast();
@@ -1131,7 +1270,7 @@ function ChannelRow({ platform, accounts, setAccounts }: { platform: Platform; a
           {platform === "youtube" && (
             <label className="flex items-center gap-2 text-base font-semibold sm:col-span-3">
               <input type="checkbox" checked={a.comment ?? true} onChange={(e) => change({ comment: e.target.checked })} className="size-4 accent-cobalt" />
-              Post Claude&apos;s fact-check comment after upload (a comment you write is always posted)
+              Post Gemini&apos;s fact-check comment after upload (a comment you write is always posted)
             </label>
           )}
         </div>
@@ -1210,7 +1349,7 @@ function UploadQueue() {
   );
 }
 
-/** Settings: the keys for Claude and the media services, the channels videos upload to, and where files are kept. */
+/** Settings: the keys for Gemini and the media services, the channels videos upload to, and where files are kept. */
 export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
   const [keys, setKeys] = useState<ServiceKeys | null>(null);
   const [accounts, setAccounts] = useState<PublishAccounts | null>(null);
@@ -1253,6 +1392,7 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
                 }}
               />
             ))}
+            <GeminiUsageRow />
           </Section>
           <Section
             id="channels"
@@ -1268,7 +1408,7 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
           <Section
             id="journey"
             title="Your journey"
-            intro="Viewers stick with a channel they feel they're growing with. Say where you are, and Claude works one honest line about it into each description it writes, never into the video itself."
+            intro="Viewers stick with a channel they feel they're growing with. Say where you are, and Gemini works one honest line about it into each description it writes, never into the video itself."
           >
             <JourneyRow />
           </Section>
@@ -1292,6 +1432,9 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
           </Section>
           <Section id="storage" title="Storage" intro="Where your library is kept. Changing a folder moves the files there.">
             <Storage />
+          </Section>
+          <Section id="cleanup" title="Clean up" intro="Remove files nothing uses any more to save space. Each group says what deleting it costs; nothing is deleted until you press the button.">
+            <CleanUp />
           </Section>
           <Section id="about" title="About & updates" intro="New versions come from the project's releases on GitHub and install with one click.">
             <AboutRows />

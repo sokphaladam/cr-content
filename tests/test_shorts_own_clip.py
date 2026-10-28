@@ -60,6 +60,35 @@ def test_your_clip_replaces_a_beat_and_can_be_removed(job, tmp_path):
     assert not (media / "scene-01.mov").exists() and len(list((media / "removed").iterdir())) == 2  # never deleted
 
 
+def test_your_voice_on_a_beat_sits_beside_your_clip(job, tmp_path, monkeypatch):
+    job, media, stock, scores = job
+    revoiced = []
+    monkeypatch.setattr(shorts, "_revoice", lambda job, ep, cfg, log: revoiced.append(1) or {"status": {}})
+    with pytest.raises(ValueError, match="audio"):
+        shorts.use_own_voice(job, 2, stock, log=lambda m: None)    # the test clip has no sound
+    take = tmp_path / "take.webm"   # what the page's recorder sends
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=d=1", "-c:a", "libopus", str(take)], check=True)
+    shorts.use_own_voice(job, 2, take, log=lambda m: None)
+    assert (media / "scene-02.wav").exists() and revoiced
+    shorts.use_own_clip(job, 2, stock, "mine.mp4", log=lambda m: None)
+    assert (media / "scene-02.wav").exists()                    # a new clip doesn't set your voice aside
+    shorts.remove_own_voice(job, 2, log=lambda m: None)
+    assert not (media / "scene-02.wav").exists() and (media / "scene-02.mp4").exists()
+    with pytest.raises(ValueError, match="isn't using your voice"):
+        shorts.remove_own_voice(job, 2, log=lambda m: None)
+
+
+def test_narrator_voice_and_speed(job, monkeypatch):
+    job, media, stock, scores = job
+    monkeypatch.setattr(shorts, "_revoice", lambda job, ep, cfg, log: {"status": {}})
+    shorts.set_voice(job, "en-US-AvaNeural", "+15%", log=lambda m: None)
+    assert shorts.narrator(job, "en") == ("en-US-AvaNeural", "+15%")
+    with pytest.raises(ValueError, match="speed"):
+        shorts.set_voice(job, "en-US-AvaNeural", "+99%", log=lambda m: None)
+    with pytest.raises(ValueError, match="voice"):
+        shorts.set_voice(job, "km-KH-PisethNeural", log=lambda m: None)   # not the Short's language
+
+
 def test_only_videos_and_photos(job, tmp_path):
     job, media, stock, scores = job
     with pytest.raises(ValueError, match="Use a video"):

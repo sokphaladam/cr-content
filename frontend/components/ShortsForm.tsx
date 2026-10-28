@@ -111,7 +111,7 @@ export function ShortsForm({ onStarted }: { onStarted: (jobId: string, title: st
         <p className="m-0">
           Each Short is held to your rules: the animal moving in the first 2 seconds under a big hook, 22–30 seconds from the real voiceover, a last line that loops
           into the first, and no hashtags in the title. The app records the voiceover, picks the footage and stops at a{" "}
-          <b className="font-semibold text-ink">pre-flight report</b> (the checks, Claude&apos;s hook score with stronger first lines, and a storyboard) for you to
+          <b className="font-semibold text-ink">pre-flight report</b> (the checks, Gemini&apos;s hook score with stronger first lines, and a storyboard) for you to
           approve before it renders.
         </p>
       </div>

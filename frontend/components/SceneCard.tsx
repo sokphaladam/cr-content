@@ -73,7 +73,7 @@ function useFinder(setStatus: (text: string, error?: boolean) => void): Finder {
     try {
       const data = await api.footage(query.trim(), k);
       setResults(data.results);
-      setStatus(data.results.length ? "" : "Nothing found. Try simpler words, or ask Claude for ideas.");
+      setStatus(data.results.length ? "" : "Nothing found. Try simpler words, or ask Gemini for ideas.");
     } catch (err) {
       setResults([]);
       setStatus((err as Error).message, true);
@@ -119,11 +119,11 @@ function Picker({
 
   async function design(animate: boolean) {
     setDesigning(animate ? "motion" : "still");
-    setStatus(animate ? "Claude is animating this background, then it's rendered to video… about two minutes." : "Claude is drawing this background… about a minute.");
+    setStatus(animate ? "Gemini is animating this background, then it's rendered to video… about two minutes." : "Gemini is drawing this background… about a minute.");
     try {
       const m = await api.designFootage(q.trim(), narration, animate);
       onPicked(m.media, q.trim());
-      setStatus(animate ? "Claude's animated background set for this scene." : "Claude's artwork set for this scene.");
+      setStatus(animate ? "Gemini's animated background set for this scene." : "Gemini's artwork set for this scene.");
     } catch (err) {
       setStatus((err as Error).message, true);
     } finally {
@@ -183,9 +183,9 @@ function Picker({
           onClick={() => design(false)}
           loading={designing === "still"}
           disabled={picking !== null || designing !== null || (!q.trim() && !narration.trim())}
-          title="Claude draws an original background from the search words and the narration"
+          title="Gemini draws an original background from the search words and the narration"
         >
-          Design with Claude
+          Design with Gemini
         </Button>
         <Button
           size="sm"
@@ -194,7 +194,7 @@ function Picker({
           onClick={() => design(true)}
           loading={designing === "motion"}
           disabled={picking !== null || designing !== null || (!q.trim() && !narration.trim())}
-          title="Claude designs a moving background (drifting light, particles, parallax) and renders it as a looping video clip"
+          title="Gemini designs a moving background (drifting light, particles, parallax) and renders it as a looping video clip"
         >
           Animate
         </Button>
@@ -251,7 +251,7 @@ function Picker({
           ))}
         </ul>
       )}
-      <p className="m-0 text-sm text-ink-soft">Free stock media: click one to use it for this scene. Or let Claude draw an original background, still or animated.</p>
+      <p className="m-0 text-sm text-ink-soft">Free stock media: click one to use it for this scene. Or let Gemini draw an original background, still or animated.</p>
     </div>
   );
 }

@@ -8,9 +8,10 @@ subject's own motion, as a distance (fine detail like fur can't fake it). So:
 - static: neither moves -> rejected
 - dark (fades, night shots) or soft -> rejected
 Every window of the beat's length is scored (own motion, sharpness, exposure; never across a cut or in the first
-fade-in). The best window then goes to Claude with the planned shot (match.py), and judged() applies what it saw:
+fade-in). The best window then goes to Gemini with the planned shot (match.py), and judged() applies what it saw:
 the wrong animal, no movement, a logo or an intro rejects it. Clips that fail are listed with the reason.
 """
+import json
 import math
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -55,7 +56,7 @@ class Scan:
     bright: float = 0.0
     score: float = 0.0
     reject: str = ""           # why the clip can't open the Short ("" = it can)
-    check: dict = field(default_factory=dict)  # Claude's look at the window
+    check: dict = field(default_factory=dict)  # Gemini's look at the window
 
     def to_json(self) -> dict:
         return {k: round(v, 3) if isinstance(v, float) else v for k, v in asdict(self).items()}
@@ -71,16 +72,18 @@ def focus_sharpness(gray: np.ndarray, rows: int = 6, cols: int = 4) -> float:
     return float(np.mean(top))
 
 
-def _samples(path: Path, seconds: float) -> list[tuple[float, np.ndarray]]:
-    """(time, grey frame SAMPLE_W wide) for the first `seconds` of the clip."""
+def _samples(path: Path, seconds: float, start: float = 0.0) -> list[tuple[float, np.ndarray]]:
+    """(time, grey frame SAMPLE_W wide) for `seconds` of the clip from `start`."""
     import cv2
 
     probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                            "stream=width,height", "-of", "csv=p=0", str(path)], stdin=subprocess.DEVNULL,
-                           capture_output=True, text=True).stdout.strip().split(",")
-    w, h = int(probe[0]), int(probe[1])
+                            "stream=width,height", "-of", "json", str(path)], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True).stdout
+    stream = json.loads(probe)["streams"][0]   # json, not csv: some clips print width and height on separate lines
+    w, h = int(stream["width"]), int(stream["height"])
     out_h = round(SAMPLE_W * h / w / 2) * 2
-    cmd = ["ffmpeg", "-v", "error", "-i", str(path), "-t", f"{seconds:.2f}", "-an",
+    cmd = ["ffmpeg", "-v", "error", *(["-ss", f"{start:.2f}"] if start > 0 else []), "-i", str(path),
+           "-t", f"{seconds:.2f}", "-an",
            "-vf", f"fps={SAMPLE_FPS},scale={SAMPLE_W}:{out_h}:flags=area", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
     raw = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True).stdout
     n = SAMPLE_W * out_h * 3
@@ -128,6 +131,15 @@ def motion(prev: np.ndarray, cur: np.ndarray) -> tuple[float, float, bool]:
     return own, camera, False
 
 
+def has_camera_move(path: Path, start: float, seconds: float) -> bool:
+    """Whether the camera already pans or zooms in these `seconds` of a clip (render adds a slow push-in when not)."""
+    frames = _samples(path, min(seconds, 2.0), start)
+    if len(frames) < 3:
+        return True  # can't tell: leave the clip as it is
+    moves = [motion(a[1], b[1])[1] for a, b in zip(frames, frames[1:])]
+    return float(np.mean(moves)) > CAMERA_MOVE
+
+
 def scan(path: Path, beat: float) -> Scan:
     """The clip's best window of `beat` seconds, or why none will do."""
     total = duration(path)
@@ -158,18 +170,42 @@ def scan(path: Path, beat: float) -> Scan:
             best = cand
     if best is None:
         return Scan(str(path), total, reject="no stretch without a cut")
-    if best.bright < DARK:
-        best.reject = f"too dark (brightness {best.bright:.2f})"
-    elif best.own < OWN_MOTION_MIN:
-        best.reject = ("slow zoom or pan: only the camera moves" if best.camera > CAMERA_MOVE
-                       else "static: nothing moves")
-    elif best.sharp < SOFT:
-        best.reject = f"soft or blurred (sharpness {best.sharp:.2f})"
+    best.reject = _reject(best)
     return best
 
 
+def _reject(s: Scan) -> str:
+    """Why a clip's window can't open the Short ("" = it can): too dark, no motion of its own, or soft."""
+    if s.bright < DARK:
+        return f"too dark (brightness {s.bright:.2f})"
+    if s.own < OWN_MOTION_MIN:
+        return "slow zoom or pan: only the camera moves" if s.camera > CAMERA_MOVE else "static: nothing moves"
+    if s.sharp < SOFT:
+        return f"soft or blurred (sharpness {s.sharp:.2f})"
+    return ""
+
+
+def scan_window(path: Path, start: float, beat: float) -> Scan:
+    """The hook rules for the `beat` seconds of a clip from `start` (a window picked by hand, not the best one)."""
+    total = duration(path)
+    frames = _samples(path, beat + 1 / SAMPLE_FPS, start)
+    if len(frames) < 3:
+        return Scan(str(path), total, start, reject="couldn't read that stretch of the clip")
+    samples = []
+    for k, (t, gray) in enumerate(frames):
+        s = Sample(t, float(gray.mean() / 255), focus_sharpness(gray))
+        if k:
+            s.own, s.camera, s.cut = motion(frames[k - 1][1], gray)
+        samples.append(s)
+    win = samples[1:]
+    out = Scan(str(path), total, start, float(np.mean([s.own for s in win])), float(np.mean([s.camera for s in win])),
+               float(np.mean([s.sharp for s in win])), float(np.mean([s.bright for s in samples])))
+    out.reject = "a cut inside this stretch" if any(s.cut for s in win) else _reject(out)
+    return out
+
+
 def judged(s: Scan, check: dict) -> Scan:
-    """`s` with Claude's look at its window applied (match.check): the wrong animal, one that doesn't move, a logo or
+    """`s` with Gemini's look at its window applied (match.check): the wrong animal, one that doesn't move, a logo or
     an intro rejects it. (How well it shows the planned shot is its match score, weighed by the picker.)"""
     s.check = check
     if s.reject:
@@ -181,5 +217,5 @@ def judged(s: Scan, check: dict) -> Scan:
     elif check.get("intro_or_title"):
         s.reject = "an intro, title card or fade"
     elif check.get("in_motion") is False:
-        s.reject = f"the animal doesn't move in the frames Claude saw ({check.get('seen', '')})"
+        s.reject = f"the animal doesn't move in the frames Gemini saw ({check.get('seen', '')})"
     return s

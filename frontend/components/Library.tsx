@@ -33,7 +33,7 @@ interface Item {
 
 /** "⋯" button on a row: open, duplicate, download, delete (delete asks once more). The menu is position:fixed
  * so the scrolling list never clips it. */
-function RowMenu({ item }: { item: Item }) {
+export function RowMenu({ item }: { item: Pick<Item, "title" | "current" | "onClick" | "onDelete" | "deleteHint" | "onDuplicate" | "download"> }) {
   const [at, setAt] = useState<{ top: number; right: number; up: boolean } | null>(null);
   const [confirm, setConfirm] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);

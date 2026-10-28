@@ -96,7 +96,7 @@ function NewCampaign({ claudeReady, onCreated }: { claudeReady: boolean; onCreat
       <header>
         <h1 className="page-title m-0">Add a campaign</h1>
         <p className="page-intro m-0 mt-1">
-          Open the campaign on Whop, select everything on the page (Select All), copy it and paste it here. Claude pulls out the brief, the content
+          Open the campaign on Whop, select everything on the page (Select All), copy it and paste it here. Gemini pulls out the brief, the content
           requirements and the links to the reference materials.
         </p>
       </header>
@@ -119,7 +119,7 @@ function NewCampaign({ claudeReady, onCreated }: { claudeReady: boolean; onCreat
         </label>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="text-sm text-ink-soft">
-            {claudeReady ? "Takes about 20 seconds." : "Claude isn't set up. Add your Claude key in Settings first."}
+            {claudeReady ? "Takes about 20 seconds." : "Gemini isn't set up. Add your Gemini key in Settings first."}
           </span>
           <Button variant="primary" loading={reading} disabled={!claudeReady || (!text.trim() && !url.trim())} onClick={read}>
             Read campaign
@@ -319,7 +319,7 @@ function References({
       }
     >
       <p className="m-0 mb-3 text-base text-ink-soft">
-        Videos are downloaded and transcribed so Claude can pick the moments. Folders (Google Drive, Dropbox) can&apos;t be downloaded automatically: download the
+        Videos are downloaded and transcribed so Gemini can pick the moments. Folders (Google Drive, Dropbox) can&apos;t be downloaded automatically: download the
         files and add them here.
       </p>
       <DropZone accept="video/*,audio/*,image/*,.pdf,.txt" multiple label="Drop to add references" onFiles={(f) => void upload(f)} onReject={(m) => toast(m, "error")}>
@@ -503,7 +503,7 @@ function MakeClips({
         {busy && <p className="m-0 rounded-lg bg-caption/25 px-3 py-2 text-base">{making?.log.at(-1) ?? "Waiting for the current render to finish…"}</p>}
         {making?.status === "error" && <p className="m-0 text-base text-danger">{making.error}</p>}
         <div className="flex items-center justify-between gap-3">
-          <span className="text-sm text-ink-soft">{ready ? "Claude reads the transcripts and picks the strongest moments." : "Prepare at least one reference video first."}</span>
+          <span className="text-sm text-ink-soft">{ready ? "Gemini reads the transcripts and picks the strongest moments." : "Prepare at least one reference video first."}</span>
           <Button variant="primary" icon={<Scissors className="size-4" />} loading={busy} disabled={!ready} onClick={() => onMake({ count, layout, idea })}>
             Make {count} clip{count === 1 ? "" : "s"}
           </Button>
@@ -627,7 +627,7 @@ function CampaignDetail({
             onChange={(e) => setBrief(e.target.value)}
             onBlur={() => brief !== campaign.brief && edit({ brief })}
           />
-          <p className="m-0 mt-2 text-sm text-ink-soft">Claude picks moments that serve this brief. Edits save when you click away.</p>
+          <p className="m-0 mt-2 text-sm text-ink-soft">Gemini picks moments that serve this brief. Edits save when you click away.</p>
         </Panel>
         <Panel title="Content requirements">
           <RequirementsEditor key={JSON.stringify(campaign.requirements)} value={campaign.requirements} onSave={(requirements) => edit({ requirements })} />

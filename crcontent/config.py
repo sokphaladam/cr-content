@@ -37,7 +37,7 @@ def orientation(size: tuple[int, int]) -> str:
     """'portrait' or 'landscape': which way stock footage should face to crop well into `size`."""
     return "landscape" if size[0] > size[1] else "portrait"
 SCENE_PAD_SEC = 0.25  # breath of silence after each scene's narration
-CLAUDE_MODEL = "claude-opus-5-5"
+LLM_MODEL = ""  # "" = the LLM_MODEL setting in .env, else the default in crcontent/llm.py
 
 
 @dataclass(frozen=True)

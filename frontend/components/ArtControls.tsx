@@ -248,7 +248,7 @@ export function ScenePicture({
         rows={2}
         value={scene.art_prompt ?? ""}
         onChange={(e) => onChange({ art_prompt: e.target.value })}
-        placeholder={scene.media ? "Your chosen footage is used for this scene." : "Written by Claude when you press Plan pictures or render. Or describe it yourself."}
+        placeholder={scene.media ? "Your chosen footage is used for this scene." : "Written by Gemini when you press Plan pictures or render. Or describe it yourself."}
         className="field-input field-sizing-content min-h-[52px] resize-none text-base leading-snug"
       />
       <div className="flex flex-wrap items-center gap-1.5">

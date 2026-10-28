@@ -1,4 +1,4 @@
-"""Claude as director of photography for AI scene art: one look for the whole video, then a picture prompt, camera
+"""Gemini as director of photography for AI scene art: one look for the whole video, then a picture prompt, camera
 move and atmosphere effects for every scene (shorts) or every picture slot (music videos).
 
 The "visual bible" (who the recurring characters are, the world, the palette) is written once and repeated inside
@@ -10,12 +10,12 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import anthropic
+from . import llm
 
-from .config import CLAUDE_MODEL
+from .config import LLM_MODEL
 from .fx import EFFECTS, FRAMES, MOTIONS, TAPES
 
-# effects Claude picks per scene; the base ones (glow, grain, vignette...) come with the art style
+# effects Gemini picks per scene; the base ones (glow, grain, vignette...) come with the art style
 MOOD_EFFECTS = ["dust", "snow", "embers", "sparkles", "petals", "speed_lines", "light_leak", "light_trails", "flash"]
 
 SCHEMA = {
@@ -106,29 +106,27 @@ class ShotPlan:
     effects: list[str]
 
 
-def _client(client: anthropic.Anthropic | None) -> anthropic.Anthropic:
+def _client(client: llm.Client | None) -> llm.Client:
     from .script import make_client
 
     return client or make_client()
 
 
-def _ask(task: str, count: int, style: str, client: anthropic.Anthropic | None) -> tuple[str, list[ShotPlan], dict]:
+def _ask(task: str, count: int, style: str, client: llm.Client | None) -> tuple[str, list[ShotPlan], dict]:
     response = _client(client).beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=16000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
         system=SYSTEM + "\n\nPrompt format:\n" + PROMPT_RULES[style],
         messages=[{"role": "user", "content": task + f"\n\nReturn exactly {count} shots, in order."}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to plan the pictures for this video.")
+        raise RuntimeError("Gemini declined to plan the pictures for this video.")
     data = json.loads(next(b.text for b in response.content if b.type == "text"))
     shots = [ShotPlan(s["prompt"].strip(), s["motion"] if s["motion"] in MOTIONS else "push_in",
                       [e for e in s["effects"] if e in EFFECTS][:2]) for s in data["shots"]]
     if not shots:
-        raise RuntimeError("Claude returned no shots.")
+        raise RuntimeError("Gemini returned no shots.")
     while len(shots) < count:  # rare: pad by reusing from the start with a different move
         src = shots[len(shots) % max(len(shots), 1)]
         shots.append(ShotPlan(src.prompt, "pull_out" if src.motion != "pull_out" else "push_in", src.effects))
@@ -137,7 +135,7 @@ def _ask(task: str, count: int, style: str, client: anthropic.Anthropic | None) 
 
 
 def plan_scenes(title: str, scenes: list[dict], style: str, idea: str = "", bible: str = "",
-                client: anthropic.Anthropic | None = None) -> tuple[str, list[ShotPlan], dict]:
+                client: llm.Client | None = None) -> tuple[str, list[ShotPlan], dict]:
     """One shot per scene of a short. scenes: [{"narration", "visual_query"}]. `bible`: an existing visual bible
     (perhaps edited by hand) to keep instead of writing a new one. Also returns {"subject", "avoid"}: the real
     subject every picture must get right, and what the image model should not draw instead."""
@@ -157,7 +155,7 @@ SUBJECT_SCHEMA = {
 }
 
 
-def find_subject(title: str, narration: str, client: anthropic.Anthropic | None = None) -> dict:
+def find_subject(title: str, narration: str, client: llm.Client | None = None) -> dict:
     """{"subject", "avoid"} for a video planned before subjects were (see SYSTEM): the real animal/object/place it is
     about with its visible features, and the look-alikes an image model draws instead; both "" when there is none."""
     task = (f"A short fact video titled {title!r}. Its narration: {narration}\n\n"
@@ -167,10 +165,8 @@ def find_subject(title: str, narration: str, client: anthropic.Anthropic | None 
             "arms at the front, flat fan tail\"; else \"\". avoid: comma-separated look-alikes an image model tends to "
             "draw instead, or \"\".")
     response = _client(client).beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=1000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": SUBJECT_SCHEMA}},
         messages=[{"role": "user", "content": task}],
     )
@@ -188,7 +184,7 @@ CHECK_SCHEMA = {
 
 
 def check_picture(image: Path, subject: str, prompt: str = "",
-                  client: anthropic.Anthropic | None = None) -> tuple[int, str, tuple[float, float]]:
+                  client: llm.Client | None = None) -> tuple[int, str, tuple[float, float]]:
     """How well a picture shows the real `subject` ("name: visible features"), 0-10, what's wrong ("" when nothing
     is), and where the subject is (its centre, as fractions of the width and height; the middle when it's not
     there). An expert's eye: would a viewer who knows this animal/object say "that's not a ..."?"""
@@ -210,10 +206,8 @@ def check_picture(image: Path, subject: str, prompt: str = "",
             "sentence naming what's wrong, or \"\" when the score is 8 or more. x, y: the centre of the subject (its "
             "head or the part a viewer looks at first) as fractions of the picture's width and height, 0..1.")
     response = _client(client).beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=1000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": CHECK_SCHEMA}},
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
@@ -226,7 +220,7 @@ def check_picture(image: Path, subject: str, prompt: str = "",
 
 
 def plan_song(title: str, mood: str, genre: str, slots: list[dict], style: str, aspect: str, idea: str = "",
-              bible: str = "", client: anthropic.Anthropic | None = None) -> tuple[str, list[ShotPlan]]:
+              bible: str = "", client: llm.Client | None = None) -> tuple[str, list[ShotPlan]]:
     """Pictures for a music video. slots: [{"section", "lyrics", "seconds", "scene"?}] in song order; several slots can
     belong to the same section (they should progress, not repeat). "scene": the creator's direction for that section
     (from direct_idea), which the pictures must show. `bible`: an existing visual bible to keep."""
@@ -284,7 +278,7 @@ DIRECTION_SCHEMA = {
 
 
 def clean_section(row: dict) -> dict:
-    """One section of a shot list with every field present and in range (Claude's, or edited in the app)."""
+    """One section of a shot list with every field present and in range (Gemini's, or edited in the app)."""
     try:
         wear = round(min(max(float(row.get("wear") or 0), 0.0), 1.0), 2)
     except (TypeError, ValueError):
@@ -299,7 +293,7 @@ def clean_section(row: dict) -> dict:
 
 
 def direct_idea(title: str, mood: str, genre: str, sections: list[dict], idea: str, looks: dict[str, str],
-                presets: dict[str, str], fonts: list[str], client: anthropic.Anthropic | None = None) -> dict:
+                presets: dict[str, str], fonts: list[str], client: llm.Client | None = None) -> dict:
     """A creator's music video concept as a shot list for this song: what each section shows and how fast it cuts,
     the recurring characters and world, a colour grade, a lyric style, and notes on what can't be done literally.
     sections: [{"name", "lyrics"}] in song order. looks / presets: key -> label of what the app can do."""
@@ -375,15 +369,13 @@ Return:
   subject ARE possible (the fields above), so don't list those; the old-tape treatments apply to AI-drawn pictures,
   not to stock footage."""
     response = _client(client).beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=8000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": DIRECTION_SCHEMA}},
         messages=[{"role": "user", "content": task}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to direct this idea.")
+        raise RuntimeError("Gemini declined to direct this idea.")
     data = json.loads(next(b.text for b in response.content if b.type == "text"))
     rows = data["sections"][:len(sections)]
     while len(rows) < len(sections):  # rare: repeat the last direction

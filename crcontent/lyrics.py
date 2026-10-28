@@ -1,12 +1,12 @@
-"""Write an original song (lyrics + structure + sound) with Claude as validated, structured JSON."""
+"""Write an original song (lyrics + structure + sound) with Gemini as validated, structured JSON."""
 import json
 import re
 from pathlib import Path
 
-import anthropic
+from . import llm
 from pydantic import BaseModel, Field
 
-from .config import CLAUDE_MODEL, LANGS
+from .config import LLM_MODEL, LANGS
 from .script import make_client
 
 # ElevenLabs music_v1 limits per section
@@ -112,8 +112,8 @@ because captions are timed per space-separated phrase."""
 
 
 def generate_song(topic: str, lang: str = "en", seconds: int = 45, style: str = "", vocal: str = "",
-                  client: anthropic.Anthropic | None = None) -> SongScript:
-    """Ask Claude for an original song about `topic`, sized to about `seconds` long."""
+                  client: llm.Client | None = None) -> SongScript:
+    """Ask Gemini for an original song about `topic`, sized to about `seconds` long."""
     profile = LANGS[lang]
     client = client or make_client()
     prompt = (
@@ -129,16 +129,14 @@ def generate_song(topic: str, lang: str = "en", seconds: int = 45, style: str = 
     system = SYSTEM + (KHMER_NOTE if lang == "km" else "")
 
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=16000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
         system=system,
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError(f"Claude declined this song topic: {response.stop_details}")
+        raise RuntimeError(f"Gemini declined this song topic: {response.stop_details}")
     if response.stop_reason == "max_tokens":
         raise RuntimeError("Song writing was cut off (max_tokens); try a shorter length.")
 
@@ -287,7 +285,7 @@ DESCRIBE_SCHEMA = {
 
 
 def _sections_text(song: SongScript) -> str:
-    """The lyrics by section, with any sound notes, as Claude reads them."""
+    """The lyrics by section, with any sound notes, as Gemini reads them."""
     return "\n\n".join(f"[{i + 1}. {s.name}]\n" + (f"(sound: {'; '.join(s.styles)})\n" if s.styles else "")
                        + ("\n".join(s.lyrics) or "(instrumental)")
                        for i, s in enumerate(song.sections))
@@ -301,8 +299,8 @@ SHOT_GUIDE = (
     "behind or far away; avoid talking heads, text, logos, screens and office scenes.")
 
 
-def describe_song(song: SongScript, lang: str, client: anthropic.Anthropic | None = None) -> None:
-    """Fill in footage searches per section, plus mood, caption and hashtags, by having Claude read the lyrics."""
+def describe_song(song: SongScript, lang: str, client: llm.Client | None = None) -> None:
+    """Fill in footage searches per section, plus mood, caption and hashtags, by having Gemini read the lyrics."""
     client = client or make_client()
     prompt = (
         f"Song title: {song.title}\nLanguage: {LANGS[lang].name}\n\nLyrics by section:\n{_sections_text(song)}\n\n"
@@ -317,15 +315,13 @@ def describe_song(song: SongScript, lang: str, client: anthropic.Anthropic | Non
         f"- hashtags: 4-7 without the # sign, broad music tags plus niche ones; never fyp, viral or trending."
     )
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=4000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": DESCRIBE_SCHEMA}},
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to describe these lyrics.")
+        raise RuntimeError("Gemini declined to describe these lyrics.")
     data = json.loads(next(b.text for b in response.content if b.type == "text"))
     queries = [q.strip() for q in data["visual_queries"] if q.strip()]
     for i, s in enumerate(song.sections):
@@ -343,7 +339,7 @@ IDEA_SCHEMA = {
 }
 
 
-def plan_footage(song: SongScript, lang: str, idea: str, client: anthropic.Anthropic | None = None) -> list[str]:
+def plan_footage(song: SongScript, lang: str, idea: str, client: llm.Client | None = None) -> list[str]:
     """One stock-footage search per section that carries out the user's own idea for the video (setting, story,
     look), fitted to what each section sings about."""
     client = client or make_client()
@@ -358,15 +354,13 @@ def plan_footage(song: SongScript, lang: str, idea: str, client: anthropic.Anthr
         f"shots; never repeat a search.\n{SHOT_GUIDE}"
     )
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=4000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": IDEA_SCHEMA}},
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined this video idea.")
+        raise RuntimeError("Gemini declined this video idea.")
     queries = [q.strip() for q in json.loads(next(b.text for b in response.content if b.type == "text"))["visual_queries"]
                if q.strip()]
     if not queries:
@@ -399,7 +393,7 @@ IDEAS_SCHEMA = {
 
 
 def suggest_video_ideas(song: SongScript, lang: str, count: int = 4,
-                        client: anthropic.Anthropic | None = None) -> list[dict]:
+                        client: llm.Client | None = None) -> list[dict]:
     """Music video concepts for this song, each with a matching colour grade and lyric style, to pick from."""
     client = client or make_client()
     prompt = (
@@ -422,36 +416,34 @@ def suggest_video_ideas(song: SongScript, lang: str, count: int = 4,
         f"abstract or atmospheric, and at least one bold, striking choice."
     )
     response = client.beta.messages.create(
-        model=CLAUDE_MODEL,
+        model=LLM_MODEL,
         max_tokens=4000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": IDEAS_SCHEMA}},
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to suggest ideas for these lyrics.")
+        raise RuntimeError("Gemini declined to suggest ideas for these lyrics.")
     ideas = json.loads(next(b.text for b in response.content if b.type == "text"))["ideas"]
     return [i for i in ideas if i["idea"].strip()][:count]
 
 
 def idea_queries(song: SongScript, lang: str, idea: str, log=print) -> list[str]:
-    """Footage searches for the idea: Claude's plan, or without Claude the idea's own words for every section."""
+    """Footage searches for the idea: Gemini's plan, or without Gemini the idea's own words for every section."""
     try:
         return plan_footage(song, lang, idea)
     except Exception as e:  # no key, no credits, offline
-        log(f"      ! Claude couldn't plan footage for your idea ({e.__class__.__name__}); searching for the idea itself")
+        log(f"      ! Gemini couldn't plan footage for your idea ({e.__class__.__name__}); searching for the idea itself")
         words = " ".join(idea.split()[:6])
         return [words] * len(song.sections)
 
 
-# when Claude isn't available: calm, broadly fitting footage that rotates per section
+# when Gemini isn't available: calm, broadly fitting footage that rotates per section
 FALLBACK_QUERIES = ("city lights night", "ocean waves sunset", "clouds sky timelapse", "forest sunlight",
                     "rain window", "road trip drive", "stars night sky", "flowers field")
 
 
 def own_song(title: str, lyrics: str, lang: str, log=print) -> SongScript:
-    """SongScript for an uploaded song: sections from the pasted lyrics, footage ideas from Claude when possible."""
+    """SongScript for an uploaded song: sections from the pasted lyrics, footage ideas from Gemini when possible."""
     sections = parse_lyrics(lyrics)
     if not sections:
         raise ValueError("Paste the song's lyrics first.")
@@ -461,7 +453,7 @@ def own_song(title: str, lyrics: str, lang: str, log=print) -> SongScript:
         describe_song(song, lang)
         log(f"      -> {len(sections)} sections; footage: " + ", ".join(s.visual_query for s in sections))
     except Exception as e:  # no key, no credits, offline: generic footage is still a usable video
-        log(f"      ! Claude couldn't suggest footage ({e.__class__.__name__}); using general scenery")
+        log(f"      ! Gemini couldn't suggest footage ({e.__class__.__name__}); using general scenery")
         for i, s in enumerate(song.sections):
             s.visual_query = FALLBACK_QUERIES[i % len(FALLBACK_QUERIES)]
     return song

@@ -35,6 +35,7 @@ import { LyricsTiming } from "@/components/LyricsTiming";
 import { NavRail, type AppView } from "@/components/NavRail";
 import { Settings } from "@/components/Settings";
 import { Campaigns } from "@/components/Campaigns";
+import { LyricVideo } from "@/components/LyricVideo";
 import { SongEditor } from "@/components/SongEditor";
 import {
   Storyboard,
@@ -719,6 +720,9 @@ function Studio() {
           onCampaigns={() =>
             setView((v) => (v === "campaigns" ? "studio" : "campaigns"))
           }
+          onLyricVideo={() =>
+            setView((v) => (v === "lyricvideo" ? "studio" : "lyricvideo"))
+          }
           onPreview={
             view === "studio" && sidePreview
               ? () => setPreviewOpen(true)
@@ -735,10 +739,13 @@ function Studio() {
           onOpenCampaigns={() =>
             setView((v) => (v === "campaigns" ? "studio" : "campaigns"))
           }
+          onOpenLyricVideo={() =>
+            setView((v) => (v === "lyricvideo" ? "studio" : "lyricvideo"))
+          }
           onOpenPreview={() => setPreviewOpen(true)}
           showPreviewButton={view === "studio" && sidePreview}
           setupNeeded={
-            !!options && (!options.keys.anthropic || !options.keys.stock)
+            !!options && (!options.keys.ai || !options.keys.stock)
           }
         />
 
@@ -755,7 +762,7 @@ function Studio() {
         {view === "campaigns" && (
           <div className="min-h-0 flex-1">
             <Campaigns
-              claudeReady={!!options?.keys.anthropic}
+              claudeReady={!!options?.keys.ai}
               onVideosChanged={() => void loadVideos()}
               onOpenSettings={() => setView("settings")}
               onOpenVideo={(name) => {
@@ -765,6 +772,11 @@ function Studio() {
                 void selectVideo(name, true);
               }}
             />
+          </div>
+        )}
+        {view === "lyricvideo" && (
+          <div className="min-h-0 flex-1">
+            <LyricVideo />
           </div>
         )}
         {view === "settings" && (

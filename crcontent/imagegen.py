@@ -37,8 +37,10 @@ STYLES: dict[str, dict] = {
         # quality tags first: the text encoder reads only ~75 tokens, and whatever comes after that is dropped
         "prefix": "masterpiece, high score, great score, absurdres, ",
         "suffix": ", anime screencap, cinematic lighting",
-        "negative": "lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, "
-                    "worst quality, low quality, low score, bad score, average score, signature, watermark, username, "
+        # hand faults first: the text encoder reads only ~75 tokens, and the end of a long negative is dropped
+        "negative": "lowres, bad anatomy, bad hands, mutated hands, poorly drawn hands, extra fingers, fused fingers, "
+                    "missing finger, extra digits, fewer digits, long fingers, text, error, cropped, "
+                    "worst quality, low quality, low score, bad score, average score, signature, watermark, "
                     "blurry, jpeg artifacts, logo, letters",
         "steps": 20, "cfg": 5.0, "scheduler": "euler_a",
     },
@@ -48,7 +50,8 @@ STYLES: dict[str, dict] = {
         "variant": "fp16",
         "prefix": "cinematic film still, ",
         "suffix": ", shot on 35mm, shallow depth of field, dramatic lighting, color graded, highly detailed, 8k",
-        "negative": "(worst quality, low quality, illustration, 3d, 2d, painting, cartoons, sketch), text, watermark, "
+        "negative": "(worst quality, low quality, illustration, 3d, 2d, painting, cartoons, sketch), bad hands, "
+                    "mutated hands, extra fingers, fused fingers, missing fingers, text, watermark, "
                     "logo, letters, signature, deformed, disfigured, bad anatomy, extra limbs, blurry, open mouth",
         "steps": 20, "cfg": 4.5, "scheduler": "dpmpp_2m_karras",
     },
@@ -440,18 +443,79 @@ def _no_people(prompt: str, style: str) -> bool:
 
 # parts of a prompt that tell an editor what to deliver, not what to draw ("16:9 at high resolution", "a clean version
 # with no title text"): the model can't follow them, they use up its ~75 tokens, and "title text" draws letters
-_DELIVERY = re.compile(r"\b(\d+:\d+|aspect ratio|resolution|\d+k|uhd|title|text|clean version|editing|thumbnail|"
-                       r"make it|so (?:you|i|we) can|wallpaper size)\b", re.I)
+_DELIVERY = re.compile(r"\b(title|text|clean version|editing|thumbnail|make it|so (?:you|i|we) can|wallpaper size)\b",
+                       re.I)
+# ...and the frame's shape and size: only these words come out of a part ("Wide 16:9 shot of two people on a roof" still
+# is the picture; "16:9 at high resolution" has nothing left, so the whole part goes)
+_SHAPE = re.compile(r"\b\d+\s*[:x]\s*\d+\b|\baspect ratio\b|\b(?:high |full |ultra )?resolution\b|\b\d+k\b|\buhd\b|"
+                    r"\b(?:for |with )?(?:the |your |our )?(?:lyrics?|subtitles?|captions?|words|typography)\b", re.I)
 _MAN = re.compile(r"\b(man|boy|guy|husband|boyfriend)\b", re.I)
 _WOMAN = re.compile(r"\b(woman|girl|lady|wife|girlfriend)\b", re.I)
+
+
+NO_LETTERS = "text, letters, words, typography, subtitles, captions, logo, watermark, signature, writing"
+
+_TAGS_SYSTEM = """You turn an image description into Danbooru-style tags for Animagine XL 4.0 (an anime model that was
+trained on tags, and ignores long sentences). Reply with ONE line of comma-separated lowercase tags, at most 45, the
+most important first. Order: the people (1boy, 1girl, 2girls, no humans...), their traits, clothes and pose, the framing
+the description implies (very wide shot, wide shot, from behind, from below, from side, close-up, upper body), the
+setting and objects (rooftop, night, full moon, city, rain), the light and colours (moonlight, lavender sky, peach
+clouds, soft lighting, pastel colors), then scenery. When the people are small in a wide scene keep them (1boy, 1girl,
+silhouette, very wide shot, scenery). Never write sentences, quality tags, the words anime or masterpiece, or anything
+about text, titles, lyrics or empty space for them."""
+
+
+def looks_like_prose(prompt: str) -> bool:
+    """A description written as sentences (long comma parts), not tags."""
+    parts = [p for p in re.split(r"[,.;]\s*", prompt) if p.strip()]
+    return bool(parts) and sum(len(p.split()) for p in parts) / len(parts) > 4.5
+
+
+def anime_tags(prompt: str, log=print) -> str:
+    """`prompt` as Danbooru-style tags for the anime model when it is written as sentences (Gemini; kept next to the
+    pictures so a prompt is only converted once). The prompt itself when it is tags already, or Gemini isn't there."""
+    prompt = prompt.strip()
+    if not looks_like_prose(prompt):
+        return prompt
+    GEN_CACHE.mkdir(parents=True, exist_ok=True)
+    note = GEN_CACHE / f"tags-{hashlib.sha1(prompt.encode()).hexdigest()[:16]}.txt"
+    if note.exists():
+        return note.read_text(encoding="utf-8").strip() or prompt
+    try:
+        import json
+
+        from .config import LLM_MODEL
+        from .script import make_client
+
+        schema = {"type": "object", "properties": {"tags": {"type": "string"}}, "required": ["tags"],
+                  "additionalProperties": False}
+        response = make_client().beta.messages.create(
+            model=LLM_MODEL, max_tokens=500, system=_TAGS_SYSTEM,
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+            messages=[{"role": "user", "content": prompt}])
+        tags = json.loads(next(b.text for b in response.content if b.type == "text"))["tags"].strip().strip(",")
+        if tags.count(",") < 3:
+            return prompt
+    except Exception as e:
+        log(f"      ! couldn't write tags for the anime model ({type(e).__name__}): drawing from the sentence")
+        return prompt
+    note.write_text(tags, encoding="utf-8")
+    return tags
 
 
 def _tidy(prompt: str) -> str:
     """A prompt written as sentences, made drawable: the delivery instructions dropped (whole comma or sentence
     parts), and a man and a woman counted as "1boy, 1girl" (without the count Animagine draws one of them)."""
     parts = [p.strip() for p in re.split(r"[,.;]\s*|\s+and\s+(?=keep|make|so\b)", prompt) if p.strip()]
-    kept = [p for p in parts if not _DELIVERY.search(p)]
-    out = prompt if len(kept) == len(parts) else ", ".join(re.sub(r"^and\s+", "", p) for p in kept) or prompt
+    kept = []
+    for part in parts:
+        if _DELIVERY.search(part):
+            continue
+        rest = " ".join(_SHAPE.sub(" ", part).split()).strip(" :-")
+        if rest != part and len(re.findall(r"[a-z]+", rest, re.I)) <= 2:   # nothing left but "at high", "in"
+            continue
+        kept.append(rest)
+    out = prompt if kept == parts else ", ".join(re.sub(r"^and\s+", "", p) for p in kept) or prompt
     if not re.search(r"\b\d+(girl|boy)s?\b", out, re.I) and _MAN.search(out) and _WOMAN.search(out):
         out = f"1boy, 1girl, {out}"
     return out
@@ -533,11 +597,25 @@ def drawn(prompt: str, style: str, size: tuple[int, int], seed: int) -> Path | N
 _CFG_INPUTS = ["prompt_embeds", "add_text_embeds", "add_time_ids"]
 
 
+step_hook = None   # a caller that shows progress sets this: step_hook(phase, done, total), once per drawing step
+_phase = "drawing"
+
+
+def _report(done: int, total: int) -> None:
+    hook = step_hook
+    if hook:
+        try:
+            hook(_phase, done, total)
+        except Exception:   # progress is only for show: it must never stop a picture
+            pass
+
+
 def _guidance_until(fraction: float, image_embeds: list):
     """A step callback that stops classifier-free guidance after `fraction` of the steps: from then on the UNet sees
     only the prompt half of the batch (diffusers' documented way to change guidance mid-run). `image_embeds`: the
     IP-Adapter inputs the pipeline uses (see _run), halved too since they aren't among the callback's tensors."""
     def callback(pipe, i, t, kw):
+        _report(i + 1, pipe.num_timesteps)
         if i == int(pipe.num_timesteps * fraction):
             pipe._guidance_scale = 0.0
             for k in _CFG_INPUTS:
@@ -602,10 +680,13 @@ def generate(prompt: str, style: str, size: tuple[int, int], seed: int | None = 
                                     FLAT_NEGATIVE if _flat(prompt, style) else "") if x)
         # on a Mac the seed's noise comes from the CPU: diffusers' advice, for the same picture every time
         generator = torch.Generator("cuda" if device() == "cuda" else "cpu").manual_seed(seed)
+        global _phase
+        _phase = "drawing"
         image = _run(pipe, CFG_UNTIL[0], prompt=full_prompt(prompt, style), negative_prompt=neg, width=w, height=h,
                      num_inference_steps=spec["steps"], guidance_scale=spec["cfg"], generator=generator, **ip)
         if hires:
             # the same modules, not from_pipe(): that made a second copy of the model (14 GB on a 12 GB card)
+            _phase = "detail"
             refine = StableDiffusionXLImg2ImgPipeline(**pipe.components)
             refine.set_progress_bar_config(disable=True)
             image = image.resize((round(w * HIRES_SCALE / 8) * 8, round(h * HIRES_SCALE / 8) * 8), resample=3)  # bicubic

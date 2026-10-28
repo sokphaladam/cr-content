@@ -1,10 +1,10 @@
 "use client";
 
-import { FolderOpen, Megaphone, Plus, Settings, Smartphone } from "lucide-react";
+import { FolderOpen, Megaphone, Music2, Plus, Settings, Smartphone } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Options } from "@/lib/api";
 
-export type AppView = "studio" | "campaigns" | "settings";
+export type AppView = "studio" | "campaigns" | "lyricvideo" | "settings";
 
 function RailButton({
   label,
@@ -45,6 +45,7 @@ export function NavRail({
   onLibrary,
   onSettings,
   onCampaigns,
+  onLyricVideo,
   onPreview,
 }: {
   view: AppView;
@@ -54,10 +55,11 @@ export function NavRail({
   onLibrary: () => void;
   onSettings: () => void;
   onCampaigns: () => void;
+  onLyricVideo: () => void;
   onPreview?: () => void; // below wide screens the preview is a slide-over
 }) {
   const keys = options?.keys;
-  const missing = keys ? [!keys.anthropic && "Claude", !keys.stock && "stock footage"].filter(Boolean) : [];
+  const missing = keys ? [!keys.ai && "Gemini", !keys.stock && "stock footage"].filter(Boolean) : [];
   return (
     <nav aria-label="App" className="flex h-full w-16 flex-col items-center bg-rail pt-3 pb-3">
       <span aria-label="Shorts Studio" title="Shorts Studio" className="mb-4 grid size-9 place-items-center rounded-lg bg-white/[0.06]">
@@ -72,6 +74,9 @@ export function NavRail({
         </RailButton>
         <RailButton label="Campaigns" active={view === "campaigns"} onClick={onCampaigns}>
           <Megaphone className="size-5" />
+        </RailButton>
+        <RailButton label="Lyrics" active={view === "lyricvideo"} onClick={onLyricVideo}>
+          <Music2 className="size-5" />
         </RailButton>
         {onPreview && (
           <RailButton label="Preview" onClick={onPreview} className="wide:hidden">
@@ -91,7 +96,7 @@ export function NavRail({
         {keys && (
           <span
             className="mx-auto mt-1 flex items-center gap-1 text-2xs text-rail-ink"
-            title={missing.length ? `Not set up yet: ${missing.join(", ")}. Open Settings.` : "Claude and stock footage are ready"}
+            title={missing.length ? `Not set up yet: ${missing.join(", ")}. Open Settings.` : "Gemini and stock footage are ready"}
           >
             <span className={`size-1.5 rounded-full ${missing.length ? "bg-caption" : "bg-ok"}`} />
             {missing.length ? "Setup" : "Ready"}

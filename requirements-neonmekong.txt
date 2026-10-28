@@ -1,0 +1,6 @@
+# Extras for the Neon Mekong song pipeline (make_song.py). Needs the base requirements too:
+#   pip install -r requirements.txt -r requirements-music.txt -r requirements-highlights.txt -r requirements-neonmekong.txt
+# opencv-python, stable-ts, librosa and demucs come from the other files; pytest from requirements-dev.txt.
+mutagen>=1.47   # ID3 tags from the Suno mp3 (optional: skipped if missing)
+Pillow>=10.1
+numpy>=1.26
