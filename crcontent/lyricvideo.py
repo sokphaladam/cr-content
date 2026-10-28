@@ -1,17 +1,19 @@
 """Lyric video tab: upload a Suno mp3 + paste its lyrics, review song.json, render. Wraps the neonmekong pipeline
 (make_song.py); every song lives in songs/<slug>/ exactly as the command line expects."""
 import contextlib
+import subprocess
 import json
 import re
 import sys
 import threading
 import time
+import shutil
 import traceback
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import progress
 from .config import CODE_DIR, ROOT
@@ -341,15 +343,16 @@ def _pictures(folder: Path) -> dict:
             pictures.save(folder, plan)
     from neonmekong import thumbnail
     own = thumbnail.custom_background_file(folder)
-    from neonmekong.lyricvideo import LOOP
-    others = [{"slug": f.name, "title": songjson.load(f / "song.json").get("title") or f.name}
-              for f in sorted(SONGS_DIR.iterdir()) if f != folder and (f / LOOP).exists() and (f / "song.json").exists()]
-    return {**plan, "cover": own.name if own else "", "loop": LOOP if (folder / LOOP).exists() else "",
-            "other_loops": others, "cover_prompt": plan.get("cover_prompt", ""),
+    from . import coverloop
+
+    data = songjson.load(folder / "song.json")
+    lrc = (folder / "lyrics.lrc").read_text(encoding="utf-8") if (folder / "lyrics.lrc").exists() else ""
+    return {**plan, "cover": own.name if own else "", **coverloop.state(folder, _loop_subject(data)),
+            "video_prompt": _background_prompt(data, lrc), "other_loops": _other_loops(folder), "cover_prompt": plan.get("cover_prompt", ""),
             "meaning": plan.get("meaning", ""), "motions": pictures.MOTIONS,
             "traditions": traditions.catalog(), "tradition": traditions.pick(plan.get("tradition")),
             "cover_motion": plan.get("cover_motion", ""), "custom_look": plan.get("custom_look", ""), "custom_avoid": plan.get("custom_avoid", ""),
-            "tradition_suggested": traditions.suggest(songjson.load(folder / "song.json"))}
+            "tradition_suggested": traditions.suggest(data)}
 
 
 @router.get("/api/lyricvideo/{slug}/pictures")
@@ -360,6 +363,10 @@ def get_pictures(slug: str):
 class PicturesEdit(BaseModel):
     prompts: dict[str, str] = {}   # slot id -> prompt
     motions: dict[str, str] = {}   # slot id -> camera move ("" = the slow drift)
+    cover_mode: str | None = None  # "picture" | "animated": which cover the video and the thumbnail use
+    loop_prompt: str | None = None  # what the animated cover shows ("" = the suggestion again)
+    loop_movement: str | None = None  # how a character loop moves ("" = the suggestion again)
+    loop_regions: list[dict] | None = None  # the parts of the cover a living loop moves (living.clean)
 
 
 @router.put("/api/lyricvideo/{slug}/pictures")
@@ -372,6 +379,12 @@ def edit_pictures(slug: str, req: PicturesEdit):
     for s in plan["slots"]:
         if s["id"] in req.prompts and req.prompts[s["id"]].strip() != s["prompt"]:
             s.update(prompt=req.prompts[s["id"]].strip(), edited=True)   # your words: new suggestions keep them
+    from . import coverloop
+
+    try:
+        coverloop.edit(folder, req.cover_mode, req.loop_prompt, req.loop_movement, req.loop_regions)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if "cover" in req.motions:
         if req.motions["cover"] not in pictures.MOTIONS:
             raise HTTPException(400, "Unknown camera move.")
@@ -407,64 +420,190 @@ def motion_clip(slug: str, pid: str, move: str | None = None):
     return {"file": name}
 
 
-LOOP_SCENE = ("A cozy lo-fi illustration of a small room at night, seen from the side: an original young character "
-              "with headphones and a loose sweater studying at a wooden desk by a big window, a desk lamp with a "
-              "warm glow, a steaming mug, stacked books, potted plants, a sleeping cat on the windowsill, a city "
-              "skyline far outside. Soft flat shading, a limited warm palette (amber lamp light against deep blue "
-              "night). Gentle looping motion: rain streaks sliding down the window, steam curling up from the "
-              "mug, the cat's tail slowly swaying, the character's head nodding slightly to the music, the lamp "
-              "glow breathing, faint dust motes drifting in the light.")
+def _loop_subject(data: dict) -> str:
+    from . import coverloop
+
+    return coverloop.suggest(data.get("mood_phrase") or "", data.get("scene_theme") or "")
 
 
-LOOP_SEC = 12.0   # long enough that a song's ~15 repeats go unnoticed, and lofi motion can be slow
+def _other_loops(folder: Path) -> list[dict]:
+    """Songs of both editors with an animated cover to reuse here; keys are "lyric:<slug>" or "video:<name>"."""
+    from . import coverloop
+    from .config import OUTPUT_DIR
+
+    def title(f):
+        try:
+            return json.loads((f / "song.json").read_text(encoding="utf-8")).get("title") or f.name
+        except (OSError, ValueError):
+            return f.name
+
+    rows = [{**r, "slug": f"lyric:{r['slug']}"} for r in coverloop.others(sorted(SONGS_DIR.iterdir()), folder, title)]
+    if OUTPUT_DIR.exists():
+        rows += [{**r, "slug": f"video:{r['slug']}"} for r in coverloop.others(sorted(OUTPUT_DIR.iterdir()), folder, title)]
+    return rows
+
+
+def loop_source(key: str) -> Path:
+    """The song folder named by an _other_loops key."""
+    from .config import OUTPUT_DIR
+
+    kind, _, name = key.partition(":")
+    if kind == "video":
+        folder = (OUTPUT_DIR / name).resolve()
+        if folder.parent != OUTPUT_DIR.resolve() or not folder.is_dir():
+            raise HTTPException(404, "Song not found.")
+        return folder
+    return _folder(name if kind == "lyric" else key)
+
+
+def _loop_call(folder: Path, work) -> None:
+    """Run a coverloop step, its errors as the page's messages."""
+    from . import llm
+
+    try:
+        work()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except (llm.APIError, RuntimeError) as e:
+        raise HTTPException(502, f"The animated cover could not be drawn: {str(e)[-300:]}")
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise HTTPException(500, f"The animated cover could not be saved: {str(getattr(e, 'stderr', e))[-300:]}")
 
 
 @router.post("/api/lyricvideo/{slug}/loop")
 def draw_loop(slug: str, again: bool = False):
-    """Gemini draws the song's cover as an animated lofi room that loops seamlessly (<song>/loop.mp4); it plays behind
-    the lyrics wherever the cover shows. A minute or two."""
-    import shutil
+    """Gemini draws the song's cover as an animated loop (<song>/loop.mp4); it plays behind the lyrics wherever the
+    cover shows. One Gemini request, a minute or two."""
+    from neonmekong import songjson
 
-    from neonmekong import lyricvideo, songjson
-
-    from . import art, llm
+    from . import coverloop
 
     folder = _folder(slug)
-    data = songjson.load(folder / "song.json")
-    mood = ", ".join(x for x in (data.get("mood_phrase"), data.get("scene_theme")) if x)
-    subject = LOOP_SCENE + (f" The song's mood: {mood}." if mood else "")
-    if again:   # motion_background caches by subject: a new take needs a different one
-        subject += f" (take {int(time.time())})"
+    _loop_call(folder, lambda: coverloop.draw(folder, _loop_subject(songjson.load(folder / "song.json")), again))
+    return _pictures(folder)
+
+
+class GpuLoop(BaseModel):
+    effects: list[str] | None = None  # what moves (coverloop.EFFECTS); None = the last choice
+    use_cover: bool = False           # bring the song's cover picture to life instead of drawing a new one
+    again: bool = False               # a new drawing and new particles
+    motion: str = "light"             # "light" (particles over the still) | "character" (the picture itself moves)
+    #                                   | "parallax" (a slow 2.5D camera over the picture)
+    intensity: int = Field(40, ge=0, le=100)   # parallax strength
+
+
+@router.post("/api/lyricvideo/{slug}/loop/gpu")
+def gpu_loop(slug: str, req: GpuLoop):
+    """The animated cover drawn and brought to life on this computer's GPU: free, no Gemini, a minute or two."""
+    from neonmekong import songjson, thumbnail
+
+    from . import coverloop
+
+    folder = _folder(slug)
+    picture = thumbnail.custom_background_file(folder) if req.use_cover else None
+    if req.use_cover and not picture:
+        raise HTTPException(400, "Draw or upload the cover picture first (Picture), then bring it to life here.")
+    effects = req.effects if req.effects is not None else coverloop.meta(folder).get("effects")
+    suggested = _loop_subject(songjson.load(folder / "song.json"))
+    _start_gpu(folder, lambda log, progress: coverloop.animate(folder, suggested, picture, effects, req.again, log,
+                                                              req.motion, progress, req.intensity), picture is None)
+    return {**_pictures(folder), "job": coverloop.status(folder)}
+
+
+def _start_gpu(folder: Path, work, drawing: bool) -> None:
+    """Start a GPU loop job, its setup problems as the page's messages before anything runs."""
+    from . import coverloop
+
     try:
-        clip = art.motion_background(subject, lyricvideo.FULL, loop=LOOP_SEC)
-    except (llm.APIError, RuntimeError, ValueError) as e:
-        raise HTTPException(502, f"The animated cover could not be drawn: {str(e)[-300:]}")
-    shutil.copy(clip, folder / lyricvideo.LOOP)
+        if drawing:
+            coverloop.gpu_check()
+        coverloop.start(folder, work)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+class LivingPreview(BaseModel):
+    regions: list[dict]
+
+
+@router.post("/api/lyricvideo/{slug}/loop/preview")
+def preview_loop(slug: str, req: LivingPreview):
+    """A quick small preview of a living loop of the song's cover with `regions` moving (saved as the song's regions;
+    the loop itself is made with motion "living")."""
+    from neonmekong import thumbnail
+
+    from . import coverloop, living
+
+    folder = _folder(slug)
+    picture = thumbnail.custom_background_file(folder)
+    if not picture:
+        raise HTTPException(400, "Draw or upload the cover picture first (Picture), then mark what moves.")
+    try:
+        coverloop.edit(folder, regions=req.regions)
+        if Path(picture).resolve() != (folder / coverloop.STILL).resolve():
+            shutil.copy(picture, folder / coverloop.STILL)
+        living.preview(folder / coverloop.STILL, folder / living.PREVIEW, req.regions)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    return {**_pictures(folder), "preview": living.PREVIEW}
+
+
+@router.get("/api/lyricvideo/{slug}/loop/status")
+def gpu_loop_status(slug: str):
+    from . import coverloop
+
+    return coverloop.status(_folder(slug))
+
+
+@router.post("/api/lyricvideo/{slug}/loop/upload")
+def upload_loop(slug: str, video: UploadFile = File(...)):
+    """Your own looping clip as the animated cover (made in another tool from the suggested video prompt)."""
+    from . import coverloop
+
+    folder = _folder(slug)
+    _loop_call(folder, lambda: coverloop.upload(folder, video.filename or "", video.file))
     return _pictures(folder)
 
 
 @router.post("/api/lyricvideo/{slug}/loop/from/{source}")
 def copy_loop(slug: str, source: str):
     """Use another song's animated cover for this one: no Gemini request, and one room becomes the channel's look."""
-    import shutil
+    from . import coverloop
 
-    from neonmekong import lyricvideo
-
-    folder, src = _folder(slug), _folder(source) / lyricvideo.LOOP
-    if not src.exists():
-        raise HTTPException(404, "That song has no animated cover.")
-    if src.parent != folder:
-        shutil.copy(src, folder / lyricvideo.LOOP)
+    folder = _folder(slug)
+    _loop_call(folder, lambda: coverloop.copy(folder, loop_source(source)))
     return _pictures(folder)
 
 
 @router.delete("/api/lyricvideo/{slug}/loop")
 def remove_loop(slug: str):
-    from neonmekong import lyricvideo
+    from . import coverloop
 
     folder = _folder(slug)
-    (folder / lyricvideo.LOOP).unlink(missing_ok=True)
+    coverloop.remove(folder)
     return _pictures(folder)
+
+
+@router.get("/api/lyricvideo/{slug}/thumbnail/preview")
+def thumbnail_preview(slug: str):
+    """The thumbnail as the render will make it from the cover in use (nothing is saved)."""
+    import tempfile
+
+    from fastapi.responses import Response
+
+    from neonmekong import songjson, thumbnail
+
+    folder = _folder(slug)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = thumbnail.render(songjson.load(folder / "song.json"), Path(tmp) / "thumbnail.jpg")
+        body = out.read_bytes()
+    return Response(body, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/api/lyricvideo/{slug}/pictures/motion/suggest")
@@ -519,6 +658,8 @@ def _put_picture(folder: Path, pid: str, source: Path, ext: str) -> None:
     if pid == "cover":
         _clear_background(folder)
         shutil.copy(source, folder / f"background{ext}")
+        from . import coverloop
+        coverloop.edit(folder, "picture")   # a new cover picture is the one in use
         return
     plan, slot = _slot(folder, pid)
     (folder / pictures.DIR).mkdir(exist_ok=True)

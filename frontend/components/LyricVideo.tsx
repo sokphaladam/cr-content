@@ -220,7 +220,6 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
   const [ai, setAi] = useState<"template" | "gemini">("template");
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [promptCopied, setPromptCopied] = useState(false);
   const [bust, setBust] = useState("");
   const [at, setAt] = useState(0);
   const [picBust, setPicBust] = useState(""); // changes when a picture does, so the preview frame is drawn again
@@ -272,23 +271,6 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
       return false;
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function setBackground(f: File) {
-    try {
-      setD(await api.setLyricBackground(slug, f));
-      setBust(String(Date.now()));
-    } catch (e) {
-      toast((e as Error).message, "error");
-    }
-  }
-
-  async function removeBackground() {
-    try {
-      setD(await api.removeLyricBackground(slug));
-    } catch (e) {
-      toast((e as Error).message, "error");
     }
   }
 
@@ -387,7 +369,7 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
           </section>
 
           <section className="card grid gap-3 p-4">
-            <h2 className="card-title">Style and mood</h2>
+            <h2 className="card-title">2. Style and mood</h2>
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,34rem)]">
               <div className="grid content-start gap-3">
                 <Field label="Lyric style" htmlFor="sv-style">
@@ -491,35 +473,9 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
           <LyricPicturesCard slug={slug} onTest={(t) => { if (playing) playFrom(Math.round(t)); else { setAt(Math.round(t)); setShown(Math.round(t)); } window.scrollTo({ top: 0, behavior: "smooth" }); }}
             onChanged={() => { setPicBust(String(Date.now())); void load(); }} />
 
-          {d.video_prompt && (
-            <section className="card grid gap-2 p-4">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="card-title">Suggested background video prompt</h2>
-                <Button size="sm" variant="ghost" icon={promptCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                  onClick={() => { void navigator.clipboard.writeText(d.video_prompt); setPromptCopied(true); setTimeout(() => setPromptCopied(false), 1500); }}>
-                  {promptCopied ? "Copied" : "Copy"}
-                </Button>
-              </div>
-              <code className="well block p-3 text-sm break-words whitespace-pre-wrap">{d.video_prompt}</code>
-              <p className="m-0 text-sm text-ink-soft">
-                From the song&apos;s mood, genre, scene theme, title and lyrics. Make a picture with it in an image generator, then add it below.
-              </p>
-              <div className="flex flex-wrap items-center gap-3">
-                <FileInput id="sv-bg" accept=".png,.jpg,.jpeg,.webp,image/*" file={d.background} onFile={(f) => void setBackground(f)} onReject={(m) => toast(m, "error")} />
-                {d.background && <Button size="sm" variant="ghost" onClick={() => void removeBackground()}>Use the neon city again</Button>}
-              </div>
-              {d.background && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={songFileUrl(slug, d.background, bust)} alt="Background" className="w-full max-w-sm rounded-lg border border-line" />
-              )}
-              <p className="m-0 text-sm text-ink-soft">
-                {d.background ? "The video and thumbnail use this picture (slowly panned and zoomed). Render again to see it." : "Without a picture the video draws the default neon city on a river. The scene theme above is only a note for the upload text."}
-              </p>
-            </section>
-          )}
 
           <section className="card grid gap-4 p-4">
-            <h2 className="card-title">2. Make the videos</h2>
+            <h2 className="card-title">4. Make the videos</h2>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-base">
               <label className="flex items-center gap-2"><input type="checkbox" className="size-4 accent-cobalt" checked={draft} onChange={(e) => setDraft(e.target.checked)} /> Quick draft (half size, fast)</label>
               <label className="flex items-center gap-2">Upload text

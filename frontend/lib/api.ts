@@ -569,6 +569,20 @@ export interface ShortsEpisode {
   loops: boolean; // the last line carries a [loops] marker
 }
 
+/** The numbers the Shorts pre-flight checks hold a Short to (shorts.json's rules and the checks' own). */
+export interface ShortsRules {
+  hook_max: number; // the first line ends by this (s)
+  length_min: number;
+  length_max: number; // the real voiceover's length (s)
+  loop_tail: number; // the last seconds cut back to the opening shot
+  match_pass: number; // a beat's clip scores at least this /10 against its planned shot
+  generic_max: number; // the most a clip without the shot's key objects can score
+  fresh_days: number; // no clip another Short used this recently
+  judge_ready: number; // Gemini's hook score a ready Short needs
+  bright_min: number;
+  sharp_min: number; // the hook clip's brightness and sharpness floors (0..1)
+}
+
 export interface ShortsPlan {
   file: string; // uploaded copy on the engine, passed back to make the pre-flight reports
   name: string;
@@ -952,11 +966,51 @@ export interface GeminiUsage {
   models: { model: string; requests: number; limit: number | null; blocked_for: number; message: string }[];
 }
 
-export interface LyricPictures {
+export type CoverMode = "picture" | "animated";
+/** "light": moving light and particles over the still; "character": the picture itself moves (image-to-video);
+ * "parallax": a slow 2.5D camera over the picture (near parts slide further). */
+export type LoopMotion = "light" | "character" | "parallax" | "living";
+/** A part of the cover a living loop moves: a box in 0..1 of the picture, how it moves and how much. */
+export interface LivingRegion {
+  kind: string; // crcontent/living.py KINDS: sway, breathe, blink, flicker, rain, leaves, steam, protect
+  box: [number, number, number, number]; // x, y, width, height
+  intensity: number; // 0..100
+  anchor: "top" | "bottom" | "left" | "right"; // the edge that stays put (sway, breathe)
+}
+export interface GpuLoopJob {
+  state: "idle" | "running" | "done" | "error";
+  text: string;
+  done: number;
+  total: number;
+  error: string;
+}
+/** A song's animated cover (crcontent/coverloop.py), the same in both editors. */
+export interface CoverLoop {
+  loop: string; // the clip's file in the song folder ("" = none yet)
+  cover_mode: CoverMode; // which cover the video holds and the thumbnail is made from
+  loop_prompt: string; // what the animated cover shows (the suggestion until you edit it)
+  loop_seconds: number;
+  loop_effects: string[]; // what moves in a GPU loop
+  effect_choices: Record<string, string>; // effect -> its label
+  loop_motion: LoopMotion; // what the last GPU loop moved
+  loop_intensity: number; // parallax strength, 0..100
+  loop_depth: boolean; // false = the last parallax had no depth model, so it was a flat 2D drift
+  loop_seam: { jump: number; step: number; ok: boolean } | null; // how the loop joins its start (measured; null = not checked)
+  loop_settings: Record<string, unknown> | null; // what made a character loop (model, seed, steps…)
+  loop_changed: number | null; // the share of the picture a character loop moves (null = not a character loop)
+  loop_change_max: number; // above it the video model redrew the scene instead of animating it
+  loop_movement: string;
+  loop_regions: LivingRegion[]; // what a living loop moves
+  region_kinds: Record<string, string>; // kind -> label // what a character loop's video model is told: only how things move
+  video_model_ready: boolean; // the character-motion model is downloaded (else the first run fetches ~24 GB)
+  job: GpuLoopJob; // a GPU loop being made in the background
+  other_loops: { slug: string; title: string }[]; // songs of either editor with one to reuse
+}
+
+export interface LyricPictures extends CoverLoop {
   slots: LyricPicture[];
   cover: string; // the song's background picture ("" = the drawn neon city)
-  loop: string; // the animated cover (a looping clip drawn by Gemini) played instead of it; "" = none
-  other_loops: { slug: string; title: string }[]; // other songs with an animated cover, to reuse here
+  video_prompt: string; // a prompt for other text-to-video tools, to make your own clip
   cover_prompt: string;
   meaning: string; // what the song is about, as Gemini read it ("" = the prompts came from keywords)
   motions: Record<string, string>; // camera move key -> label
@@ -975,6 +1029,10 @@ export const songFileUrl = (slug: string, file: string, bust = "") =>
 export interface LyricLook { style: string; grade: string; neon: boolean; playing: boolean; pulse: string; parts: string; when: string }
 export const lyricPreviewUrl = (slug: string, t: number, o: LyricLook, bust = "") =>
   `${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/preview?${new URLSearchParams({ t: String(t), style: o.style, grade: o.grade, neon: o.neon ? "1" : "", playing: o.playing ? "1" : "", pulse: o.pulse, parts: o.parts, when: o.when, v: bust })}`;
+
+/** The thumbnail as the render will make it from the cover in use. */
+export const lyricThumbUrl = (slug: string, bust = "") =>
+  `${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/thumbnail/preview?v=${bust}`;
 
 /** The lyric video playing live from `t` (a motion-JPEG stream for an <img>), in this look. */
 export const lyricStreamUrl = (slug: string, t: number, o: LyricLook) =>
@@ -1066,6 +1124,7 @@ export const api = {
   },
   excelDrafts: (file: string, eps: number[]) =>
     request<{ drafts: { ep: number; id: string; title: string }[] }>("/api/excel/drafts", { method: "POST", json: { file, eps }, timeout: 0 }),
+  shortsRules: () => request<ShortsRules>("/api/shorts/rules"),
   readShorts: (file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -1119,15 +1178,43 @@ export const api = {
   },
   removeLyricBackground: (slug: string) => request<LyricSongDetail>(`/api/lyricvideo/${slug}/background`, { method: "DELETE" }),
   lyricPictures: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/pictures`),
-  editLyricPictures: (slug: string, prompts: Record<string, string>, motions: Record<string, string> = {}) =>
-    request<LyricPictures>(`/api/lyricvideo/${slug}/pictures`, { method: "PUT", json: { prompts, motions } }),
+  editLyricPictures: (slug: string, prompts: Record<string, string>, motions: Record<string, string> = {},
+    cover: { cover_mode?: "picture" | "animated"; loop_prompt?: string; loop_movement?: string; loop_regions?: LivingRegion[] } = {}) =>
+    request<LyricPictures>(`/api/lyricvideo/${slug}/pictures`, { method: "PUT", json: { prompts, motions, ...cover } }),
+  /** A quick small preview of a living loop of the song's cover (the regions are saved too). */
+  previewLyricLoop: (slug: string, regions: LivingRegion[]) =>
+    request<LyricPictures & { preview: string }>(`/api/lyricvideo/${slug}/loop/preview`, { method: "POST", json: { regions }, timeout: 0 }),
+  uploadLyricLoop: (slug: string, file: File) => {
+    const body = new FormData();
+    body.append("video", file);
+    return request<LyricPictures>(`/api/lyricvideo/${slug}/loop/upload`, { method: "POST", body, timeout: 300_000 });
+  },
   /** A short clip of a section's picture going through its camera move (`move` tries one that is not saved). */
   lyricMotionClip: (slug: string, id: string, move?: string) =>
     request<{ file: string }>(`/api/lyricvideo/${slug}/pictures/${id}/motion-clip${move !== undefined ? `?move=${encodeURIComponent(move)}` : ""}`, { method: "POST", timeout: 120_000 }),
   drawLyricLoop: (slug: string, again = false) =>
     request<LyricPictures>(`/api/lyricvideo/${slug}/loop${again ? "?again=true" : ""}`, { method: "POST", timeout: 600_000 }),
+  coverLoop: (name: string) => request<CoverLoop>(`/api/videos/${encodeURIComponent(name)}/cover-loop`),
+  editCoverLoop: (name: string, body: { cover_mode?: CoverMode; loop_prompt?: string; loop_movement?: string }) =>
+    request<CoverLoop>(`/api/videos/${encodeURIComponent(name)}/cover-loop`, { method: "PUT", json: body }),
+  drawCoverLoop: (name: string, again = false) =>
+    request<CoverLoop>(`/api/videos/${encodeURIComponent(name)}/cover-loop${again ? "?again=true" : ""}`, { method: "POST", timeout: 600_000 }),
+  uploadCoverLoop: (name: string, file: File) => {
+    const body = new FormData();
+    body.append("video", file);
+    return request<CoverLoop>(`/api/videos/${encodeURIComponent(name)}/cover-loop/upload`, { method: "POST", body, timeout: 300_000 });
+  },
+  reuseCoverLoop: (name: string, from: string) =>
+    request<CoverLoop>(`/api/videos/${encodeURIComponent(name)}/cover-loop/from/${encodeURIComponent(from)}`, { method: "POST" }),
+  removeCoverLoop: (name: string) => request<CoverLoop>(`/api/videos/${encodeURIComponent(name)}/cover-loop`, { method: "DELETE" }),
+  gpuLyricLoop: (slug: string, body: { effects: string[]; use_cover: boolean; again: boolean; motion: LoopMotion; intensity: number }) =>
+    request<LyricPictures>(`/api/lyricvideo/${slug}/loop/gpu`, { method: "POST", json: body }),
+  gpuLyricLoopStatus: (slug: string) => request<GpuLoopJob>(`/api/lyricvideo/${slug}/loop/status`),
+  gpuCoverLoop: (name: string, body: { effects: string[]; again: boolean; motion: LoopMotion; intensity: number }) =>
+    request<CoverLoop>(`/api/videos/${encodeURIComponent(name)}/cover-loop/gpu`, { method: "POST", json: body }),
+  gpuCoverLoopStatus: (name: string) => request<GpuLoopJob>(`/api/videos/${encodeURIComponent(name)}/cover-loop/status`),
   copyLyricLoop: (slug: string, source: string) =>
-    request<LyricPictures>(`/api/lyricvideo/${slug}/loop/from/${source}`, { method: "POST" }),
+    request<LyricPictures>(`/api/lyricvideo/${slug}/loop/from/${encodeURIComponent(source)}`, { method: "POST" }),
   removeLyricLoop: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/loop`, { method: "DELETE" }),
   suggestLyricMotions: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/pictures/motion/suggest`, { method: "POST" }),
   resetLyricPictures: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/pictures/reset`, { method: "POST" }),

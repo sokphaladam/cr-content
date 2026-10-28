@@ -1,8 +1,8 @@
 "use client";
 
 import { ClipboardCheck, FileSpreadsheet } from "lucide-react";
-import { useState } from "react";
-import { api, type ShortsPlan } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { api, type ShortsPlan, type ShortsRules } from "@/lib/api";
 import { Button, Field, FileInput, Message } from "./ui";
 
 /** Shorts Mode: upload a content plan, tick episodes, and build each one's pre-flight report to approve and render. */
@@ -11,6 +11,10 @@ export function ShortsForm({ onStarted }: { onStarted: (jobId: string, title: st
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState<"" | "read" | "make">("");
   const [msg, setMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [rules, setRules] = useState<ShortsRules | null>(null);
+  useEffect(() => {
+    api.shortsRules().then(setRules).catch(() => {}); // without them the checklist just isn't shown
+  }, []);
 
   async function read(file: File | undefined) {
     if (!file) return;
@@ -57,6 +61,7 @@ export function ShortsForm({ onStarted }: { onStarted: (jobId: string, title: st
 
   return (
     <div className="grid gap-5 card p-5 sm:p-6">
+      {rules && <Checklist rules={rules} open={!plan} />}
       <Field label="Content plan (.xlsx)" hint="a Scripts sheet with Ep | Time | Visual | On-screen Text | Voiceover" htmlFor="shorts-file">
         <FileInput
           id="shorts-file"
@@ -109,8 +114,7 @@ export function ShortsForm({ onStarted }: { onStarted: (jobId: string, title: st
           pinned comment.
         </p>
         <p className="m-0">
-          Each Short is held to your rules: the animal moving in the first 2 seconds under a big hook, 22–30 seconds from the real voiceover, a last line that loops
-          into the first, and no hashtags in the title. The app records the voiceover, picks the footage and stops at a{" "}
+          Each Short is held to the checklist above. The app records the voiceover, picks the footage and stops at a{" "}
           <b className="font-semibold text-ink">pre-flight report</b> (the checks, Gemini&apos;s hook score with stronger first lines, and a storyboard) for you to
           approve before it renders.
         </p>
@@ -134,5 +138,43 @@ export function ShortsForm({ onStarted }: { onStarted: (jobId: string, title: st
       </div>
       <Message {...msg} />
     </div>
+  );
+}
+
+/** Every pre-flight check and what passes it, so a plan can be written to pass before it's uploaded. */
+function Checklist({ rules: r, open }: { rules: ShortsRules; open: boolean }) {
+  const items: [string, string, React.ReactNode][] = [
+    ["script", "hook beat", <>The first voiceover line is <b>spoken by {r.hook_max}s</b>: a few words.</>],
+    ["script", "length", <>The whole voiceover runs <b>{r.length_min}–{r.length_max}s</b> as recorded (about {Math.round(r.length_min * 2.6)}–{Math.round(r.length_max * 2.6)} words).</>],
+    ["script", "loop line", <>The last line <b>doesn&apos;t end a sentence</b> (end it with “—”, not . ! ?) and runs into the first line as one natural sentence. Put a <code>[loops]</code> marker on it.</>],
+    ["script", "title", <><b>No #hashtags</b> in the title (they go in the description).</>],
+    ["clips", "hook shot", <>Beat 1&apos;s clip, for its whole stretch: <b>one continuous shot</b> (no cut), the <b>animal itself moving</b> (a pan or zoom alone fails), bright and sharp, no logo, text or intro, and it shows the planned shot ({r.match_pass}/10).</>],
+    ["clips", "loop shot", <>Beat 1 is <b>real footage</b>, so the last {r.loop_tail}s can cut back to it.</>],
+    ["clips", "shot match", <>Every beat&apos;s clip shows <b>its planned shot</b>: {r.match_pass}/10 or more. A clip without the shot&apos;s key objects scores at most {r.generic_max}, so write a Visual you can find.</>],
+    ["clips", "placeholders", <>Every beat finds footage: <b>no placeholder cards</b>. Your own clips (<code>&lt;plan&gt;-epNN/scene-XX.mp4</code>) come first.</>],
+    ["clips", "fresh clips", <>No clip <b>another Short used in the last {r.fresh_days} days</b>, and a hook no other Short has used.</>],
+    ["ready", "hook judge", <>Gemini scores the hook <b>{r.judge_ready}/10 or more</b> (needs GEMINI_API_KEY in Settings).</>],
+  ];
+  const groups = [["script", "In the script"], ["clips", "In the footage"], ["ready", "To be ready"]] as const;
+  return (
+    <details open={open} className="well p-4">
+      <summary className="cursor-pointer text-base font-semibold">What each Short must pass</summary>
+      <div className="mt-3 grid gap-3">
+        {groups.map(([g, label]) => (
+          <div key={g} className="grid gap-1.5">
+            <div className="field-label">{label}</div>
+            <ul className="m-0 grid list-none gap-1.5 p-0">
+              {items.filter(([k]) => k === g).map(([, name, text]) => (
+                <li key={name} className="grid gap-x-3 text-base sm:grid-cols-[8rem_1fr]">
+                  <span className="font-semibold">{name}</span>
+                  <span className="text-ink-soft">{text}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+        <p className="m-0 text-sm text-ink-soft">The pre-flight report checks each of these on the real voiceover and footage; change the script and make it again to fix one.</p>
+      </div>
+    </details>
   );
 }

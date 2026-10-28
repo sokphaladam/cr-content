@@ -2,7 +2,8 @@
 
 import { Clapperboard, Copy, ImageIcon, Paintbrush, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, songFileUrl, type ArtStyle, type LyricDrawStatus, type LyricPicture, type LyricPictures } from "@/lib/api";
+import { api, lyricThumbUrl, songFileUrl, type ArtStyle, type CoverMode, type LyricDrawStatus, type LyricPicture, type LyricPictures } from "@/lib/api";
+import { AnimatedCover, CoverSwitch } from "./AnimatedCover";
 import { ArtStylePicker, artBlocker, useArtStatus } from "./ArtControls";
 import { Button, Spinner, buttonClass, useToast } from "./ui";
 
@@ -151,6 +152,29 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
   const missing = plan.slots.filter((s) => !s.file).length;
   const hasTraditions = style === "anime" || style === "flat"; // the looks the traditions are written for
 
+  const mode = plan.cover_mode;
+  const setMode = (m: CoverMode) =>
+    void api.editLyricPictures(slug, {}, {}, { cover_mode: m }).then(saved).catch((e: Error) => toast(e.message, "error"));
+
+  const animatedCard = (
+    <AnimatedCover state={plan} src={plan.loop ? songFileUrl(slug, plan.loop, bust) : ""} onSaved={saved} videoPrompt={plan.video_prompt} disabled={!!busy} hasPicture={!!plan.cover}
+      picture={plan.cover ? songFileUrl(slug, plan.cover, bust) : ""}
+      previewUrl={(file) => songFileUrl(slug, file, String(Date.now()))}
+      calls={{
+        saveRegions: (loop_regions) => api.editLyricPictures(slug, {}, {}, { loop_regions }),
+        preview: async (regions) => { const r = await api.previewLyricLoop(slug, regions); return [r, r.preview] as const; },
+        savePrompt: (loop_prompt) => api.editLyricPictures(slug, {}, {}, { loop_prompt }),
+        saveMovement: (loop_movement) => api.editLyricPictures(slug, {}, {}, { loop_movement }),
+        gpu: (effects, use_cover, again, motion, intensity) => api.gpuLyricLoop(slug, { effects, use_cover, again, motion, intensity }),
+        status: () => api.gpuLyricLoopStatus(slug),
+        refresh: () => api.lyricPictures(slug),
+        draw: (again) => api.drawLyricLoop(slug, again),
+        upload: (f) => api.uploadLyricLoop(slug, f),
+        reuse: (from) => api.copyLyricLoop(slug, from),
+        remove: () => api.removeLyricLoop(slug),
+      }} />
+  );
+
   const card = (r: Row) => (
     <div key={r.id} className="well grid gap-3 p-3 sm:grid-cols-[minmax(0,13rem)_1fr]">
       <div className="grid content-start gap-2">
@@ -205,26 +229,41 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
   return (
     <section className="card grid gap-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="card-title">Cover picture</h2>
+        <h2 className="card-title">3. Cover and pictures</h2>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} disabled={!!busy}
             onClick={() => void run("reset", async () => saved(await api.resetLyricPictures(slug)))}>New suggestions</Button>
         </div>
       </div>
       <p className="m-0 text-sm text-ink-soft">
-        Prompts are written by Gemini from what the lyrics mean (and your scene theme). Draw one cover and it is used behind every lyric, the title card and the thumbnail (slowly panned and zoomed). Edit a prompt, then draw (free, on this computer) or upload your own. Want it to change with the song? Give sections their own pictures below; the rest keep the cover.
+        The cover plays behind every lyric and the title card, and the thumbnail is made from it. Make it a still picture (drawn free on this computer, or your own) or an animated loop. Want it to change with the song? Give sections their own pictures further down; the rest keep the cover.
       </p>
       {plan.meaning && <p className="well m-0 p-3 text-sm"><b>What the song is about:</b> {plan.meaning}</p>}
       <ArtStylePicker value={style} onChange={setStyle} status={art.status} reload={art.reload} stockLabel="Upload only" />
       {(
         <label className="grid gap-1 text-sm">
           <span className="font-semibold">Art tradition <span className="font-normal text-ink-soft">(all of this song&apos;s pictures follow it, so they look like one film)</span></span>
-          <select className="field-input h-9 py-0 text-sm" aria-label="Art tradition" value={tradition ?? plan.tradition}
-            disabled={!hasTraditions} onChange={(e) => setTradition(e.target.value)}>
-            {Object.entries(plan.traditions).map(([k, t]) => (
-              <option key={k} value={k}>{t.label}{k === plan.tradition_suggested && k !== "" ? " (suggested)" : ""}</option>
-            ))}
-          </select>
+          <div role="radiogroup" aria-label="Art tradition" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {Object.entries(plan.traditions).map(([k, t]) => {
+              const on = (tradition ?? plan.tradition) === k;
+              return (
+                <button key={k} type="button" role="radio" aria-checked={on} disabled={!hasTraditions} title={t.hint}
+                  className={`grid gap-1 overflow-hidden rounded-lg border p-1 text-left transition-colors disabled:opacity-50 ${on ? "border-cobalt ring-2 ring-cobalt" : "border-line hover:border-ink-soft"}`}
+                  onClick={() => setTradition(k)}>
+                  {k === "custom" ? (
+                    <span className="grid aspect-video place-items-center rounded-md bg-ink/[0.06] text-xs text-ink-soft">your own words</span>
+                  ) : (
+                    // samples drawn by scripts/tradition_samples.py: the same scene and seed in each tradition
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={`/traditions/${k || "default"}.webp`} alt="" loading="lazy" className="aspect-video w-full rounded-md object-cover" />
+                  )}
+                  <span className="px-1 pb-0.5 text-xs font-semibold leading-tight">
+                    {t.label}{k === plan.tradition_suggested && k !== "" ? <span className="font-normal text-cobalt"> · suggested</span> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
           {!hasTraditions ? (
             <span className="flex flex-wrap items-center gap-2 text-ink-soft">
               Art traditions (Ghibli-like, lofi room, your own…) work with the Anime and Flat 2D looks.
@@ -245,33 +284,25 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
           )}
         </label>
       )}
-      {card(rows[0])}
-      <div className="well grid gap-2 p-3 sm:grid-cols-[minmax(0,13rem)_1fr]">
-        <div className="grid aspect-video w-full place-items-center overflow-hidden rounded-lg bg-black">
-          {plan.loop ? (
-            <video src={songFileUrl(slug, plan.loop, bust)} className="size-full object-cover" autoPlay loop muted playsInline aria-label="Animated cover" />
-          ) : busy === "loop" ? <Spinner className="size-5" /> : <Clapperboard className="size-6 text-ink-soft" aria-hidden />}
+      <section className="grid gap-3" aria-labelledby="cover-title">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 id="cover-title" className="m-0 text-base font-semibold">Cover <span className="font-normal text-ink-soft">(background and thumbnail)</span></h3>
+          <CoverSwitch mode={mode} onChange={setMode} disabled={!!busy} />
         </div>
-        <div className="grid content-start gap-2">
-          <div className="text-sm font-semibold">Animated cover <span className="font-normal text-ink-soft">(lofi room, loops behind the lyrics)</span></div>
-          <p className="m-0 text-sm text-ink-soft">
-            Gemini draws a cozy lofi room at night that moves: rain on the window, steam from the mug, a cat&apos;s tail, the lamp glow. It loops every 12 seconds wherever the cover would play, with the camera move above. Takes a minute or two and one Gemini request; reusing one from another song is free.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="primary" icon={<Paintbrush className="size-3.5" />} loading={busy === "loop"} disabled={!!busy && busy !== "loop"}
-              onClick={() => void run("loop", async () => saved(await api.drawLyricLoop(slug, !!plan.loop)))}>{plan.loop ? "Draw again" : "Draw animated cover"}</Button>
-            {plan.loop && <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} disabled={!!busy}
-              onClick={() => void run("loop", async () => saved(await api.removeLyricLoop(slug)))}>Remove</Button>}
-            {plan.other_loops.length > 0 && (
-              <select className="field-input h-9 py-0 text-sm" aria-label="Use the animated cover of another song" value="" disabled={!!busy}
-                onChange={(e) => { const from = e.target.value; if (from) void run("loop", async () => saved(await api.copyLyricLoop(slug, from))); }}>
-                <option value="">Use one from another song…</option>
-                {plan.other_loops.map((o) => <option key={o.slug} value={o.slug}>{o.title}</option>)}
-              </select>
-            )}
-          </div>
+        <div className="grid gap-3">
+          {mode === "animated" ? animatedCard : card(rows[0])}
+          <figure className="well m-0 grid items-center gap-3 p-3 sm:grid-cols-[minmax(0,13rem)_1fr]">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={lyricThumbUrl(slug, bust)} alt="Thumbnail preview" className="aspect-video w-full rounded-lg bg-black object-cover" />
+            <figcaption className="text-sm text-ink-soft">
+              <b className="text-ink">Thumbnail</b> · made from the {mode === "animated" && plan.loop ? "animated cover (one frame)" : plan.cover ? "cover picture" : "drawn neon city (no cover yet)"}
+            </figcaption>
+          </figure>
         </div>
-      </div>
+        {mode === "animated" && !plan.loop && (
+          <p className="m-0 text-sm text-ink-soft">No animated cover yet: until you draw or upload one, the video uses the {plan.cover ? "cover picture" : "drawn neon city"}.</p>
+        )}
+      </section>
       <section className="grid gap-2" aria-label="Camera motion">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="m-0 text-base font-semibold">Camera motion <span className="font-normal text-ink-soft">(how each picture moves behind the lyrics)</span></h3>

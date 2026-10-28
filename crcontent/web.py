@@ -1208,6 +1208,19 @@ def longform_approve(name: str):
 # ---------- Shorts Mode (crcontent/shorts): a Short per episode, held to the channel's rules ----------
 # The pre-flight page (<job>/preflight.html, served under /media) approves the render through /api/shorts/<job>/approve.
 
+@app.get("/api/shorts/rules")
+def shorts_rules():
+    """The numbers the pre-flight checks hold a Short to (shorts.json's rules and the checks' own), shown before a
+    plan is uploaded so a script can be written to pass them."""
+    from .shorts import hook, match, preflight, registry, settings
+
+    rules = settings.load()["rules"]
+    return {"hook_max": rules["hook_max"], "length_min": rules["length"]["min"], "length_max": rules["length"]["max"],
+            "loop_tail": rules["loop_tail"], "match_pass": match.PASS, "generic_max": match.GENERIC_MAX,
+            "fresh_days": registry.RECENT_DAYS, "judge_ready": preflight.JUDGE_READY, "bright_min": hook.DARK,
+            "sharp_min": hook.SOFT}
+
+
 @app.post("/api/shorts/read")
 def shorts_read(file: UploadFile = File(...)):
     """Upload a Shorts content plan and list its episodes (nothing is made yet)."""
@@ -1557,6 +1570,111 @@ def _plan_view(folder: Path, plan: dict | None) -> dict:
         path = imagegen.drawn(slot["prompt"], plan["style"], shape, slot.get("seed") or k + 1)
         slot["picture"] = _media_info(path) if path else None
     return {"plan": plan}
+
+
+# ---------- a song's animated cover (crcontent/coverloop.py, shared with the Lyrics page) ----------
+
+def _song_dir(name: str) -> Path:
+    folder = _video_dir(name)
+    if not (folder / "song.json").exists():
+        raise HTTPException(400, "This isn't a song.")
+    return folder
+
+
+def _loop_suggestion(folder: Path) -> str:
+    from . import coverloop
+
+    try:   # only the mood: a song.json from an older version still gets its cover
+        mood = json.loads((folder / "song.json").read_text(encoding="utf-8")).get("mood") or ""
+    except (OSError, ValueError):
+        mood = ""
+    return coverloop.suggest(mood, "")
+
+
+def _cover_loop_view(folder: Path) -> dict:
+    from . import coverloop
+
+    return {**coverloop.state(folder, _loop_suggestion(folder)), "other_loops": lyricvideo._other_loops(folder)}
+
+
+class CoverLoopEdit(BaseModel):
+    cover_mode: str | None = None  # "picture" | "animated": what a one-cover music video holds for the whole song
+    loop_prompt: str | None = None
+    loop_movement: str | None = None
+
+
+@app.get("/api/videos/{name}/cover-loop")
+def get_cover_loop(name: str):
+    return _cover_loop_view(_song_dir(name))
+
+
+@app.put("/api/videos/{name}/cover-loop")
+def edit_cover_loop(name: str, req: CoverLoopEdit):
+    from . import coverloop
+
+    folder = _song_dir(name)
+    try:
+        coverloop.edit(folder, req.cover_mode, req.loop_prompt, req.loop_movement)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _cover_loop_view(folder)
+
+
+@app.post("/api/videos/{name}/cover-loop")
+def draw_cover_loop(name: str, again: bool = False):
+    """Gemini draws the animated cover (one request, a minute or two)."""
+    from . import coverloop
+
+    folder = _song_dir(name)
+    lyricvideo._loop_call(folder, lambda: coverloop.draw(folder, _loop_suggestion(folder), again))
+    return _cover_loop_view(folder)
+
+
+@app.post("/api/videos/{name}/cover-loop/gpu")
+def gpu_cover_loop(name: str, req: lyricvideo.GpuLoop):
+    """The animated cover drawn and brought to life on this computer's GPU (free, no Gemini)."""
+    from . import coverloop
+
+    folder = _song_dir(name)
+    effects = req.effects if req.effects is not None else coverloop.meta(folder).get("effects")
+    suggested = _loop_suggestion(folder)
+    lyricvideo._start_gpu(folder, lambda log, progress: coverloop.animate(folder, suggested, None, effects, req.again,
+                                                                         log, req.motion, progress, req.intensity), True)
+    return {**_cover_loop_view(folder), "job": coverloop.status(folder)}
+
+
+@app.get("/api/videos/{name}/cover-loop/status")
+def gpu_cover_loop_status(name: str):
+    from . import coverloop
+
+    return coverloop.status(_song_dir(name))
+
+
+@app.post("/api/videos/{name}/cover-loop/upload")
+def upload_cover_loop(name: str, video: UploadFile = File(...)):
+    from . import coverloop
+
+    folder = _song_dir(name)
+    lyricvideo._loop_call(folder, lambda: coverloop.upload(folder, video.filename or "", video.file))
+    return _cover_loop_view(folder)
+
+
+@app.post("/api/videos/{name}/cover-loop/from/{source}")
+def copy_cover_loop(name: str, source: str):
+    from . import coverloop
+
+    folder = _song_dir(name)
+    lyricvideo._loop_call(folder, lambda: coverloop.copy(folder, lyricvideo.loop_source(source)))
+    return _cover_loop_view(folder)
+
+
+@app.delete("/api/videos/{name}/cover-loop")
+def remove_cover_loop(name: str):
+    from . import coverloop
+
+    folder = _song_dir(name)
+    coverloop.remove(folder)
+    return _cover_loop_view(folder)
 
 
 @app.get("/api/videos/{name}/art-plan")

@@ -109,6 +109,12 @@ def even_timing(song: SongScript, total: float) -> list[LyricLine]:
     return out
 
 
+def release() -> None:
+    """Forget the Whisper model: its memory back to the system (the animated cover's video model needs it)."""
+    global _model
+    _model = None
+
+
 def _load_model():
     global _model
     if _model is None:

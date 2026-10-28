@@ -94,6 +94,19 @@ def background(pal: list[tuple[int, int, int]], seed: str, w: int = W, h: int = 
 BACKGROUND_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 
+def active_loop(folder: Path) -> Path | None:
+    """The animated cover, when the song uses it (crcontent/coverloop.py)."""
+    from crcontent import coverloop
+
+    return coverloop.active(folder)
+
+
+def loop_still(file: Path, at: float = 0.35) -> Image.Image | None:
+    from crcontent import coverloop
+
+    return coverloop.still(file, at)
+
+
 def custom_background_file(folder: Path) -> Path | None:
     """The picture you put in the song's folder (background.png / .jpg / .webp), drawn instead of the neon city."""
     return next((folder / f"background{e}" for e in BACKGROUND_EXTS if (folder / f"background{e}").exists()), None)
@@ -102,6 +115,10 @@ def custom_background_file(folder: Path) -> Path | None:
 def custom_background(data: dict, w: int, h: int) -> Image.Image | None:
     """The song's own background picture, scaled to cover w x h (centre-cropped), or None to draw the default."""
     folder = data.get("_dir")
+    loop = active_loop(Path(folder)) if folder else None
+    still = loop_still(loop) if loop else None
+    if still:
+        return cover_crop(still, w, h)
     file = custom_background_file(Path(folder)) if folder else None
     if not file:
         return None

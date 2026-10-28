@@ -224,7 +224,7 @@ def place(frame: np.ndarray, sp: dict, cx: float, cy: float, gain: float = 1.0, 
 
 # ---------------------------------------------------------------- the scene
 
-LOOP = "loop.mp4"   # the song's animated cover (a seamless loop, crcontent/art.motion_background), in its folder
+LOOP = "loop.mp4"   # crcontent/coverloop.py: the song's animated cover
 
 
 class Loop:
@@ -283,8 +283,8 @@ class Scene:
         own = thumbnail.custom_background(data, bw, bh)  # the song's own picture: no drawn river to shimmer
         self.own_background = own is not None
         self.canvas = crisp(np.asarray(own or thumbnail.background(pal, seed, bw, bh, shade=False))[..., ::-1].copy())
-        loop = Path(data["_dir"]) / LOOP if data.get("_dir") else None
-        self.loop = Loop(loop, bw, bh) if loop and loop.exists() else None   # the animated cover, over the still
+        loop = thumbnail.active_loop(Path(data["_dir"])) if data.get("_dir") else None
+        self.loop = Loop(loop, bw, bh) if loop else None   # the animated cover, over its own still
         self.starts = [ln["start"] for ln in v.lines]
         # one picture per sung section (pictures.py), dissolving into each other; the cover / drawn city between
         folder = data.get("_dir")

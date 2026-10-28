@@ -87,3 +87,16 @@ def test_metadata_has_every_part_and_no_hashtags_in_the_title():
     text = extras.metadata(ep)
     assert text.startswith("TITLE\nCat Title 🐭\n")
     assert "#catfacts #shorts" in text and "PINNED COMMENT\nWhat did yours bring? 👇" in text
+
+
+def test_the_rules_endpoint_serves_the_numbers_the_checks_use():
+    from fastapi.testclient import TestClient
+
+    from crcontent import web
+    from crcontent.shorts import match, preflight, registry, settings
+
+    r = TestClient(web.app).get("/api/shorts/rules").json()
+    rules = settings.load()["rules"]
+    assert (r["hook_max"], r["length_min"], r["length_max"], r["loop_tail"]) == (
+        rules["hook_max"], rules["length"]["min"], rules["length"]["max"], rules["loop_tail"])
+    assert (r["match_pass"], r["fresh_days"], r["judge_ready"]) == (match.PASS, registry.RECENT_DAYS, preflight.JUDGE_READY)
