@@ -286,7 +286,7 @@ export function Library({
         title: v.title,
         lang: v.lang,
         when: v.created,
-        detail: v.video || v.audio ? "" : "not rendered",
+        detail: v.video || v.audio ? "" : v.kind === "long_video" ? "storyboard" : v.kind === "short" ? "pre-flight" : "not rendered",
         thumb: v.thumb ? `${outputUrl(v.name, "thumbnail.jpg")}?v=${v.thumb_v}` : undefined,
         onClick: () => onSelectVideo(v.name),
         current: v.name === selectedVideo,

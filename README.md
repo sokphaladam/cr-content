@@ -231,7 +231,7 @@ In VS Code: Run and Debug → **Web UI** → F5.
 .venv\Scripts\python make.py --voices km                            # list voices
 .venv\Scripts\python make.py --highlights output\<music video>      # best Shorts/Reels clips (see Smart Highlights)
 .venv\Scripts\python make.py --script-video scripts\my-video.md     # long YouTube video (see Script to Video)
-.venv\Scripts\python make.py --script-video scripts\my-video.md     # long YouTube video (see Script to Video)
+.venv\Scripts\python make.py --shorts plan.xlsx --eps 1             # Shorts from a content plan, to your rules (see Shorts Mode)
 ```
 
 ### From an Excel content plan
@@ -487,6 +487,59 @@ Everything lands in `output/<time>-<lang>-<title>/`: `video.mp4` and the files a
 - `render`: size, `crossfade`, `look` (`natural`, `cinematic`, `film`, `moody`, `vibrant` or `mono`), `encoder`
   (`auto`, `nvenc` or `cpu`), `captions`, and how long title cards and lower thirds stay up.
 - `music`: `dir` and `volume`.
+
+## Shorts Mode (YouTube Shorts from a content plan, held to your analytics)
+
+One upload-ready 1080×1920 Short per episode of an Excel plan, checked against rules that come from the channel's
+own retention numbers, with a pre-flight report to OK before anything renders. It runs Script to Video's steps at
+9:16 (`crcontent/shorts/`).
+
+```powershell
+.venv\Scripts\python make.py --shorts Jackdaw1715_Improved_Shorts.xlsx --eps 1     # one episode (or 1,3-5; none = all)
+#   -> output\<time>-en-ep01-your-cat-brought-you-a-dead-mouse-don-t-\preflight.html : check it, then
+.venv\Scripts\python make.py --approve "output\<that folder>"                      # render, cover, metadata
+.venv\Scripts\python make.py --shorts-analytics "Table data.csv" --plan Jackdaw1715_Improved_Shorts.xlsx
+```
+
+**The workbook**: a **Scripts** sheet `Ep | Time | Visual | On-screen Text | Voiceover`, one row per beat; a row whose
+Time is `TITLE` holds the episode's title. An optional **Plan** sheet adds `Old title | New title | Hook (first 2s) |
+Description + hashtags | Pinned comment`. The voiceover is spoken word for word; `(sound cues)` and the `[loops]` /
+`[loops to start]` marker aren't.
+
+**The rules** (`shorts.json` in the data folder, `rules`):
+1. **Hook**: the first beat shows the animal in motion under a big hook text, and its line ends within 2 s. The hook
+   clip is picked on its own (`hook.py`): each candidate is scanned for the animal's own motion (optical flow with
+   the camera's pan or zoom taken out, so slow zooms and still close-ups are rejected), sharpness and brightness, its
+   best 2 s found, and Claude checks those frames for the right animal, real movement, and no logo, text or intro.
+   Rejected clips are listed with the reason.
+2. **Length**: 22–30 s from the real TTS audio (not the sheet's times; each beat lasts as long as its speech). Over
+   30 s, the report names the beat to cut (never the hook or the loop line).
+3. **Loop**: the last line ends mid-sentence and runs into the first; the last 0.5 s cut back to the hook clip,
+   ending on the frame the Short opens with. No fade-out, music included.
+4. **Title**: no hashtags; any found move to the description.
+
+**Footage**, per beat: your file `media\<plan>-epNN\scene-XX.mp4` (or .mov / .jpg...), then Pixabay (vertical
+clips, or 4K ones that stay sharp cropped to 9:16), checked by Claude. Stock rarely has the exact action ("cat drops
+a toy mouse"), so a beat nothing matches gets a checked general shot of the episode's animal (flagged), and only
+when there's none, a placeholder card (flagged). The 9:16 crop is centred on the animal.
+
+**The pre-flight report** (`preflight.html`) lists the checks (hook beat, length, loop line, loop shot, hook shot,
+title, placeholders), **Claude's hook judge** (a 1–10 score with its reasons, 3 stronger first lines and 3 stronger
+on-screen hooks), and the storyboard: one frame per beat with its text, voiceover, source, Claude's score and
+anything flagged. Nothing renders until `--approve`; a re-run needs approving again.
+
+**Each Short's folder**: `video.mp4` (1080×1920, 30 fps, H.264 + AAC, −14 LUFS, NVENC with CPU fallback),
+`cover.png` (the sharpest, most colourful frame of the animal with the title, inside the safe zone),
+`metadata.txt` (title, description, hashtags, pinned comment), `post.txt` + `thumbnail.jpg` for the Upload card,
+and `preflight.html`. Captions follow the voiceover word by word (the spoken word in yellow), big and bold, and all
+text stays out of the bottom 20 % and right 15 % (and the top 8 %). English and Khmer both render; emoji too.
+
+**Analytics**: in YouTube Studio, Analytics → Advanced mode → Content, export as CSV, and import it with
+`--shorts-analytics` (`--plan` matches the videos to your episodes by new or old title). Each video is tagged with
+its hook style (your cat + hidden meaning, shock fact, science explainer, question, myth bust, POV, list), length
+and animal, and the summary ranks each tag by Stayed to watch % and % viewed (weighted by views). It's saved as
+`shorts-analytics.json`, and from then on the judge's suggestions are ordered by how their hook style really did on
+the channel.
 
 ## Upload to YouTube, TikTok, Facebook and Instagram
 

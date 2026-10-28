@@ -19,6 +19,9 @@ Examples:
   python make.py --script-video scripts/smartest-birds.md    (long YouTube video: stops at the storyboard)
   python make.py --storyboard output/<job>                   (check / swap footage / approve in the browser)
   python make.py --approve output/<job>                      (approve the storyboard as it is and render)
+  python make.py --shorts plan.xlsx --eps 1                  (Shorts Mode: stops at the pre-flight report)
+  python make.py --approve output/<short job>                (render an approved Short)
+  python make.py --shorts-analytics "Table data.csv" --plan plan.xlsx   (which hooks keep viewers)
 """
 import argparse
 import sys
@@ -75,7 +78,18 @@ def main() -> int:
     p.add_argument("--approve", type=Path, metavar="JOB_DIR",
                    help="approve a Script to Video storyboard as it is now and render it")
     p.add_argument("--port", type=int, default=8000, help="with --storyboard: the engine's port")
+    p.add_argument("--shorts", type=Path, metavar="XLSX",
+                   help="Shorts Mode: a 1080x1920 Short per episode of a content plan, held to the channel's rules; "
+                        "stops at the pre-flight report (see crcontent/shorts)")
+    p.add_argument("--shorts-analytics", type=Path, metavar="CSV",
+                   help="import a YouTube Studio 'Content' export and summarise which hook styles keep viewers")
+    p.add_argument("--plan", type=Path, metavar="XLSX", help="with --shorts-analytics: the plan to match videos to")
     args = p.parse_args()
+
+    if args.shorts or args.shorts_analytics or (args.approve and _is_short(args.approve)):
+        from crcontent.config import ROOT
+        load_dotenv(ROOT / ".env")  # the app's keys live in the data folder
+        return shorts_mode(args)
 
     if args.script_video or args.storyboard or args.approve:
         from crcontent.config import ROOT
@@ -193,6 +207,46 @@ def open_storyboard(job: Path, port: int) -> int:
     threading.Timer(2.0, webbrowser.open, [url]).start()
     uvicorn.run(app, host="127.0.0.1", port=port, timeout_graceful_shutdown=3)
     return 0
+
+
+def _is_short(job: Path) -> bool:
+    from crcontent.shorts import is_short
+
+    return is_short(job)
+
+
+def shorts_mode(args) -> int:
+    """--shorts (steps 1-5 per episode, up to the pre-flight report), --approve on a Short, --shorts-analytics."""
+    from crcontent import shorts
+    from crcontent.sheet import pick_episodes
+    from crcontent.shorts import analytics, plan
+
+    if args.approve:
+        from crcontent.longform import storyboard
+        storyboard.approve(args.approve.resolve())
+        shorts.render_job(args.approve.resolve())
+        return 0
+    if args.shorts_analytics:
+        episodes = plan.read(args.plan) if args.plan else []
+        data = analytics.import_csv(args.shorts_analytics, episodes)
+        print(analytics.report(data))
+        print(f"\nSaved to {analytics.PATH} (the pre-flight judge ranks its hook suggestions by it)")
+        return 0
+    episodes = pick_episodes(plan.read(args.shorts), args.eps)
+    print(f"{args.shorts.name}: {len(episodes)} episode(s)")
+    jobs, failed = [], []
+    for i, ep in enumerate(episodes, 1):
+        print(f"\n=== {i}/{len(episodes)}: Ep {ep.ep} - {ep.title} ===")
+        try:
+            jobs.append(shorts.make_job(ep))
+        except Exception as err:  # keep going; report at the end
+            print(f"  ! failed: {type(err).__name__}: {err}")
+            failed.append(ep.ep)
+    print(f"\nPre-flight built for {len(jobs)} episode(s)" + (f", {len(failed)} failed ({failed})" if failed else ""))
+    for job in jobs:
+        st = shorts.report_status(job)
+        print(f"  [{st.get('state', '?').upper()}] {job / 'preflight.html'}\n    python make.py --approve \"{job}\"")
+    return 1 if failed else 0
 
 
 def make_from_excel(path: Path, eps: str, common: dict) -> int:

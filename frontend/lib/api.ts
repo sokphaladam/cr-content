@@ -329,7 +329,7 @@ export type Aspect = "16:9" | "9:16";
 
 export interface Job {
   id: string;
-  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video";
+  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short";
   status: "queued" | "running" | "done" | "error";
   step: number;
   progress?: number | null; // how far the current step is, 0..1 (null/absent: no measure for it)
@@ -339,6 +339,7 @@ export interface Job {
   video?: string;
   error?: string;
   summary?: string; // excel: "5 of 6 videos made; failed: Ep 3"
+  videos?: string[]; // short: every pre-flight folder made (video is the first)
   platform?: Platform; // publish
   url?: string; // publish: link to the uploaded video ("" for a TikTok draft)
   publish_at?: string; // publish: YouTube goes public at this time ("" when not scheduled)
@@ -554,6 +555,22 @@ export interface ExcelEpisode {
   posted: boolean;
 }
 
+/** Shorts Mode: one episode of an uploaded content plan. */
+export interface ShortsEpisode {
+  ep: number;
+  title: string;
+  beats: number;
+  status: string;
+  posted: boolean;
+  loops: boolean; // the last line carries a [loops] marker
+}
+
+export interface ShortsPlan {
+  file: string; // uploaded copy on the engine, passed back to make the pre-flight reports
+  name: string;
+  episodes: ShortsEpisode[];
+}
+
 export interface ExcelPlan {
   file: string; // uploaded copy on the engine, passed back to make drafts or videos
   name: string;
@@ -565,7 +582,8 @@ export interface VideoSummary {
   title: string;
   lang: Lang;
   created: string;
-  kind: "video" | "song" | "music_video" | "long_video"; // long_video: Script to Video (16:9, from a script .md)
+  // long_video: Script to Video (16:9, from a script .md); short: Shorts Mode (9:16, from a content plan, pre-flight first)
+  kind: "video" | "song" | "music_video" | "long_video" | "short";
   source: "" | "upload"; // "upload" = your own song (mp3 + lyrics)
   aspect: Aspect;
   song_folder: string; // music video: the song it was made from ("" if that song was deleted)
@@ -942,6 +960,14 @@ export const api = {
   },
   excelDrafts: (file: string, eps: number[]) =>
     request<{ drafts: { ep: number; id: string; title: string }[] }>("/api/excel/drafts", { method: "POST", json: { file, eps }, timeout: 0 }),
+  readShorts: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<ShortsPlan>("/api/shorts/read", { method: "POST", body: form, timeout: 0 });
+  },
+  /** Shorts Mode: voiceover, timing, footage and the pre-flight report for each episode (renders wait for approval). */
+  makeShorts: (file: string, eps: number[]) =>
+    request<{ id: string }>("/api/shorts/make", { method: "POST", json: { file, eps }, timeout: 0 }),
   excelRender: (file: string, eps: number[]) =>
     request<{ id: string }>("/api/excel/render", { method: "POST", json: { file, eps }, timeout: 0 }),
   lyrics: (name: string) => request<LyricsTiming>(`/api/videos/${encodeURIComponent(name)}/lyrics`),
