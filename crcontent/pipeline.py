@@ -1850,17 +1850,28 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
             section.visual_query = query
     song.save(job / "song.json")  # this version's searches; the song folder keeps its own
     log(f"      -> {len(shots)} shots ({beat_method})")
+    from . import coverloop
+    loop = coverloop.active(song_dir) if pictures == "cover" else None   # the animated cover replaces the picture
     shot_art = (song_art(song_dir, song, spans, shots, lines, drawn, aspect, idea, size, work, log, pictures, direction,
                          fit)
-                if drawn else None)
+                if drawn and not loop else None)
     picker = FootagePicker(orientation(size))
     per_section: dict[int, list[list]] = {}  # section -> [[clip, seconds used], ...]
     shown: dict[int, int] = {}  # section -> shots so far
     exhausted: set[int] = set()  # sections whose search has no new clips left
     clips = []
     report = progress_reporter(log)  # live progress for the app's bar
-    held = bool(shot_art) and pictures == "cover"
-    if held:  # one picture held for the whole song: no cuts, no beat punches
+    held = bool(loop) or (bool(shot_art) and pictures == "cover")
+    if loop:  # the animated cover, looped for the whole song
+        report(0.0, "Setting the animated cover on the frame")
+        frame = coverloop.still(loop)
+        if frame:
+            frame.save(work / COVER_FRAME)  # for the magazine thumbnail and the title's spot
+        log(f"      looping the animated cover for the whole song ({total:.0f}s)")
+        clip = work / "shot_00.mp4"
+        render_scene(loop, None, total, clip, size=size, look=look)
+        clips.append(clip)
+    elif held:  # one picture held for the whole song: no cuts, no beat punches
         picture, plan = shot_art[0]
         seed = (json.loads((work / "art.json").read_text(encoding="utf-8"))["slots"][0].get("seed") or 1)
         report(0.0, "Setting the cover on the frame")
@@ -1940,7 +1951,7 @@ def make_music_video(song_dir: Path, log: Callable[[str], None] = print, idea: s
         title = (neon_title(song.title), TITLE_INTRO[0], end, neon)
         log(f"      the title in neon until {end:.1f}s")
     # on a held cover, the title goes in the empty colour beside the character (not across its face)
-    title_at = title_spot(work / COVER_FRAME, size, cover_colour(song.title, idea)) if title and held else None
+    title_at = title_spot(work / COVER_FRAME, size, cover_colour(song.title, idea)) if title and held and (work / COVER_FRAME).exists() else None
 
     # 3. Karaoke captions
     log("[3/4] Captions")

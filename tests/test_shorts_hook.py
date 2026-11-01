@@ -49,3 +49,7 @@ def test_claude_rejects_the_wrong_animal_no_motion_logos_and_intros():
     assert "doesn't move" in hook.judged(hook.Scan("f", 10), {**seen, "in_motion": False}).reject
     # a clip the motion checks rejected keeps that reason
     assert hook.judged(hook.Scan("e", 10, reject="static: nothing moves"), dict(seen)).reject ==         "static: nothing moves"
+
+
+def test_a_slow_zoom_passes_when_the_shot_asks_for_one(clips):
+    assert hook.scan(clips["zoom"], 2.0, "slow zoom on the crow's eye").reject == ""

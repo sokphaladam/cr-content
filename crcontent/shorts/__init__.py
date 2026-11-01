@@ -90,12 +90,12 @@ def _make_steps(ep, script, cfg, job: Path, media: Path, log) -> Path:
     return job
 
 
-FIELDS = {"line": "First line", "text": "On-screen hook"}
+FIELDS = {"line": "First line", "text": "On-screen hook", "last": "Last line"}
 
 
 def apply_change(job: Path, field: str, value: str, log=print) -> dict:
-    """Use a suggestion in this Short: field "line" (beat 1's voiceover) or "text" (its on-screen hook). Beat 1 is
-    voiced again and the timeline rebuilt (the other beats' audio is cached), the hook clip keeps its footage but
+    """Use a suggestion (or your own words) in this Short: field "line" (beat 1's voiceover), "text" (its on-screen
+    hook) or "last" (the last beat's voiceover, the loop's lead-in). The changed beat is voiced again and the timeline rebuilt (the other beats' audio is cached), the hook clip keeps its footage but
     gets its best window for the new length, and the pre-flight runs again. Your spreadsheet isn't changed: the
     change is noted on the page. Returns the new report."""
     from . import plan
@@ -110,12 +110,12 @@ def apply_change(job: Path, field: str, value: str, log=print) -> dict:
     job = Path(job)
     cfg = job_cfg(job)
     ep = plan.ShortPlan.load(job / "episode.json")
-    scene = ep.script.scenes[0]
-    old = scene.voiceover if field == "line" else scene.text
-    if field == "line":
-        scene.voiceover = value
-    else:
+    scene = ep.script.scenes[-1 if field == "last" else 0]
+    old = scene.text if field == "text" else scene.voiceover
+    if field == "text":
         scene.text = value
+    else:
+        scene.voiceover = value
     ep.notes.append(f"{FIELDS[field]} changed: \"{old}\" → \"{value}\"")
     ep.save(job / "episode.json")
     ep.script.save(job / "scenes.json")
@@ -158,7 +158,8 @@ def _revoice(job: Path, ep, cfg: dict, log) -> dict:
 
         if float(hook_pick.get("start", 0.0)) + tl.slots[0].length * float(hook_pick.get("speed") or 1.0) \
                 > duration(Path(hook_pick["file"])):
-            s = hook.scan(Path(hook_pick["file"]), tl.slots[0].length)
+            s = hook.scan(Path(hook_pick["file"]), tl.slots[0].length,
+                          ((entries[0].get("search") or {}).get("plan") or {}).get("shot") or ep.script.scenes[0].visual)
             hook_pick.update(start=s.start, hook=s.to_json())
         for e in entries[1:]:
             if e.get("reuses_opening"):
@@ -365,7 +366,7 @@ def trim_beat(job: Path, n: int, start: float, apply: bool = False, log=print, e
     out = {"start": start, "end": end, "speed": speed, "clip": round(total, 2), "length": round(length, 2), "score": None, "seen": "",
            "problem": "", "reject": "", "applied": False, "key_objects": shot.get("key_objects", []),
            "objects_seen": [], "missing": [], "pass": match.PASS, "cap": match.GENERIC_MAX}
-    scan = hook.scan_window(path, start, window) if n == 1 else None
+    scan = hook.scan_window(path, start, window, shot["shot"]) if n == 1 else None
     try:
         m = match.check(path, animal, shot["shot"], shot.get("key_objects", []), start, window)
     except Exception as ex:  # no Gemini: the window can still be used, unscored

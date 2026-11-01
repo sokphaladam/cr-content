@@ -122,8 +122,8 @@ def judge(ep, entries: list[dict], tl, log=print) -> dict | None:
 LOOP_SCHEMA = {
     "type": "object",
     "properties": {"natural": {"type": "boolean"}, "joined": {"type": "string"}, "problem": {"type": "string"},
-                   "fix": {"type": "string"}},
-    "required": ["natural", "joined", "problem", "fix"],
+                   "fix": {"type": "string"}, "last_fix": {"type": "string"}},
+    "required": ["natural", "joined", "problem", "fix", "last_fix"],
     "additionalProperties": False,
 }
 STOP = set("a an the and or but so to of in on at for with is are was it its it's this that you your my me i we "
@@ -148,7 +148,8 @@ def loop(ep, log=print) -> dict:
     Repeated words fail it whatever Gemini says."""
     last, first = ep.script.scenes[-1].voiceover.strip(), ep.script.scenes[0].voiceover.strip()
     rep = echoes(last, first)
-    out = {"natural": not rep, "joined": f"{last} {first}", "problem": "", "fix": "", "echoes": rep, "by": "rules"}
+    out = {"natural": not rep, "joined": f"{last} {first}", "problem": "", "fix": "", "last_fix": "", "echoes": rep,
+           "by": "rules"}
     try:
         from ..script import make_client
 
@@ -161,14 +162,18 @@ def loop(ep, log=print) -> dict:
                 f"into its first.\nLast line: \"{last}\"\nFirst line: \"{first}\"\n\nDo they read as ONE natural "
                 "sentence (the first line completes the last)? Repeating or echoing words across the join (\"…will "
                 "bring you— / Your cat just brought you…\") fails it, and so does a join that doesn't make grammatical "
-                "sense. joined: the two as the viewer hears them. problem: what's wrong, or \"\". fix: a new first line "
-                "(at most 7 words, spoken in under 2 s) that completes the last line naturally, or \"\" when it "
+                "sense. The last line always ends on \"—\" and the first line always starts with a capital: that's just "
+                "the cut, never a problem in itself; a first line that answers or completes what the last line sets up "
+                "(\"…the big question is— Is it true?\") passes. joined: the two as the viewer hears them. problem: "
+                "what's wrong, or \"\". fix: a new first line (at most 7 words, spoken in under 2 s) that completes "
+                "the last line naturally, or \"\" when it already works. last_fix: instead, a new last line that "
+                "keeps its meaning, ends on \"—\" and runs into the current first line naturally, or \"\" when it "
                 "already works.")}],
         )
         data = json.loads(next(b.text for b in response.content if b.type == "text"))
         out.update(natural=bool(data["natural"]) and not rep, joined=data["joined"].strip(),
                    problem=data["problem"].strip(), fix=opening(data["fix"]) if data["fix"].strip() else "",
-                   by="Gemini")
+                   last_fix=data["last_fix"].strip(), by="Gemini")
     except Exception as e:
         log(f"      ! loop check without Gemini ({type(e).__name__}): repeated words only")
     if rep and not out["problem"]:

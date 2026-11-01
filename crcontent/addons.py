@@ -42,6 +42,8 @@ PINNED = [
     "torch==2.6.0+cu124", "torchaudio==2.6.0+cu124",
     "diffusers==0.41.0", "transformers==5.19.0", "accelerate==1.15.0", "huggingface_hub==1.33.0", "hf_xet==1.7.0",
     "safetensors==0.8.0", "tokenizers==0.23.3",
+    # LTX-Video's T5 tokenizer ships only spiece.model; without these transformers misreads it as tiktoken
+    "sentencepiece==0.2.2", "protobuf==7.36.2",
     "stable-ts==2.19.1", "openai-whisper==20250625", "demucs==4.1.0",
     "librosa==0.11.0", "numba==0.68.0", "soundfile==0.14.0", "numpy==2.4.6", "scipy==1.17.1",
 ]
@@ -55,7 +57,7 @@ MAC_PACKAGES = ["torch", "torchaudio", "stable-ts>=2.17", "openai-whisper", "dem
                 "soundfile"]
 if not MUSIC_ONLY:
     MAC_PACKAGES += ["diffusers>=0.32", "transformers>=4.46", "accelerate>=1.0", "huggingface_hub", "hf_xet",
-                     "safetensors"]
+                     "safetensors", "sentencepiece", "protobuf"]
 MAC_APPROX_BYTES = 400_000_000 if MUSIC_ONLY else 600_000_000
 # what each kind of install makes importable
 MODULES = ("torch", "stable_whisper", "librosa") if MUSIC_ONLY else ("torch", "diffusers", "stable_whisper", "librosa")

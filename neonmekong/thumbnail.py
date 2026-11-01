@@ -94,6 +94,19 @@ def background(pal: list[tuple[int, int, int]], seed: str, w: int = W, h: int = 
 BACKGROUND_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 
+def active_loop(folder: Path) -> Path | None:
+    """The animated cover, when the song uses it (crcontent/coverloop.py)."""
+    from crcontent import coverloop
+
+    return coverloop.active(folder)
+
+
+def loop_still(file: Path, at: float = 0.35) -> Image.Image | None:
+    from crcontent import coverloop
+
+    return coverloop.still(file, at)
+
+
 def custom_background_file(folder: Path) -> Path | None:
     """The picture you put in the song's folder (background.png / .jpg / .webp), drawn instead of the neon city."""
     return next((folder / f"background{e}" for e in BACKGROUND_EXTS if (folder / f"background{e}").exists()), None)
@@ -102,6 +115,10 @@ def custom_background_file(folder: Path) -> Path | None:
 def custom_background(data: dict, w: int, h: int) -> Image.Image | None:
     """The song's own background picture, scaled to cover w x h (centre-cropped), or None to draw the default."""
     folder = data.get("_dir")
+    loop = active_loop(Path(folder)) if folder else None
+    still = loop_still(loop) if loop else None
+    if still:
+        return cover_crop(still, w, h)
     file = custom_background_file(Path(folder)) if folder else None
     if not file:
         return None
@@ -215,6 +232,37 @@ def render(data: dict, out: Path) -> Path:
     d = ImageDraw.Draw(img)
     for i, ln in enumerate(t_lines):
         d.text((MARGIN, y + i * lead), ln, font=f_title, fill=(255, 255, 255, 255))
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    songjson.backup(out)
+    img.convert("RGB").save(out, quality=92, subsampling=0)
+    return out
+
+
+SHORT_W, SHORT_H = 1080, 1920
+
+
+def render_short(data: dict, text: str, out: Path) -> Path:
+    """The Short / Reel cover, 9:16: the same artwork, the hook line big in the middle, the song's name under it.
+    Keep the text inside the middle of the frame: the apps cover the top and the bottom with their own buttons."""
+    from .overlays import neon_name
+    pal = palette_of(data)
+    own = custom_background(data, SHORT_W, SHORT_H)
+    img = bottom_shade(own) if own else bottom_shade(background(pal, data.get("slug") or data["title"], SHORT_W, SHORT_H, shade=False))
+    badge(img, pal[0], SHORT_W / W)
+
+    lines, f = fit(text.upper(), SHORT_W - 2 * 90, 620, 150, 5)
+    lead = int(f.size * 1.08)
+    y = int(SHORT_H * 0.40)
+    shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    for i, ln in enumerate(lines):
+        sd.text((90, y + i * lead + 6), ln, font=f, fill=(0, 0, 0, 210))
+    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(10)))
+    d = ImageDraw.Draw(img)
+    for i, ln in enumerate(lines):
+        d.text((90, y + i * lead), ln, font=f, fill=(255, 255, 255, 255))
+    d.text((93, y + len(lines) * lead + 30), neon_name(data["title"]).upper(), font=font(48), fill=(*pal[3], 255))
 
     out.parent.mkdir(parents=True, exist_ok=True)
     songjson.backup(out)

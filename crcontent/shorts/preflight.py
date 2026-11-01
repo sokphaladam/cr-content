@@ -37,6 +37,8 @@ def loop_line(ep, loop: dict) -> dict:
     detail = f"\"{loop['joined']}\""
     if not loop["natural"]:
         detail += f": {loop['problem'] or 'not one natural sentence'}"
+    elif loop.get("trusted"):
+        detail += " (Gemini's own fix, applied)"
     elif loop["by"] != "Gemini":
         detail += " (only checked for repeated words: Gemini isn't available)"
     if not ep.loop_marked:
@@ -129,6 +131,7 @@ CSS = STORYBOARD_CSS + """
 .sugs ol { margin:6px 0 0; padding-left:20px; } .sugs li { margin:7px 0; }
 .sugs .stat { color:var(--soft); font-size:12px; font-variant-numeric:tabular-nums; }
 .sugs .long { color:var(--warn); }
+.own { display:flex; gap:6px; margin-top:8px; } .own input { flex:1; min-width:0; }
 button.apply { font-size:12px; padding:2px 10px; margin-left:6px; vertical-align:1px; }
 .fix { margin-top:12px; padding:10px 12px; border:1px dashed var(--line); border-radius:10px; }
 .beats { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:14px; }
@@ -233,7 +236,8 @@ document.addEventListener('click', async (e) => {
   status.textContent = 'Re-voicing beat 1, re-timing and re-running the checks (about half a minute)…';
   try {
     const r = await fetch(`/api/shorts/${encodeURIComponent(job)}/apply`, { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ field: b.dataset.field, value: b.dataset.value }) });
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ field: b.dataset.field,
+        value: b.dataset.value ?? b.closest('.own')?.querySelector('input').value }) });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
     location.reload();
@@ -504,6 +508,12 @@ def _apply(field: str, value: str) -> str:
     return f"<button class=\"apply\" data-field=\"{field}\" data-value=\"{e(value)}\">Apply</button>"
 
 
+def _own(field: str, label: str, value: str = "") -> str:
+    """A box to write your own line; its Apply sends what's typed."""
+    return (f"<div class=\"own\"><input type=\"text\" placeholder=\"{e(label)}\" value=\"{e(value)}\">"
+            f"<button class=\"apply\" data-field=\"{field}\">Apply</button></div>")
+
+
 def _sug(items: list[dict], field: str) -> str:
     out = []
     for it in items:
@@ -646,7 +656,8 @@ def page(job: Path, ep, tl, entries: list[dict], report: dict, frames: list[str]
     if j:
         judge_html = (f"<div class=\"head\"><span class=\"big\">{j['score']}/10</span><span>{e(j['reason'])}</span>"
                       f"</div><div class=\"sugs\"><div><b>Stronger first lines</b><ol>{_sug(j['first_lines'], 'line')}"
-                      f"</ol></div><div><b>Stronger on-screen hooks</b><ol>{_sug(j['hook_texts'], 'text')}</ol></div>"
+                      f"</ol>{_own('line', 'Or write your own first line')}</div><div><b>Stronger on-screen hooks</b><ol>"
+                      f"{_sug(j['hook_texts'], 'text')}</ol>{_own('text', 'Or write your own on-screen hook')}</div>"
                       f"</div><p class=\"hint\">Ranked by {e(j['ranked_by'])}. Apply changes this Short's beat 1 "
                       "(your spreadsheet stays as it is), re-times it and runs every check again.</p>")
         fix = report.get("hook_fix")
@@ -665,6 +676,12 @@ def page(job: Path, ep, tl, entries: list[dict], report: dict, frames: list[str]
             loop_html += (f"<div class=\"fix\">A first line that completes it: \"{e(lp['fix'])}\""
                           + (f" (spoken in {lp['fix_seconds']:.2f}s)" if lp.get("fix_seconds") else "")
                           + f"{_apply('line', lp['fix'])}</div>")
+        if lp.get("last_fix"):
+            loop_html += (f"<div class=\"fix\">Or a last line that runs into it: \"{e(lp['last_fix'])}\""
+                          f"{_apply('last', lp['last_fix'])}</div>")
+    last = ep.script.scenes[-1].voiceover.strip()
+    loop_html += (f"<div class=\"fix\">Write your own{_own('last', 'Last line, ending on —', last)}"
+                  f"{_own('line', 'First line', ep.script.scenes[0].voiceover.strip())}</div>")
     beats = []
     for ent, slot, scene, frame in zip(entries, tl.slots, ep.script.scenes, frames):
         c = ent["chosen"]
@@ -760,13 +777,32 @@ def page(job: Path, ep, tl, entries: list[dict], report: dict, frames: list[str]
 </body></html>"""
 
 
+def _loop(job: Path, ep, log) -> dict:
+    """judge.loop, but a join made from its own fix (or one it passed before) stays passed: Gemini isn't the same run
+    to run, and failing the fix it just gave sends Apply round in circles. Repeated words still fail it."""
+    from . import judge
+
+    lp = judge.loop(ep, log)
+    try:
+        prev = json.loads((job / "preflight.json").read_text(encoding="utf-8")).get("loop") or {}
+    except (OSError, ValueError):
+        prev = {}
+    pair = [ep.script.scenes[-1].voiceover.strip(), ep.script.scenes[0].voiceover.strip()]
+    was = prev.get("pair") or pair  # older reports didn't keep it
+    ours = (pair[1] == prev.get("fix") and pair[0] == was[0]) or (pair[0] == prev.get("last_fix") and pair[1] == was[1])
+    if not lp["natural"] and not lp["echoes"] and (ours or (prev.get("natural") and was == pair)):
+        lp.update(natural=True, problem="", trusted=True)
+    lp["pair"] = pair
+    return lp
+
+
 def write(job: Path, ep, tl, voices, entries: list[dict], cfg: dict, media: Path, log=print) -> dict:
     """preflight.json and preflight.html; returns the report."""
     from . import judge
     from .footage import sources
 
     hook_max = float(cfg["rules"]["hook_max"])
-    report = {"media": str(media), "sources_skipped": sources(cfg)[1], "loop": judge.loop(ep, log)}
+    report = {"media": str(media), "sources_skipped": sources(cfg)[1], "loop": _loop(job, ep, log)}
     if report["loop"].get("fix"):
         report["loop"]["fix_seconds"] = judge.measure([{"text": report["loop"]["fix"]}], ep.script.lang, cfg,
                                                       hook_max)[0]["seconds"]

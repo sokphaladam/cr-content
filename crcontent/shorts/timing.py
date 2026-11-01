@@ -69,5 +69,6 @@ def checks(script: Script, tl: Timeline, voices: list[Voice], cfg: dict) -> list
                    f" -> {cut['total_after']:.1f}s")
     elif total < lo:
         detail += ": shorter than the target (fine if it holds; a longer beat 2-3 adds watch time)"
-    out.append({"check": "length", "ok": lo <= total <= hi, "detail": detail, **({"cut": cut} if cut else {})})
+    # under the target is fine (it's noted): only too long fails
+    out.append({"check": "length", "ok": total <= hi, "detail": detail, **({"cut": cut} if cut else {})})
     return out

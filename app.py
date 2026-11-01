@@ -79,6 +79,11 @@ def _serve_with_reload(port: int) -> None:
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()  # the frozen engine.exe starts motion.py's frame renderers as copies of itself
+    if len(sys.argv) > 2 and sys.argv[1] == "-m":  # `engine.exe -m demucs ...`: the frozen engine has no python to run -m with
+        import runpy
+        sys.argv = sys.argv[2:]
+        runpy.run_module(sys.argv[0], run_name="__main__", alter_sys=True)
+        sys.exit(0)
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
     p = argparse.ArgumentParser()

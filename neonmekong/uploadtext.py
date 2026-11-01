@@ -49,12 +49,19 @@ def hashtags_of(data: dict) -> str:
     return f"#NeonMekong #{g} #LyricVideo"
 
 
+def short_text(data: dict, chorus_lines: list[str]) -> str:
+    """What the Short shows on its cover and opens on: the first chorus line (else the mood), short enough to read."""
+    line = next((ln.strip() for ln in chorus_lines if ln.strip()), "") or data["mood_phrase"] or data["title"]
+    return line if len(line) <= 60 else line[:57].rsplit(" ", 1)[0] + "..."
+
+
 def lyrics_block(s: Suno) -> str:
     return "\n\n".join(f"[{sec.tag}]\n" + "\n".join(sec.lines) for sec in s.sections if sec.lines)
 
 
 def build(data: dict, s: Suno, ai: dict | None = None) -> dict:
     ai = ai or {}
+    chorus = next((sec.lines for sec in s.sections if sec.kind == "chorus"), [])
     hook = ai.get("hook") or HOOKS.get(data["genre"], f"{data['mood_phrase']}: a new song from {config.CHANNEL}.")
     links = [f"Subscribe for new songs: {SUBSCRIBE_URL}"]
     if data["playlist"]:
@@ -70,6 +77,9 @@ def build(data: dict, s: Suno, ai: dict | None = None) -> dict:
         "pinned_comment": ai.get("pinned_comment") or QUESTIONS.get(data["genre"], "Which line is your favourite?"),
         "playlist": data["playlist"] or "(set genre in song.json to pick a playlist)",
         "short_title": f"{data['title']} – chorus ({data['mood_phrase']}) #Shorts"[:100],
+        "short_text": short_text(data, chorus),
+        "short_description": f"{data['mood_phrase'] or data['title']}: the chorus of {data['title']}.\n"
+                             f"Full song on {config.CHANNEL}. Instagram: {config.INSTAGRAM}\n\n{hashtags_of(data)} #Shorts",
     }
 
 
@@ -81,6 +91,8 @@ def render(b: dict) -> str:
         "PINNED COMMENT", b["pinned_comment"], "",
         "ADD TO PLAYLIST", b["playlist"], "",
         "SHORT / REEL TITLE", b["short_title"], "",
+        "SHORT / REEL TEXT (cover and first lines)", b["short_text"], "",
+        "SHORT / REEL DESCRIPTION", b["short_description"], "",
     ])
 
 

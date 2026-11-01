@@ -5,9 +5,12 @@ import { useEffect, useRef, useState } from "react";
 import { ArtStylePicker, artBlocker, useArtStatus } from "./ArtControls";
 import { ShotList } from "./ShotList";
 import { SongPictures } from "./SongPictures";
+import { AnimatedCover, CoverSwitch } from "./AnimatedCover";
 import {
+  API_BASE,
   api,
   type Aspect,
+  type CoverLoop,
   type Lang,
   type Look,
   type LyricPreset,
@@ -19,7 +22,7 @@ import {
   type StyleSuggestion,
   type VideoIdeaSuggestion,
 } from "@/lib/api";
-import { Button, DropZone, Segmented } from "./ui";
+import { Button, DropZone, Segmented, useToast } from "./ui";
 
 // The catalog (presets, looks, installed fonts) is the same for every song: fetch it once per page load.
 let catalogPromise: Promise<StyleCatalog | null> | null = null;
@@ -154,6 +157,55 @@ function Pick<T extends string>({ label, value, options, onChange }: { label: st
 const IDEA_MAX = 12000; // crcontent/web.py IDEA_MAX
 
 /** Idea, footage look and lyric style for a music video. `name` is the song's folder (for Gemini's idea suggestions). */
+/** A one-cover music video's cover, Picture or Animated, like the Lyrics page's; the children are its drawn picture
+ * (shown alone when the video isn't one cover). */
+function SongCover({ name, on, children: picture }: { name: string; on: boolean; children: React.ReactNode }) {
+  const toast = useToast();
+  const [loop, setLoop] = useState<CoverLoop | null>(null);
+  useEffect(() => {
+    let live = true;
+    if (!on) return;
+    api.coverLoop(name).then((l) => live && setLoop(l)).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [name, on]);
+  const [bust, setBust] = useState("");
+  const saved = (l: CoverLoop) => {
+    setLoop(l);
+    setBust(String(Date.now()));
+  };
+  if (!on || !loop) return <>{picture}</>;
+  return (
+    <div className="grid w-full gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="field-label">Cover</span>
+        <CoverSwitch mode={loop.cover_mode} onChange={(cover_mode) => void api.editCoverLoop(name, { cover_mode }).then(saved).catch((e: Error) => toast(e.message, "error"))} />
+      </div>
+      {loop.cover_mode === "animated" ? (
+        <>
+          <AnimatedCover state={loop} onSaved={saved}
+            src={loop.loop ? `${API_BASE}/media/${encodeURIComponent(name)}/${loop.loop}?v=${bust}` : ""}
+            calls={{
+              savePrompt: (loop_prompt) => api.editCoverLoop(name, { loop_prompt }),
+              saveMovement: (loop_movement) => api.editCoverLoop(name, { loop_movement }),
+              gpu: (effects, _cover, again, motion, intensity) => api.gpuCoverLoop(name, { effects, again, motion, intensity }),
+              status: () => api.gpuCoverLoopStatus(name),
+              refresh: () => api.coverLoop(name),
+              draw: (again) => api.drawCoverLoop(name, again),
+              upload: (f) => api.uploadCoverLoop(name, f),
+              reuse: (from) => api.reuseCoverLoop(name, from),
+              remove: () => api.removeCoverLoop(name),
+            }} />
+          <p className="m-0 text-sm text-ink-soft">
+            {loop.loop ? "The render loops this clip for the whole song, and the magazine thumbnail is made from one of its frames." : "No animated cover yet: until you draw or upload one, the render draws the cover picture."}
+          </p>
+        </>
+      ) : picture}
+    </div>
+  );
+}
+
 export function MusicVideoOptions({
   name,
   lang,
@@ -347,7 +399,7 @@ export function MusicVideoOptions({
           </div>
           <code className="block text-sm break-words whitespace-pre-wrap text-ink">{suggested.video_prompt}</code>
           <span className="text-xs text-ink-soft">
-            From your idea, the title, the lyrics and the song's mood: a looping, text-free background. Paste it into a video generator, then add the clip to
+            From your idea, the title, the lyrics and the song&apos;s mood: a looping, text-free background. Paste it into a video generator, then add the clip to
             the scene in your library.
           </span>
         </div>
@@ -424,18 +476,20 @@ export function MusicVideoOptions({
                 </div>
               )}
             </div>
-            <SongPictures
-              name={name}
-              direction={value.direction ?? null}
-              style={value.art_style}
-              pace={value.pictures ?? "normal"}
-              fit={value.picture_fit ?? "fit"}
-              idea={value.idea}
-              look={look}
-              aspect={aspect}
-              status={art.status}
-              blocker={artBlocker(art.status, value.art_style)}
-            />
+            <SongCover name={name} on={value.pictures === "cover"}>
+              <SongPictures
+                name={name}
+                direction={value.direction ?? null}
+                style={value.art_style}
+                pace={value.pictures ?? "normal"}
+                fit={value.picture_fit ?? "fit"}
+                idea={value.idea}
+                look={look}
+                aspect={aspect}
+                status={art.status}
+                blocker={artBlocker(art.status, value.art_style)}
+              />
+            </SongCover>
           </>
         )}
       </div>
@@ -451,7 +505,7 @@ export function MusicVideoOptions({
           Neon title intro
         </label>
         <p className="m-0 text-sm text-ink-soft">
-          The song's name flickers on in neon over the first seconds, like a sign switching on, and fades before the singing starts. The video still
+          The song&apos;s name flickers on in neon over the first seconds, like a sign switching on, and fades before the singing starts. The video still
           starts with the song.
         </p>
         <label className="mt-1 flex cursor-pointer items-center gap-2 text-base font-semibold">
