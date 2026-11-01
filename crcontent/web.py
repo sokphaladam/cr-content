@@ -1327,7 +1327,7 @@ def _run_short_render(job_id: str, folder: Path) -> None:
 
 
 class ShortsApply(BaseModel):
-    field: str  # "line" (beat 1's voiceover) or "text" (its on-screen hook)
+    field: str  # "line" (beat 1's voiceover), "text" (its on-screen hook) or "last" (the last beat's voiceover)
     value: str
 
 

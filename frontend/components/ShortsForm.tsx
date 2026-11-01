@@ -148,7 +148,7 @@ function Checklist({ rules: r, open }: { rules: ShortsRules; open: boolean }) {
     ["script", "length", <>The whole voiceover runs <b>{r.length_min}–{r.length_max}s</b> as recorded (about {Math.round(r.length_min * 2.6)}–{Math.round(r.length_max * 2.6)} words).</>],
     ["script", "loop line", <>The last line <b>doesn&apos;t end a sentence</b> (end it with “—”, not . ! ?) and runs into the first line as one natural sentence. Put a <code>[loops]</code> marker on it.</>],
     ["script", "title", <><b>No #hashtags</b> in the title (they go in the description).</>],
-    ["clips", "hook shot", <>Beat 1&apos;s clip, for its whole stretch: <b>one continuous shot</b> (no cut), the <b>animal itself moving</b> (a pan or zoom alone fails), bright and sharp, no logo, text or intro, and it shows the planned shot ({r.match_pass}/10).</>],
+    ["clips", "hook shot", <>Beat 1&apos;s clip, for its whole stretch: <b>one continuous shot</b> (no cut), the <b>animal itself moving</b> (a pan or zoom alone fails, unless beat 1&apos;s Visual asks for one: "slow zoom on…"), bright and sharp, no logo, text or intro, and it shows the planned shot ({r.match_pass}/10).</>],
     ["clips", "loop shot", <>Beat 1 is <b>real footage</b>, so the last {r.loop_tail}s can cut back to it.</>],
     ["clips", "shot match", <>Every beat&apos;s clip shows <b>its planned shot</b>: {r.match_pass}/10 or more. A clip without the shot&apos;s key objects scores at most {r.generic_max}, so write a Visual you can find.</>],
     ["clips", "placeholders", <>Every beat finds footage: <b>no placeholder cards</b>. Your own clips (<code>&lt;plan&gt;-epNN/scene-XX.mp4</code>) come first.</>],

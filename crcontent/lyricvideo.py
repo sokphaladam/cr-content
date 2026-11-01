@@ -25,7 +25,7 @@ SONGS_DIR = ROOT / "songs"   # in the data folder chosen in Settings > Storage, 
 AUDIO_EXTS = {".mp3", ".wav"}
 EDITABLE = ("title", "genre", "mood_phrase", "scene_theme", "subscribe_line", "plan", "generated_on", "playlist",
             "lyric_style", "mood_grade", "beat_pulse", "pulse_parts", "pulse_when", "neon_intro", "now_playing")
-OUTPUTS = ("thumbnail.jpg", "lyric_full.mp4", "short_chorus.mp4", "instrumental.mp4")
+OUTPUTS = ("thumbnail.jpg", "lyric_full.mp4", "short_chorus.mp4", "short_thumbnail.jpg", "instrumental.mp4")
 STEPS = ("analyze", "text", "checklist", "thumbnail", "video", "short", "instrumental")
 
 _jobs = None      # web.jobs, set by bind()

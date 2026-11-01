@@ -502,6 +502,13 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
                     <figcaption className="text-sm text-ink-soft">Thumbnail (1280×720)</figcaption>
                   </figure>
                 )}
+                {d.files.includes("short_thumbnail.jpg") && (
+                  <figure className="grid gap-1.5">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={songFileUrl(slug, "out/short_thumbnail.jpg", bust)} alt="Short cover" className="max-h-[28rem] rounded-lg border border-line object-contain" />
+                    <figcaption className="text-sm text-ink-soft">Short / Reel cover (1080×1920)</figcaption>
+                  </figure>
+                )}
                 {videos.map(([f, label]) => (
                   <figure key={f} className="grid gap-1.5">
                     <video src={songFileUrl(slug, `out/${f}`, bust)} controls preload="none" className={`w-full rounded-lg bg-black ${f.startsWith("short") ? "max-h-[28rem] object-contain" : ""}`} />

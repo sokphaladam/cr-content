@@ -61,6 +61,8 @@ def run(folder: Path, seconds: float | None = None, draft: bool = False, log=pri
     songjson.move_aside(target)
     log(f"  short: {scene.W}x{scene.H} @{scene.fps}fps, {p['length']:.1f}s (song {p['cut']:.1f}s-{p['end']:.1f}s)")
     lyricvideo.encode(scene, target, seconds, draft, log)
+    from . import thumbnail, uploadtext
+    thumbnail.render_short(data, uploadtext.short_text(data, chorus_lines), out / "short_thumbnail.jpg")
     (out / "short.json").write_text(json.dumps({k: p[k] for k in ("cut", "end", "length")}, indent=2) + "\n",
                                     encoding="utf-8")
     return target

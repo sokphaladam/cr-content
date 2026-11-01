@@ -4,7 +4,7 @@ the 2 s of it to show.
 Each clip is sampled (SAMPLE_FPS) and, between samples, tracked corners fit the camera's move (pan, zoom: a
 similarity transform, RANSAC), and dense optical flow measures how far everything else travels besides it: the
 subject's own motion, as a distance (fine detail like fur can't fake it). So:
-- a slow zoom or pan: the camera moves, nothing in the frame does -> rejected
+- a slow zoom or pan: the camera moves, nothing in the frame does -> rejected, unless the planned shot asks for one
 - static: neither moves -> rejected
 - dark (fades, night shots) or soft -> rejected
 Every window of the beat's length is scored (own motion, sharpness, exposure; never across a cut or in the first
@@ -13,6 +13,7 @@ the wrong animal, no movement, a logo or an intro rejects it. Clips that fail ar
 """
 import json
 import math
+import re
 import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -32,6 +33,7 @@ OWN_MOTION_FULL = 4.0    # ... from here on, full marks for motion
 CAMERA_MOVE = 0.001      # camera travel (fraction of the width per sample) that counts as a pan or zoom
 DARK = 0.16              # mean brightness under this: too dark for the first frame people see
 SOFT = 0.35              # sharpness under this: blurred
+CAMERA_SHOT = re.compile(r"\b(zoom|pan|push[- ]?in|dolly|track(ing)?|tilt|crane|drift)", re.I)  # a shot that's the camera's move
 
 
 
@@ -56,6 +58,7 @@ class Scan:
     bright: float = 0.0
     score: float = 0.0
     reject: str = ""           # why the clip can't open the Short ("" = it can)
+    camera_shot: bool = False  # the planned shot is a zoom or pan: the animal needn't move
     check: dict = field(default_factory=dict)  # Gemini's look at the window
 
     def to_json(self) -> dict:
@@ -140,8 +143,8 @@ def has_camera_move(path: Path, start: float, seconds: float) -> bool:
     return float(np.mean(moves)) > CAMERA_MOVE
 
 
-def scan(path: Path, beat: float) -> Scan:
-    """The clip's best window of `beat` seconds, or why none will do."""
+def scan(path: Path, beat: float, shot: str = "") -> Scan:
+    """The clip's best window of `beat` seconds, or why none will do (`shot`: the planned shot, for CAMERA_SHOT)."""
     total = duration(path)
     frames = _samples(path, min(total, SCAN_SECONDS))
     if len(frames) < 3:
@@ -170,6 +173,7 @@ def scan(path: Path, beat: float) -> Scan:
             best = cand
     if best is None:
         return Scan(str(path), total, reject="no stretch without a cut")
+    best.camera_shot = bool(CAMERA_SHOT.search(shot))
     best.reject = _reject(best)
     return best
 
@@ -178,14 +182,14 @@ def _reject(s: Scan) -> str:
     """Why a clip's window can't open the Short ("" = it can): too dark, no motion of its own, or soft."""
     if s.bright < DARK:
         return f"too dark (brightness {s.bright:.2f})"
-    if s.own < OWN_MOTION_MIN:
+    if s.own < OWN_MOTION_MIN and not s.camera_shot:
         return "slow zoom or pan: only the camera moves" if s.camera > CAMERA_MOVE else "static: nothing moves"
     if s.sharp < SOFT:
         return f"soft or blurred (sharpness {s.sharp:.2f})"
     return ""
 
 
-def scan_window(path: Path, start: float, beat: float) -> Scan:
+def scan_window(path: Path, start: float, beat: float, shot: str = "") -> Scan:
     """The hook rules for the `beat` seconds of a clip from `start` (a window picked by hand, not the best one)."""
     total = duration(path)
     frames = _samples(path, beat + 1 / SAMPLE_FPS, start)
@@ -199,7 +203,8 @@ def scan_window(path: Path, start: float, beat: float) -> Scan:
         samples.append(s)
     win = samples[1:]
     out = Scan(str(path), total, start, float(np.mean([s.own for s in win])), float(np.mean([s.camera for s in win])),
-               float(np.mean([s.sharp for s in win])), float(np.mean([s.bright for s in samples])))
+               float(np.mean([s.sharp for s in win])), float(np.mean([s.bright for s in samples])),
+               camera_shot=bool(CAMERA_SHOT.search(shot)))
     out.reject = "a cut inside this stretch" if any(s.cut for s in win) else _reject(out)
     return out
 
@@ -216,6 +221,6 @@ def judged(s: Scan, check: dict) -> Scan:
         s.reject = "logo, watermark or text in the shot"
     elif check.get("intro_or_title"):
         s.reject = "an intro, title card or fade"
-    elif check.get("in_motion") is False:
+    elif check.get("in_motion") is False and not s.camera_shot:
         s.reject = f"the animal doesn't move in the frames Gemini saw ({check.get('seen', '')})"
     return s

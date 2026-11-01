@@ -152,3 +152,13 @@ def test_tags_match_any_word_the_animal_goes_by():
     assert footage.tagged({"tags": "kittens, milk, glass"}, {"cat", "cats", "kitten", "kittens"})
     assert not footage.tagged({"tags": "rooster, hen, farm"}, {"cat", "cats"})
     assert footage.tagged({"source": "commons"}, {"cat"})  # no tags at all: can't tell, so it's checked
+
+
+def test_an_applied_loop_fix_stays_passed(tmp_path, monkeypatch):
+    from types import SimpleNamespace as NS
+    ep = NS(script=NS(scenes=[NS(voiceover="This crow knows you."), NS(voiceover="Think—")]))
+    monkeypatch.setattr(judge, "loop", lambda ep, log: {"natural": False, "problem": "odd", "echoes": []})
+    (tmp_path / "preflight.json").write_text('{"loop": {"fix": "This crow knows you.", "pair": ["Think—", "Old."]}}', encoding="utf-8")
+    assert preflight._loop(tmp_path, ep, print)["natural"] is True
+    (tmp_path / "preflight.json").write_text('{"loop": {"fix": "Something else."}}', encoding="utf-8")
+    assert preflight._loop(tmp_path, ep, print)["natural"] is False

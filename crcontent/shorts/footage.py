@@ -146,7 +146,7 @@ class Picker:
             return attempt
         scan = None
         if is_hook:
-            scan = hook.scan(path, length)
+            scan = hook.scan(path, length, plan["shot"])
             if scan.reject:
                 attempt.update(reject=scan.reject, motion=round(scan.own, 2))
                 return attempt
@@ -242,7 +242,7 @@ def own_pick(path: Path, length: float, is_hook: bool, animal: str, plan: dict,
     flags = []
     scan = None
     if is_hook and chosen["kind"] == "video":
-        scan = hook.scan(path, length)
+        scan = hook.scan(path, length, plan["shot"])
         chosen.update(start=scan.start, hook=scan.to_json())
         if scan.reject:
             flags.append(f"your hook clip: {scan.reject}")
