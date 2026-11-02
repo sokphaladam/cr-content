@@ -34,7 +34,6 @@ import {
 import { LyricsTiming } from "@/components/LyricsTiming";
 import { NavRail, type AppView } from "@/components/NavRail";
 import { Settings } from "@/components/Settings";
-import { Campaigns } from "@/components/Campaigns";
 import { LyricVideo } from "@/components/LyricVideo";
 import { SongEditor } from "@/components/SongEditor";
 import {
@@ -708,7 +707,7 @@ function Studio() {
           options={options}
           onNew={startNew}
           onLibrary={() => {
-            if (view === "settings") {
+            if (view !== "studio") {
               setView("studio");
               setLibraryHidden(false);
             } else if (editing) setLibraryInEditor((open) => !open);
@@ -716,9 +715,6 @@ function Studio() {
           }}
           onSettings={() =>
             setView((v) => (v === "settings" ? "studio" : "settings"))
-          }
-          onCampaigns={() =>
-            setView((v) => (v === "campaigns" ? "studio" : "campaigns"))
           }
           onLyricVideo={() =>
             setView((v) => (v === "lyricvideo" ? "studio" : "lyricvideo"))
@@ -735,9 +731,6 @@ function Studio() {
           onOpenLibrary={() => setLibraryOpen(true)}
           onOpenSettings={() =>
             setView((v) => (v === "settings" ? "studio" : "settings"))
-          }
-          onOpenCampaigns={() =>
-            setView((v) => (v === "campaigns" ? "studio" : "campaigns"))
           }
           onOpenLyricVideo={() =>
             setView((v) => (v === "lyricvideo" ? "studio" : "lyricvideo"))
@@ -756,22 +749,6 @@ function Studio() {
           >
             <CircleAlert className="size-4 shrink-0" />
             {engineError}
-          </div>
-        )}
-
-        {view === "campaigns" && (
-          <div className="min-h-0 flex-1">
-            <Campaigns
-              claudeReady={!!options?.keys.ai}
-              onVideosChanged={() => void loadVideos()}
-              onOpenSettings={() => setView("settings")}
-              onOpenVideo={(name) => {
-                setView("studio");
-                setLibraryTab("videos");
-                setLibraryHidden(false);
-                void selectVideo(name, true);
-              }}
-            />
           </div>
         )}
         {view === "lyricvideo" && (

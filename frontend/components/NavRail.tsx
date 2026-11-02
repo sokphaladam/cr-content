@@ -1,10 +1,10 @@
 "use client";
 
-import { FolderOpen, Megaphone, Music2, Plus, Settings, Smartphone } from "lucide-react";
+import { FolderOpen, Music2, Plus, Settings, Smartphone } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Options } from "@/lib/api";
 
-export type AppView = "studio" | "campaigns" | "lyricvideo" | "settings";
+export type AppView = "studio" | "lyricvideo" | "settings";
 
 function RailButton({
   label,
@@ -44,7 +44,6 @@ export function NavRail({
   onNew,
   onLibrary,
   onSettings,
-  onCampaigns,
   onLyricVideo,
   onPreview,
 }: {
@@ -54,7 +53,6 @@ export function NavRail({
   onNew: () => void;
   onLibrary: () => void;
   onSettings: () => void;
-  onCampaigns: () => void;
   onLyricVideo: () => void;
   onPreview?: () => void; // below wide screens the preview is a slide-over
 }) {
@@ -71,9 +69,6 @@ export function NavRail({
         </RailButton>
         <RailButton label="Library" active={view === "studio" && libraryOpen} onClick={onLibrary}>
           <FolderOpen className="size-5" />
-        </RailButton>
-        <RailButton label="Campaigns" active={view === "campaigns"} onClick={onCampaigns}>
-          <Megaphone className="size-5" />
         </RailButton>
         <RailButton label="Lyrics" active={view === "lyricvideo"} onClick={onLyricVideo}>
           <Music2 className="size-5" />

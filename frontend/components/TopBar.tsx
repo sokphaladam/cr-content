@@ -1,11 +1,10 @@
-import { Megaphone, Music2, PanelLeft, Settings, Smartphone } from "lucide-react";
+import { Music2, PanelLeft, Settings, Smartphone } from "lucide-react";
 import { IconButton } from "./ui";
 
 /** Header below laptop width, where the navigation rail is hidden: library, settings and preview open from here. */
 export function TopBar({
   onOpenLibrary,
   onOpenSettings,
-  onOpenCampaigns,
   onOpenLyricVideo,
   onOpenPreview,
   showPreviewButton,
@@ -13,7 +12,6 @@ export function TopBar({
 }: {
   onOpenLibrary: () => void;
   onOpenSettings: () => void;
-  onOpenCampaigns: () => void;
   onOpenLyricVideo: () => void;
   onOpenPreview: () => void;
   showPreviewButton: boolean;
@@ -36,9 +34,6 @@ export function TopBar({
         )}
         <IconButton label="Lyric video" onClick={onOpenLyricVideo} tone="rail">
           <Music2 className="size-5" />
-        </IconButton>
-        <IconButton label="Campaigns" onClick={onOpenCampaigns} tone="rail">
-          <Megaphone className="size-5" />
         </IconButton>
         <IconButton label="Settings" onClick={onOpenSettings} tone="rail" className="relative">
           <Settings className="size-5" />

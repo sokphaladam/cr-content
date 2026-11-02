@@ -537,8 +537,10 @@ def visual_checks(checks: list, found: dict, rules: dict, total: float, issue) -
             _check(checks, d, "visual", "not_checked", title, "No frames could be sampled.")
         return
     # flat frames (one colour, title cards fading) have no edges to judge sharpness by
-    textured = [x for x in samples if x.get("blur") is not None and x["blur"] == x["blur"]
-                and (x.get("yhigh", 0) - x.get("ylow", 0)) > 30]
+    textured = [x for x in samples if x.get("blur") is not None and (x.get("yhigh", 0) - x.get("ylow", 0)) > 30]
+    for x in textured:  # blurdetect gives nan when it finds no edges at all: on a frame with contrast that's the softest
+        if x["blur"] != x["blur"]:
+            x["blur"] = float("inf")
     if not has_filter("blurdetect"):
         _check(checks, "visual.sharpness", "visual", "not_checked", "Sharpness", "This FFmpeg has no blurdetect filter (needs 5.1+).")
     elif not textured:
@@ -548,7 +550,7 @@ def visual_checks(checks: list, found: dict, rules: dict, total: float, issue) -
         for a, b in soft:
             worst = max(x["blur"] for x in textured if a <= x["t"] < b)
             issue("visual.sharpness", "visual", f"Soft or blurry picture {_clock(a)}–{_clock(b)}",
-                  f"Blur score up to {worst:.0f} (sharp footage is about 4; threshold {rules['blur']:.0f}). {note}",
+                  f"Blur score up to {'max (no edges found)' if worst == float('inf') else f'{worst:.0f}'} (sharp footage is about 4; threshold {rules['blur']:.0f}). {note}",
                   "Fine for a deliberate soft look or motion blur; otherwise use a sharper clip.", a, min(b, total), "low")
         if not soft:
             _check(checks, "visual.sharpness", "visual", "pass", "Picture is sharp", note)

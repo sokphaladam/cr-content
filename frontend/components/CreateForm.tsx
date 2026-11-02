@@ -294,7 +294,7 @@ export function CreateForm({
   onLongVideo: (jobId: string, title: string) => void;
   onShorts: (jobId: string, title: string) => void;
 }) {
-  const [mode, setMode] = useState<Mode>("topic");
+  const [mode, setMode] = useState<Mode>("shorts");
   const [songSource, setSongSource] = useState<"own" | "ai">("own");
   const [topic, setTopic] = useState("");
   const [lang, setLang] = useState<Lang>("en");
@@ -432,10 +432,8 @@ export function CreateForm({
         <div className="grid gap-2">
           <h1 className="page-title m-0">Make a new video</h1>
           <p className="page-intro m-0">
-            Start from an idea and let Gemini write the script, paste a script
-            you already have, or upload a content plan in Excel. Every script
-            becomes a draft you can edit. For a long YouTube video, upload its
-            script .md.
+            Make a Short from your clips, or upload a script .md for a long
+            YouTube video. Lyric videos live under Lyrics in the side rail.
           </p>
         </div>
 
@@ -447,11 +445,7 @@ export function CreateForm({
             setMsg({ text: "" });
           }}
           items={[
-            { value: "topic", label: "Start from a topic" },
-            { value: "paste", label: "Paste a script" },
-            { value: "excel", label: "Excel plan" },
             { value: "shorts", label: "Shorts Mode" },
-            { value: "song", label: "Music video" },
             { value: "long", label: "Long video" },
           ]}
         />
