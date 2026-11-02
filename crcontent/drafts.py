@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from .config import DRAFTS_DIR
+from .director_plan import DirectorPlan
 from .script import VideoScript
 
 
@@ -18,6 +19,7 @@ class Draft(BaseModel):
     voice: str = ""
     rate: str = "+5%"
     music: str = ""
+    plan: DirectorPlan | None = None  # Script-to-Video projects only; the editor saves without it
     created: str = ""
     updated: str = ""
 
@@ -51,7 +53,10 @@ def save(draft_id: str, draft: Draft) -> Draft:
     folder = _folder(draft_id)
     if not (folder / "draft.json").exists():
         raise KeyError(draft_id)
-    draft.created = load(draft_id).created or _now()
+    stored = load(draft_id)
+    draft.created = stored.created or _now()
+    if draft.plan is None:  # the editor doesn't send the plan back: keep the one on disk
+        draft.plan = stored.plan
     draft.updated = _now()
     _write(folder, draft)
     return draft

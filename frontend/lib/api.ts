@@ -16,6 +16,8 @@ const desktopEngine = typeof window !== "undefined" ? window.__ENGINE_URL__ : un
 export const API_BASE = (desktopEngine ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
 
 export type Lang = "en" | "km";
+// must match director_plan.STYLES in the engine
+export type VisualStyle = "cinematic_documentary" | "cinematic_wildlife" | "educational" | "storytelling";
 
 export interface Scene {
   narration: string;
@@ -1122,6 +1124,10 @@ export const api = {
     request<{ videos: Outlier[]; found: number; note?: string }>("/api/outliers", { method: "POST", json: { query, lang, length }, timeout: 0 }),
   importScript: (text: string) =>
     request<{ script: VideoScript; lang: Lang; method: "claude" | "basic" }>("/api/import", { method: "POST", json: { text, lang: "auto" }, timeout: 0 }),
+  /** Script to Video: a finished script becomes a Short draft or starts a Long Video storyboard, with its Director Plan. */
+  scriptVideo: (body: { text: string; format: "short" | "long"; lang: Lang | "auto"; visual_style: VisualStyle }) =>
+    request<{ format: "short" | "long"; id: string; title: string; scenes: number; method?: "claude" | "basic" }>(
+      "/api/script-video", { method: "POST", json: body, timeout: 0 }),
   translate: (script: VideoScript, target: Lang) =>
     request<VideoScript>("/api/translate", { method: "POST", json: { script, target }, timeout: 0 }),
   ideas: (narration: string, current: string) =>

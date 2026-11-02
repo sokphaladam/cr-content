@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import { ExcelPlanForm } from "./ExcelPlanForm";
 import { OutlierFinder } from "./OutlierFinder";
+import { ScriptVideoForm } from "./ScriptVideoForm";
 import { ShortsForm } from "./ShortsForm";
 import {
   Button,
@@ -48,7 +49,7 @@ const PASTE_EXAMPLE = [
   "…",
 ].join("\n");
 
-type Mode = "topic" | "paste" | "excel" | "shorts" | "song" | "long";
+type Mode = "script" | "topic" | "paste" | "excel" | "shorts" | "song" | "long";
 
 const LYRICS_EXAMPLE = [
   "[Verse 1]",
@@ -279,6 +280,7 @@ export function CreateForm({
   onExcelRender,
   onLongVideo,
   onShorts,
+  onDraft,
 }: {
   options: Options | null;
   onScript: (
@@ -293,8 +295,9 @@ export function CreateForm({
   onExcelRender: (jobId: string, title: string) => void;
   onLongVideo: (jobId: string, title: string) => void;
   onShorts: (jobId: string, title: string) => void;
+  onDraft: (id: string, notice: string) => void;
 }) {
-  const [mode, setMode] = useState<Mode>("shorts");
+  const [mode, setMode] = useState<Mode>("script");
   const [songSource, setSongSource] = useState<"own" | "ai">("own");
   const [topic, setTopic] = useState("");
   const [lang, setLang] = useState<Lang>("en");
@@ -432,8 +435,9 @@ export function CreateForm({
         <div className="grid gap-2">
           <h1 className="page-title m-0">Make a new video</h1>
           <p className="page-intro m-0">
-            Make a Short from your clips, or upload a script .md for a long
-            YouTube video. Lyric videos live under Lyrics in the side rail.
+            Paste a finished script and choose a Short or a long video. You can
+            still make a Short from your own clips, or upload a script .md.
+            Lyric videos live under Lyrics in the side rail.
           </p>
         </div>
 
@@ -445,8 +449,9 @@ export function CreateForm({
             setMsg({ text: "" });
           }}
           items={[
-            { value: "shorts", label: "Shorts Mode" },
-            { value: "long", label: "Long video" },
+            { value: "script", label: "Script to video" },
+            { value: "shorts", label: "Shorts from clips" },
+            { value: "long", label: "Long video (.md)" },
           ]}
         />
 
@@ -740,6 +745,10 @@ export function CreateForm({
             onDrafts={onExcelDrafts}
             onRender={onExcelRender}
           />
+        )}
+
+        {mode === "script" && (
+          <ScriptVideoForm ai={!!options?.keys.ai} onDraft={onDraft} onLongVideo={onLongVideo} />
         )}
 
         {mode === "shorts" && <ShortsForm onStarted={onShorts} />}

@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import addons, art, campaigns, drafts, locations, lyricvideo, music, packaging, publish, quality, quality_preview, rights, schedule, sheet, voiceover
+from . import addons, art, campaigns, director_plan, drafts, locations, lyricvideo, music, packaging, publish, quality, quality_preview, rights, schedule, sheet, voiceover
 from .config import ASSETS_DIR, CACHE_DIR, CODE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT, SCENE_PAD_SEC, frame_size
 from .lyrics import SongScript, generate_song, suggest_video_ideas
 from .align import lines_from_json, load_lines, save_lines
@@ -1133,7 +1133,7 @@ def longform_upload(name: str, n: int, file: UploadFile = File(...)):
 LONG_SCRIPTS = ROOT / "scripts"  # uploaded script .md files; the file name picks its media/<name>/ folder
 
 
-def _run_storyboard(job_id: str, script_md: Path) -> None:
+def _run_storyboard(job_id: str, script_md: Path, plan=None) -> None:
     from . import longform
 
     job = jobs[job_id]
@@ -1142,6 +1142,8 @@ def _run_storyboard(job_id: str, script_md: Path) -> None:
         job["status"] = "running"
     try:
         folder = longform.make_storyboard(script_md, log=log)
+        if plan is not None:  # a Script-to-Video project keeps its Director Plan beside the storyboard
+            (folder / "plan.json").write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         with jobs_lock:
             job.update(status="done", step=5, video=folder.name, source=folder.name)
     except Exception as e:
@@ -1174,6 +1176,68 @@ def longform_new(file: UploadFile = File(...)):
         jobs[job_id] = {"id": job_id, "kind": "long_video", "status": "queued", "step": 0, "log": [], "title": script.title}
     renderer.submit(_run_storyboard, job_id, dest)
     return {"id": job_id, "title": script.title, "scenes": len(script.scenes), "notes": script.notes}
+
+
+class ScriptVideoRequest(BaseModel):
+    text: str
+    format: str  # "short" (9:16 draft) or "long" (16:9 storyboard)
+    lang: str = "auto"
+    visual_style: str = director_plan.STYLES[0]
+
+
+@app.post("/api/script-video")
+def script_video(req: ScriptVideoRequest):
+    """Script to Video: a pasted finished script becomes a project in either format, with its Director Plan saved.
+    A Short opens as a draft; a Long Video starts the storyboard job (voiceover, timing, footage)."""
+    from .longform.parse import parse
+
+    if req.format not in director_plan.ASPECTS:
+        raise HTTPException(400, "Choose Short or Long video.")
+    if req.visual_style not in director_plan.STYLES:
+        raise HTTPException(400, f"Unknown visual style {req.visual_style}.")
+    if len(req.text) > 2_000_000:
+        raise HTTPException(400, "That script is too big (over 2 MB). It should be text only.")
+    if req.format == "long":  # a script already written as the long-video table keeps its chapters and title cards
+        LONG_SCRIPTS.mkdir(parents=True, exist_ok=True)
+        probe = LONG_SCRIPTS / f".paste-{uuid.uuid4().hex[:8]}.md"
+        probe.write_text(req.text, encoding="utf-8")
+        try:
+            table = parse(probe)
+        except Exception:  # not a table (or not one it can read): the importer below handles any layout
+            table = None
+        finally:
+            probe.unlink(missing_ok=True)
+        if table:
+            title = "Untitled" if table.title == probe.stem else table.title  # no "# Title" line
+            plan = director_plan.from_scenes(title, "long", table.lang, req.visual_style, [
+                {"narration": s.voiceover, "visual_query": s.visual, "on_screen_text": s.text} for s in table.scenes])
+            return _start_long(req.text, plan)
+    try:
+        script, lang, method = import_script(req.text, req.lang, use_claude=bool(os.getenv("GEMINI_API_KEY")))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    plan = director_plan.from_scenes(script.title, req.format, lang, req.visual_style,
+                                     [s.model_dump() for s in script.scenes])
+    if req.format == "long":
+        return _start_long(director_plan.longform_markdown(plan), plan) | {"method": method}
+    draft_id, _ = drafts.create(drafts.Draft(script=script, lang=lang, topic=script.title, plan=plan))
+    return {"format": "short", "id": draft_id, "title": script.title, "scenes": len(script.scenes), "method": method}
+
+
+def _start_long(markdown: str, plan: "director_plan.DirectorPlan") -> dict:
+    from .pipeline import slugify
+
+    # the file name picks media/<name>/ for the user's own clips: never overwrite another script's file
+    stem = slugify(plan.project.title)
+    dest = LONG_SCRIPTS / f"{stem}.md"
+    if dest.exists():
+        dest = LONG_SCRIPTS / f"{stem}-{datetime.now():%Y%m%d-%H%M%S}.md"
+    dest.write_text(markdown, encoding="utf-8")
+    job_id = uuid.uuid4().hex[:10]
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "long_video", "status": "queued", "step": 0, "log": [], "title": plan.project.title}
+    renderer.submit(_run_storyboard, job_id, dest, plan)
+    return {"format": "long", "id": job_id, "title": plan.project.title, "scenes": len(plan.scenes)}
 
 
 def _run_long_video(job_id: str, folder: Path) -> None:

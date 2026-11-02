@@ -923,6 +923,12 @@ function Studio() {
                   setPreviewOpen(true);
                   watch(id);
                 }}
+                onDraft={async (id, notice) => {
+                  await loadDrafts();
+                  setLibraryTab("drafts");
+                  await selectDraft(id);
+                  toast(notice, "success");
+                }}
                 onExcelDrafts={async (made) => {
                   await loadDrafts();
                   setLibraryTab("drafts");
