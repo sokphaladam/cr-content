@@ -407,6 +407,24 @@ caption with a copy button, covers and the clip for every candidate), `report.js
 lengths, `clip.repeat_penalty` (0 = the same chorus may be picked twice), `ai_judge.enabled`, cover counts and `render.encoder` (`auto`, `nvenc` or `cpu`). Change a weight and run
 again; the report shows the weights it used.
 
+## Quality check (Final Render Inspector)
+
+A **Quality check** card under a finished Short (Library → Rendered) and under each Lyric Studio output inspects the
+exported file itself, locally, without AI keys, and never changes it (`crcontent/quality.py`, one ffprobe read and one
+ffmpeg decode). It checks: file present and readable, video/audio streams, resolution and orientation against the
+video's aspect setting, frame rate, pixel format, colour tag, length (Lyric Studio: against the song), audio vs
+video length, decode errors, black and frozen stretches, silence / audio ending early, integrated loudness and true
+peak. Each check is **Pass**, **Warning** (review it), **Fail** (blocking) or **Not checked** (it couldn't run or isn't
+built yet: blur/exposure, crop, captions and lyric timing, pacing, rights). Not checked never counts as a pass.
+Click an issue to jump the player there; black/frozen/silence issues keep a frame in `quality/`.
+
+The report is saved as `quality/<file>.json` next to the video, with the file's SHA-256. Re-render and it shows as
+**Outdated** until you check again. Thresholds are per profile (Shorts / Lyric) in `quality.PROFILES`. Loudness is
+guidance only (YouTube turns louder mixes down to about −14 LUFS). It doesn't replace YouTube Studio's Content ID
+and ad-suitability checks. API: `POST|GET /api/inspect/video/<name>`, `POST|GET /api/inspect/song/<slug>?file=lyric_full.mp4`,
+`POST /api/inspect/jobs/<id>/cancel`; progress via `/api/jobs/<id>`. Tests: `pytest tests/test_quality.py`
+(generates its fixtures with ffmpeg).
+
 ## Script to Video (long YouTube videos from a script)
 
 Turns a script `.md` into an upload-ready 1920×1080 YouTube video (8–15 min): voiceover per scene, the timeline

@@ -4,6 +4,7 @@ import { Check, Copy, Music2, Pause, Play, Plus, RefreshCw } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, lyricPreviewUrl, lyricStreamUrl, songFileUrl, type Job, type LyricSong, type LyricSongDetail } from "@/lib/api";
 import { LyricPicturesCard } from "./LyricPictures";
+import { QualityInspector } from "./QualityInspector";
 import { RowMenu } from "./Library";
 import { Button, Field, FileInput, Spinner, useToast } from "./ui";
 
@@ -228,6 +229,7 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
   const [from, setFrom] = useState(0); // the second the stream started from
   const [run, setRun] = useState(0); // a new number = a new stream (play, seek, or a new look while playing)
   const audioRef = useRef<HTMLAudioElement>(null);
+  const players = useRef<Record<string, HTMLVideoElement | null>>({}); // rendered outputs, for quality-issue seeking
   const synced = useRef(false); // the song starts with the stream's first frame
 
   const load = useCallback(async () => {
@@ -511,8 +513,19 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
                 )}
                 {videos.map(([f, label]) => (
                   <figure key={f} className="grid gap-1.5">
-                    <video src={songFileUrl(slug, `out/${f}`, bust)} controls preload="none" className={`w-full rounded-lg bg-black ${f.startsWith("short") ? "max-h-[28rem] object-contain" : ""}`} />
+                    <video ref={(el) => { players.current[f] = el; }} src={songFileUrl(slug, `out/${f}`, bust)} controls preload="none" className={`w-full rounded-lg bg-black ${f.startsWith("short") ? "max-h-[28rem] object-contain" : ""}`} />
                     <figcaption className="text-sm text-ink-soft">{label} · <a className="underline" href={songFileUrl(slug, `out/${f}`)} download>download</a></figcaption>
+                    <QualityInspector
+                      target={{ scope: "song", name: slug, file: f }}
+                      src={songFileUrl(slug, `out/${f}`, bust)}
+                      vertical={f.startsWith("short")}
+                      onSeek={(t) => {
+                        const v = players.current[f];
+                        if (!v) return;
+                        v.currentTime = t;
+                        void v.play().catch(() => {});
+                      }}
+                    />
                   </figure>
                 ))}
               </div>

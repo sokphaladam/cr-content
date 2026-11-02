@@ -11,6 +11,7 @@ import { CaptionPanel, LiveControls, LiveFrame, type FrameEdits } from "./LivePr
 import { MusicVideoOptions } from "./MusicVideoOptions";
 import { PackagingReview } from "./PackagingReview";
 import { PublishCard } from "./PublishCard";
+import { QualityInspector } from "./QualityInspector";
 
 const STEPS = ["Script", "Voiceover", "Footage", "Captions", "Final render"];
 const SONG_STEPS = ["Lyrics", "Compose", "Lyric timing"];
@@ -852,6 +853,7 @@ export function PreviewPane({
   onOpenSettings: () => void;
   onVideosChanged: () => void; // new videos were made outside the page's own jobs (Smart Highlights clips)
 }) {
+  const player = useRef<HTMLVideoElement>(null); // the rendered video, so a quality issue can seek it
   const showProgress = rendering || job?.status === "error";
   const canToggle = !!scene && !!detail?.video && !showProgress;
   const showVideo = !showProgress && !!detail?.video && (view === "video" || !scene);
@@ -878,6 +880,7 @@ export function PreviewPane({
   ) : showVideo && detail ? (
     <video
       key={detail.name}
+      ref={player}
       src={`${outputUrl(detail.name, "video.mp4")}?v=${encodeURIComponent(detail.created)}`}
       controls
       playsInline
@@ -946,6 +949,18 @@ export function PreviewPane({
         )}
         {!showProgress && !showVideo && scene && !live && (
           <p className="m-0 text-center text-sm text-ink-soft">Approximate look of the scene you&apos;re editing. Click a scene to preview it.</p>
+        )}
+        {showVideo && detail?.video && (
+          <QualityInspector
+            key={`quality-${detail.name}`}
+            target={{ scope: "video", name: detail.name }}
+            src={outputUrl(detail.name, "video.mp4")}
+            onSeek={(t) => {
+              if (!player.current) return;
+              player.current.currentTime = t;
+              void player.current.play().catch(() => {});
+            }}
+          />
         )}
         {showVideo && detail && <ThumbnailCard key={`thumb-${detail.name}`} detail={detail} onChange={onThumbnail} />}
         {showVideo && detail?.kind === "music_video" && (

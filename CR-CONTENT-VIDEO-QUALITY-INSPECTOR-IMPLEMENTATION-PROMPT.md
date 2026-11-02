@@ -304,31 +304,31 @@ Use consistent issue/report data structures across preview and final-render insp
 Each issue should support fields equivalent to:
 
 ```ts
- type QualityIssue = {
-   id: string;
-   stage: "preview" | "render";
-   category:
-     | "technical"
-     | "visual"
-     | "audio"
-     | "captions"
-     | "lyrics"
-     | "storytelling"
-     | "rights";
-   severity: "critical" | "high" | "medium" | "low" | "info";
-   status: "fail" | "warning" | "pass" | "not_checked";
-   title: string;
-   description: string;
-   recommendation?: string;
-   timestampStart?: number;
-   timestampEnd?: number;
-   evidenceImagePath?: string;
-   detectorId: string;
-   confidence?: number;
-   canAutoFix?: boolean;
-   suggestedAction?: string;
-   userDisposition?: "unreviewed" | "accepted" | "dismissed" | "fixed";
- };
+type QualityIssue = {
+  id: string;
+  stage: "preview" | "render";
+  category:
+    | "technical"
+    | "visual"
+    | "audio"
+    | "captions"
+    | "lyrics"
+    | "storytelling"
+    | "rights";
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  status: "fail" | "warning" | "pass" | "not_checked";
+  title: string;
+  description: string;
+  recommendation?: string;
+  timestampStart?: number;
+  timestampEnd?: number;
+  evidenceImagePath?: string;
+  detectorId: string;
+  confidence?: number;
+  canAutoFix?: boolean;
+  suggestedAction?: string;
+  userDisposition?: "unreviewed" | "accepted" | "dismissed" | "fixed";
+};
 ```
 
 Adapt this example to the repository's language and conventions rather than copying it blindly.

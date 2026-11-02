@@ -332,7 +332,7 @@ export type Aspect = "16:9" | "9:16";
 
 export interface Job {
   id: string;
-  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short" | "lyric_video";
+  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short" | "lyric_video" | "inspect";
   status: "queued" | "running" | "done" | "error";
   step: number;
   progress?: number | null; // how far the current step is, 0..1 (null/absent: no measure for it)
@@ -1038,6 +1038,43 @@ export const lyricThumbUrl = (slug: string, bust = "") =>
 export const lyricStreamUrl = (slug: string, t: number, o: LyricLook) =>
   `${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/preview/stream?${new URLSearchParams({ t: String(t), style: o.style, grade: o.grade, neon: o.neon ? "1" : "", playing: o.playing ? "1" : "", pulse: o.pulse, parts: o.parts, when: o.when })}`;
 
+/** Video Quality Inspector (crcontent/quality.py): one check on the rendered file. */
+export interface QualityCheck {
+  id: string; // stable across re-runs: detector, plus @start for timestamped issues
+  stage: "render";
+  category: "technical" | "visual" | "audio" | "captions" | "lyrics" | "storytelling" | "rights";
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  status: "fail" | "warning" | "pass" | "not_checked";
+  title: string;
+  description: string;
+  recommendation?: string;
+  start?: number;
+  end?: number;
+  evidence?: string; // relative to the report's base
+  detector: string;
+}
+
+export interface QualityReport {
+  stage: "render";
+  profile: "short" | "lyric";
+  profile_label: string;
+  file: string;
+  created: string;
+  cancelled: boolean;
+  sampled: string;
+  verdict: "pass" | "warning" | "fail" | "incomplete";
+  counts: Record<QualityCheck["status"], number>;
+  media?: { duration: number; width?: number; height?: number; fps?: number };
+  checks: QualityCheck[];
+  outdated: boolean; // the file changed since this report
+  base: string; // URL path of the video's folder
+}
+
+/** Which rendered file to inspect: a library video, or one output of a Lyric Studio song. */
+export type InspectTarget = { scope: "video"; name: string } | { scope: "song"; name: string; file: string };
+const inspectPath = (t: InspectTarget) =>
+  `/api/inspect/${t.scope}/${encodeURIComponent(t.name)}${t.scope === "song" ? `?file=${encodeURIComponent(t.file)}` : ""}`;
+
 export const outputUrl = (folder: string, file: string) =>
   `${API_BASE}/media/${encodeURIComponent(folder)}/${file}`;
 
@@ -1157,6 +1194,9 @@ export const api = {
     request<{ id: string; updated: string }>(`/api/drafts/${encodeURIComponent(id)}`, { method: "PUT", json: d }),
   deleteDraft: (id: string) => request<unknown>(`/api/drafts/${encodeURIComponent(id)}`, { method: "DELETE" }),
   job: (id: string) => request<Job>(`/api/jobs/${id}`),
+  inspection: (t: InspectTarget) => request<{ report: QualityReport | null; job: string | null }>(inspectPath(t)),
+  inspect: (t: InspectTarget) => request<{ id: string }>(inspectPath(t), { method: "POST" }),
+  cancelInspection: (id: string) => request<unknown>(`/api/inspect/jobs/${id}/cancel`, { method: "POST" }),
   lyricSongs: () => request<LyricSong[]>("/api/lyricvideo"),
   lyricSong: (slug: string) => request<LyricSongDetail>(`/api/lyricvideo/${slug}`),
   createLyricSong: (audio: File, lyrics: string, title: string, style: string) => {

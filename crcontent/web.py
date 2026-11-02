@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import addons, art, campaigns, drafts, locations, lyricvideo, music, packaging, publish, schedule, sheet, voiceover
+from . import addons, art, campaigns, drafts, locations, lyricvideo, music, packaging, publish, quality, schedule, sheet, voiceover
 from .config import ASSETS_DIR, CACHE_DIR, CODE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT, SCENE_PAD_SEC, frame_size
 from .lyrics import SongScript, generate_song, suggest_video_ideas
 from .align import lines_from_json, load_lines, save_lines
@@ -74,6 +74,8 @@ jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
 lyricvideo.bind(jobs, jobs_lock, renderer)
 app.include_router(lyricvideo.router)
+quality.bind(jobs, jobs_lock)
+app.include_router(quality.router)
 
 
 class ScriptRequest(BaseModel):
