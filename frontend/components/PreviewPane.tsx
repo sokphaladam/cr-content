@@ -12,6 +12,7 @@ import { MusicVideoOptions } from "./MusicVideoOptions";
 import { PackagingReview } from "./PackagingReview";
 import { PublishCard } from "./PublishCard";
 import { QualityInspector } from "./QualityInspector";
+import { RightsChecklist } from "./RightsChecklist";
 
 const STEPS = ["Script", "Voiceover", "Footage", "Captions", "Final render"];
 const SONG_STEPS = ["Lyrics", "Compose", "Lyric timing"];
@@ -962,6 +963,7 @@ export function PreviewPane({
             }}
           />
         )}
+        {showVideo && detail?.video && <RightsChecklist key={`rights-${detail.name}`} scope="video" name={detail.name} />}
         {showVideo && detail && <ThumbnailCard key={`thumb-${detail.name}`} detail={detail} onChange={onThumbnail} />}
         {showVideo && detail?.kind === "music_video" && (
           <section className="grid gap-1.5 card p-3.5">

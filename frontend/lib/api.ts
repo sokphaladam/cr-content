@@ -1041,7 +1041,7 @@ export const lyricStreamUrl = (slug: string, t: number, o: LyricLook) =>
 /** Video Quality Inspector (crcontent/quality.py): one check on the rendered file. */
 export interface QualityCheck {
   id: string; // stable across re-runs: detector, plus @start for timestamped issues
-  stage: "render";
+  stage: "render" | "preview";
   category: "technical" | "visual" | "audio" | "captions" | "lyrics" | "storytelling" | "rights";
   severity: "critical" | "high" | "medium" | "low" | "info";
   status: "fail" | "warning" | "pass" | "not_checked";
@@ -1052,13 +1052,20 @@ export interface QualityCheck {
   end?: number;
   evidence?: string; // relative to the report's base
   detector: string;
+  scene?: number; // preview (Shorts): the scene to open in the editor, 0-based
+  disposition?: Disposition; // render: what you decided about it (kept across re-checks by id)
+  reopened?: boolean; // marked fixed, but a later check still found it
 }
 
+export type Disposition = "unreviewed" | "reviewed" | "dismissed" | "fixed";
+
 export interface QualityReport {
-  stage: "render";
+  stage: "render" | "preview";
+  mode?: "quick" | "full"; // preview only
+  fingerprint?: string | { sha256: string }; // preview: the project state it was made from
   profile: "short" | "lyric";
   profile_label: string;
-  file: string;
+  file?: string;
   created: string;
   cancelled: boolean;
   sampled: string;
@@ -1066,8 +1073,33 @@ export interface QualityReport {
   counts: Record<QualityCheck["status"], number>;
   media?: { duration: number; width?: number; height?: number; fps?: number };
   checks: QualityCheck[];
-  outdated: boolean; // the file changed since this report
-  base: string; // URL path of the video's folder
+  outdated?: boolean; // the file / project changed since this report
+  base?: string; // render: URL path of the video's folder (evidence frames)
+  resolved?: { id: string; title: string }[]; // render: marked fixed, and a later check no longer finds them
+  archived?: boolean; // an earlier report from the history (read-only)
+  error?: string; // the analysis stopped part way (verdict "incomplete")
+}
+
+/** One asset in a video's rights checklist (crcontent/rights.py). `auto`: suggested by the app, not yet confirmed. */
+export type Permission = "yes" | "no" | "unknown";
+export interface RightsAsset {
+  id: string;
+  name: string;
+  type: "footage" | "image" | "music" | "sound" | "voice" | "font" | "other";
+  source: string;
+  license: string;
+  attribution_required: Permission;
+  attribution_text: string;
+  commercial: Permission;
+  derivatives: Permission;
+  restrictions: string;
+  confirmed: boolean;
+  notes: string;
+  auto: boolean;
+}
+export interface RightsList {
+  items: RightsAsset[];
+  summary: { total: number; documented: number; blocked: string[] };
 }
 
 /** Which rendered file to inspect: a library video, or one output of a Lyric Studio song. */
@@ -1196,6 +1228,30 @@ export const api = {
   job: (id: string) => request<Job>(`/api/jobs/${id}`),
   inspection: (t: InspectTarget) => request<{ report: QualityReport | null; job: string | null }>(inspectPath(t)),
   inspect: (t: InspectTarget) => request<{ id: string }>(inspectPath(t), { method: "POST" }),
+  previewShort: (body: { script: VideoScript; lang: Lang; music: string; lengths: number[]; full: boolean }) =>
+    request<QualityReport>("/api/inspect/preview/short", { method: "POST", json: body }),
+  storyReview: (body: { script: VideoScript; lang: Lang }) =>
+    request<QualityReport>("/api/inspect/preview/short/story", { method: "POST", json: body, timeout: 0 }),
+  rights: (scope: "video" | "song", name: string) => request<RightsList>(`/api/rights/${scope}/${encodeURIComponent(name)}`),
+  saveRights: (scope: "video" | "song", name: string, items: RightsAsset[]) =>
+    request<RightsList>(`/api/rights/${scope}/${encodeURIComponent(name)}`, { method: "PUT", json: { items } }),
+  previewSong: (slug: string) => request<{ report: QualityReport | null }>(`/api/inspect/preview/song/${encodeURIComponent(slug)}`),
+  checkSong: (slug: string, full: boolean) =>
+    request<QualityReport>(`/api/inspect/preview/song/${encodeURIComponent(slug)}?full=${full}`, { method: "POST" }),
+  reviewIssue: (t: InspectTarget, issue: string, disposition: Disposition) => {
+    const [base, query] = inspectPath(t).split("?");
+    return request<{ report: QualityReport | null }>(`${base}/issues/${encodeURIComponent(issue)}${query ? `?${query}` : ""}`, {
+      method: "PUT", json: { disposition } });
+  },
+  inspectionHistory: (t: InspectTarget) => {
+    const [base, query] = inspectPath(t).split("?");
+    return request<{ history: { id: string; created: string; verdict: QualityReport["verdict"]; counts: QualityReport["counts"] }[] }>(
+      `${base}/history${query ? `?${query}` : ""}`);
+  },
+  inspectionHistoryEntry: (t: InspectTarget, id: string) => {
+    const [base, query] = inspectPath(t).split("?");
+    return request<{ report: QualityReport }>(`${base}/history/${encodeURIComponent(id)}${query ? `?${query}` : ""}`);
+  },
   cancelInspection: (id: string) => request<unknown>(`/api/inspect/jobs/${id}/cancel`, { method: "POST" }),
   lyricSongs: () => request<LyricSong[]>("/api/lyricvideo"),
   lyricSong: (slug: string) => request<LyricSongDetail>(`/api/lyricvideo/${slug}`),

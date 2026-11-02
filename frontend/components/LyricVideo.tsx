@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, lyricPreviewUrl, lyricStreamUrl, songFileUrl, type Job, type LyricSong, type LyricSongDetail } from "@/lib/api";
 import { LyricPicturesCard } from "./LyricPictures";
 import { QualityInspector } from "./QualityInspector";
+import { SongPreviewCheck } from "./PreviewInspector";
+import { RightsChecklist } from "./RightsChecklist";
 import { RowMenu } from "./Library";
 import { Button, Field, FileInput, Spinner, useToast } from "./ui";
 
@@ -476,6 +478,12 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
             onChanged={() => { setPicBust(String(Date.now())); void load(); }} />
 
 
+          <SongPreviewCheck
+            slug={slug}
+            stamp={`${bust}${picBust}`}
+            duration={d.duration ?? 0}
+            onSeek={(t) => { if (playing) playFrom(Math.round(t)); else { setAt(Math.round(t)); setShown(Math.round(t)); } window.scrollTo({ top: 0, behavior: "smooth" }); }}
+          />
           <section className="card grid gap-4 p-4">
             <h2 className="card-title">4. Make the videos</h2>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-base">
@@ -529,6 +537,7 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
                   </figure>
                 ))}
               </div>
+              {videos.length > 0 && <RightsChecklist key={`rights-${slug}`} scope="song" name={slug} />}
               {d.upload_text && (
                 <div className="grid gap-2">
                   <div className="flex items-center justify-between">

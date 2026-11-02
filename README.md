@@ -415,7 +415,7 @@ ffmpeg decode). It checks: file present and readable, video/audio streams, resol
 video's aspect setting, frame rate, pixel format, colour tag, length (Lyric Studio: against the song), audio vs
 video length, decode errors, black and frozen stretches, silence / audio ending early, integrated loudness and true
 peak. Each check is **Pass**, **Warning** (review it), **Fail** (blocking) or **Not checked** (it couldn't run or isn't
-built yet: blur/exposure, crop, captions and lyric timing, pacing, rights). Not checked never counts as a pass.
+built yet: subject framing, shot-to-shot colour match, pacing, rights). Not checked never counts as a pass.
 Click an issue to jump the player there; black/frozen/silence issues keep a frame in `quality/`.
 
 The report is saved as `quality/<file>.json` next to the video, with the file's SHA-256. Re-render and it shows as
@@ -424,6 +424,69 @@ guidance only (YouTube turns louder mixes down to about −14 LUFS). It doesn't 
 and ad-suitability checks. API: `POST|GET /api/inspect/video/<name>`, `POST|GET /api/inspect/song/<slug>?file=lyric_full.mp4`,
 `POST /api/inspect/jobs/<id>/cancel`; progress via `/api/jobs/<id>`. Tests: `pytest tests/test_quality.py`
 (generates its fixtures with ffmpeg).
+
+**Visual and audio quality (same pass, no extra dependency).** While decoding, the check samples 2 frames per second
+(scaled to 480 px wide) for ffmpeg's `blurdetect`, `signalstats` and `cropdetect`, plus a 16×16 grey thumbnail per
+sample: soft/blurry stretches, very dark or very bright stretches, an overall colour cast, black bars through most of
+the video, and (Shorts only; the lyric cover repeats by design) a shot that repeats an earlier one. Audio adds sudden
+loudness jumps (short-term level, 12 LU within a second), left/right balance (3 dB) and mono compatibility (a drop of
+6 dB+ when summed to mono = phase cancellation). All of these are **warnings** with timestamps and an evidence frame:
+footage can be soft, dark or graded on purpose, and with one mixed track the check can't tell voice from music.
+Thresholds are in `quality.VISUAL` / `PROFILES`. Sharpness needs FFmpeg 5.1+ (else Not checked).
+
+**Pre-render check (Preview Inspector).** Before rendering, `crcontent/quality_preview.py` checks the project, not a
+file. *Shorts:* the editor's **Pre-render check** tab (right panel) runs quick checks as you edit: missing or
+out-of-library media, repeated footage, overlay text off the frame or outside the safe area (estimated from length and
+size), text/cutaways that start after their scene ends, long headlines, caption position, total length vs the 3-minute
+Shorts limit, long single shots, music track present, a warm-up opener, empty title/description. **Full check** also
+probes every media file (unreadable, low resolution, a start point past the clip's end). A full report is marked
+**Outdated** once you edit. Clicking an issue opens its scene and moves the playhead. *Lyric Studio:* a card before
+"Make the videos" checks the saved song: song file, analysed timing, line order, lines after the song ends, lines
+shown < 0.7 s, duplicates, long gaps, long lines, missing section pictures, upload details. Full check measures each
+line with the video's font. The report is saved in `songs/<slug>/quality/preview.json` and goes outdated when the song,
+lyrics or pictures change. Word-level lyric sync is reported as **Not checked**: only line start times exist.
+API: `POST /api/inspect/preview/short`, `POST|GET /api/inspect/preview/song/<slug>[?full=true]`.
+
+**Lyric sync, caption speed, story review, rights (Milestone 4).**
+- *Lyric sync* (Lyric Studio full check): each line's start is compared with where the vocal stem (`vocals.wav`, made by
+  the AI add-on's separation) actually has singing. A line shown while the singer is silent is "early"; singing that
+  starts with no line within 0.8 s is a possible late line. Without the stem it's Not checked. Line level only.
+- *Caption speed* (Shorts pre-render): captions changing more than 3.5 times a second are flagged. The warm-up-opener
+  check now uses `packaging.fluff_opening` (English and Khmer).
+- *Story review* (optional, Shorts **Pre-render check → Send to Gemini**): sends the script text only, never media,
+  and returns one advisory item per aspect (hook, promise, early payoff, scene purpose, narration vs footage,
+  structure, ending), labelled AI-assisted. Unanswered aspects are Not checked. It never predicts views.
+- *Rights checklist* (under a finished video, and under a Lyric Studio song's results): one record per asset (source,
+  licence, credit, commercial use, adaptation, restrictions, notes, "I checked this"), pre-filled from stock filenames
+  (Pexels/Pixabay), Wikimedia Commons credits, the music track's saved licence and credit, the Suno plan, and TTS. A
+  suggestion only counts once you confirm it. Saved as `rights.json` in the video's or song's folder. The Quality check
+  report shows "documented locally" (your record, not verified), a warning for a licence marked "no", and always
+  **Not checked: Copyright (Content ID) and ad suitability**, which only YouTube Studio can check.
+- *Rules*: every number/true-false threshold (render `short`/`lyric`, `short_preview`, `lyric_preview`) can be
+  overridden in `quality_rules.json` in the data folder: `GET|PUT /api/inspect/rules` (unknown keys and wrong types are
+  refused). API: `POST /api/inspect/preview/short/story`, `GET|PUT /api/rights/{video|song}/<name>`.
+
+**Reading a report, history and review (Milestone 5).**
+- *Verdict*: **Fail** = a blocking technical problem (missing stream, wrong orientation, damaged file, missing
+  media); **Warning** = review it yourself; **Incomplete** = cancelled or the analysis stopped part way (the report
+  keeps what ran and lists the rest as Not checked). There's no single score: categories and blocking issues are shown
+  side by side.
+- *Mark issues*: select an issue → **Reviewed**, **Dismiss** or **Fixed**. Marks are kept by the issue's stable id
+  (`quality/<file>.review.json`) and survive re-checks. **Fixed** is only confirmed when a check made afterwards no
+  longer finds the issue ("Confirmed fixed by this check"); if it's still there it's reopened ("Still found").
+  Dismissing never turns a Warning or Fail report into a pass.
+- *History*: each new check moves the previous report to `quality/history/<file>/` (10 kept; evidence frames aren't
+  kept, the new run replaces them). **Earlier checks** opens them read-only.
+- *Recovery*: an analyzer error keeps a partial report instead of failing the job; a report that can't be saved (disk
+  full, read-only folder) says so. Large files: one decode for everything, frames sampled at 2/s, thumbnails 16×16, a
+  temp folder removed after each run; the SHA-256 fingerprint reads the file once (a re-read only when its size or
+  date changes).
+- *Desktop app*: the inspector needs only the bundled FFmpeg/FFprobe (no numpy/OpenCV). Checked by freezing the engine
+  with `scripts/build_engine.py` and running the inspector against it on macOS.
+- *Limitations*: visual checks sample frames, they don't read every frame; blur, exposure, colour and border
+  thresholds are heuristics tuned on test patterns; the audio checks hear one mixed track, not separate voice/music;
+  lyric sync is line level, against the separated vocal stem; caption overlay bounds are estimated from text length;
+  nothing replaces YouTube Studio's Content ID and ad-suitability checks.
 
 ## Script to Video (long YouTube videos from a script)
 

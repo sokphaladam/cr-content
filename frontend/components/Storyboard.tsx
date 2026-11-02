@@ -2,6 +2,7 @@
 
 import {
   ArrowDown,
+  ClipboardCheck,
   ArrowUp,
   AudioLines,
   Captions,
@@ -39,6 +40,7 @@ import { useVoicePreview } from "@/lib/useVoicePreview";
 import { USE_HINT, USE_LABEL, useMonetizableOnly, type MusicUse } from "@/lib/musicLicence";
 import { ArtStylePicker, artBlocker, useArtStatus } from "./ArtControls";
 import { PictureReview } from "./PictureReview";
+import { ShortsPreviewCheck } from "./PreviewInspector";
 import { MusicFinder } from "./MusicFinder";
 import { CaptionPanel } from "./LivePreview";
 import { SceneCard, type DraftScene } from "./SceneCard";
@@ -747,6 +749,7 @@ export function Storyboard({
     </div>
   );
 
+  const keptScenes = draft.scenes.filter((s) => s.narration.trim() || s.seconds); // the scenes toScript() renders
   const panels: Record<LeftTab | RightTab, ReactNode> = {
     scenes: (
       <SceneBin
@@ -794,6 +797,22 @@ export function Storyboard({
     captions: (
       <div className="p-3">
         <CaptionPanel style={draft.captions} onChange={(patch) => setDraft((d) => ({ ...d, captions: { ...d.captions, ...patch } }))} options={options} lang={draft.lang} />
+      </div>
+    ),
+    check: (
+      <div className="p-3">
+        <ShortsPreviewCheck
+          script={toScript(draft)}
+          lang={draft.lang}
+          music={music}
+          lengths={keptScenes.map((s) => timeline.segments.find((g) => g.scene.uid === s.uid)?.length ?? 0)}
+          total={totalSeconds}
+          onIssue={(c) => {
+            const scene = c.scene !== undefined ? keptScenes[c.scene] : undefined;
+            if (scene) onActive(scene.uid, c.start === undefined); // open it in the editor
+            if (c.start !== undefined) timeline.seekTime(c.start);
+          }}
+        />
       </div>
     ),
     export: exportPanel ? (
@@ -926,7 +945,7 @@ export function Storyboard({
 }
 
 type LeftTab = "scenes" | "script" | "visuals" | "audio" | "post";
-type RightTab = "scene" | "captions" | "export";
+type RightTab = "scene" | "captions" | "check" | "export";
 
 const LEFT_TABS: { value: LeftTab; label: string; icon: ReactNode }[] = [
   { value: "scenes", label: "Scenes", icon: <ListVideo className="size-4" /> },
@@ -938,6 +957,7 @@ const LEFT_TABS: { value: LeftTab; label: string; icon: ReactNode }[] = [
 const RIGHT_TABS: { value: RightTab; label: string; icon: ReactNode }[] = [
   { value: "scene", label: "Scene", icon: <SlidersHorizontal className="size-4" /> },
   { value: "captions", label: "Captions", icon: <Captions className="size-4" /> },
+  { value: "check", label: "Pre-render check", icon: <ClipboardCheck className="size-4" /> },
   { value: "export", label: "Export", icon: <Share2 className="size-4" /> },
 ];
 

@@ -1,0 +1,536 @@
+"""Video Quality Inspector, preview stage: checks the project before it renders (a Shorts draft's script as the
+editor holds it, or a Lyric Studio song folder). Quick checks read only the project; a full check also probes every
+media file it uses. A preview report is no proof the rendered file is right: the Final Render Inspector (quality.py)
+checks that.
+"""
+import hashlib
+import json
+import re
+import subprocess
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from .config import ASSETS_DIR, LANGS, ROOT, frame_size
+from .quality import _check, _finish, _num, probe, rules_for
+from .script import VideoScript
+
+router = APIRouter()
+
+SHORT_RULES = {
+    "max_sec": 180,  # YouTube Shorts' limit; longer uploads become regular videos
+    "long_scene_sec": 12,  # one shot held this long may feel static
+    "headline_chars": 40,
+    "safe_x": (0.05, 0.95),  # text centre / edges inside these fractions of the frame
+    "safe_y": (0.08, 0.80),  # the platforms' top bar and bottom buttons/description cover the rest
+    "min_media_px": 720,  # shorter side; smaller footage is upscaled and looks soft
+}
+SHORT_RULES["caption_changes_per_sec"] = 3.5  # faster than this, captions flicker past unread
+LYRIC_RULES = {"max_chars": 42, "min_line_sec": 0.7, "gap_sec": 12, "min_font_px": 48, "font_px": 66,
+               "sync_sec": 0.8, "vocal_silence_db": -35}  # a line this far from the singing is off
+TERMINAL = re.compile(r"[.!?。]['\"”’)]*$")
+CHAR_W = 0.55  # average glyph width as a share of the font size (latin bold), for the text-width estimate
+
+SHORT_NOT_YET = [("visual", "Footage quality (blur, exposure, colour)"), ("audio", "Mix levels: run the Quality check after rendering"),
+                 ("storytelling", "Whether the narration matches the footage"), ("rights", "Footage and music rights")]
+LYRIC_NOT_YET = [("lyrics", "Word-level sync accuracy (only line start times are known)"), ("lyrics", "Lyric spelling"),
+                 ("visual", "Picture quality and how distracting the motion is"), ("rights", "Song and picture rights")]
+
+
+def _fp(data) -> str:
+    return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _scene(item: dict, i: int) -> dict:
+    item["scene"] = i  # the UI opens this scene in the editor
+    return item
+
+
+def _library_file(rel: str) -> Path | None:
+    """A media path from the script, only when it's inside the library folder."""
+    try:
+        f = (ROOT / rel).resolve()
+    except (OSError, ValueError):
+        return None
+    return f if f.is_relative_to(ROOT.resolve()) else None
+
+
+def _probe_media(f: Path) -> dict | None:
+    try:
+        info = probe(f)
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return None
+    v = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), {})
+    return {"w": v.get("width", 0), "h": v.get("height", 0), "dur": _num(info.get("format", {}).get("duration")),
+            "still": v.get("codec_name") in ("mjpeg", "png", "webp", "bmp", "gif") or not _num(info.get("format", {}).get("duration"))}
+
+
+# ---------- Shorts ----------
+
+def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[float], full: bool) -> dict:
+    """lengths: each scene's length in seconds as the editor's timeline has it (0 = not voiced yet)."""
+    rules, checks = rules_for("short_preview"), []
+    W, H = frame_size("9:16")
+    result = {"stage": "preview", "profile": "short", "profile_label": "Shorts", "mode": "full" if full else "quick",
+              "created": datetime.now().isoformat(timespec="seconds"), "checks": checks, "cancelled": False,
+              "sampled": "project data" + (" and a probe of every media file" if full else " only (no media decoded)")}
+    profile = LANGS.get(lang, LANGS["en"])
+    scenes = script.scenes
+    lengths = [*lengths, *[0.0] * len(scenes)][: len(scenes)]
+
+    _check(checks, "project.size", "technical", "pass", f"Renders at {W}×{H} (9:16)")
+    if not scenes:
+        _check(checks, "structure.scenes", "storytelling", "fail", "No scenes", "", "critical", "Add a scene.")
+        return _finish(result, SHORT_NOT_YET)
+
+    # --- timing ---
+    starts = [sum(lengths[:i]) for i in range(len(scenes))]
+    unvoiced = [i for i, sc in enumerate(scenes) if sc.narration.strip() and not lengths[i]]
+    for i, sc in enumerate(scenes):
+        if not sc.narration.strip() and sc.seconds <= 0:
+            _scene(_check(checks, f"timing.empty.{i}", "technical", "warning", f"Scene {i + 1} has no voiceover and no length",
+                          "It adds nothing to the video.", "medium", "Write its voiceover, give it a length, or remove it."), i)
+        elif lengths[i] > rules["long_scene_sec"]:
+            _scene(_check(checks, f"pacing.long.{i}", "storytelling", "warning", f"Scene {i + 1} runs {lengths[i]:.0f} s on one shot",
+                          "Possible pacing issue: a long hold can feel static.", "low",
+                          "Consider a cutaway (B-roll) or splitting the scene.", starts[i], starts[i] + lengths[i]), i)
+    if unvoiced:
+        _check(checks, "timing.total", "technical", "not_checked", "Total length unknown",
+               f"Scenes {', '.join(str(i + 1) for i in unvoiced)} have no voiceover generated yet.")
+    else:
+        total = sum(lengths)
+        status = "fail" if total > rules["max_sec"] else "pass"
+        _check(checks, "timing.total", "technical", status, f"Length about {int(total // 60)}:{total % 60:04.1f}",
+               f"Over {rules['max_sec'] // 60} min it won't be a Short." if status == "fail" else "From the voiceover timeline.",
+               "high" if status == "fail" else "info", "Shorten the script." if status == "fail" else "")
+
+    # --- media references ---
+    seen: dict[str, int] = {}
+    probes: dict[Path, dict | None] = {}
+    for i, sc in enumerate(scenes):
+        refs = [("media", sc.media), ("second clip", sc.media2 if sc.layout == "split" else "")]
+        refs += [(f"cutaway {k + 1}", b.media) for k, b in enumerate(sc.broll)]
+        for label, rel in refs:
+            if not rel:
+                continue
+            f = _library_file(rel)
+            if not f or not f.is_file():
+                _scene(_check(checks, f"media.missing.{i}.{label}", "technical", "fail", f"Scene {i + 1}: {label} file is missing",
+                              rel, "critical", "Pick the footage again."), i)
+                continue
+            if label == "media":
+                if rel in seen:
+                    _scene(_check(checks, f"media.repeat.{i}", "visual", "warning",
+                                  f"Scene {i + 1} reuses scene {seen[rel] + 1}'s footage", "Repeated shots can feel lazy.",
+                                  "low", "Pick a different clip unless the repeat is deliberate."), i)
+                seen.setdefault(rel, i)
+            if not full:
+                continue
+            if f not in probes:
+                probes[f] = _probe_media(f)
+            p = probes[f]
+            if p is None:
+                _scene(_check(checks, f"media.unreadable.{i}.{label}", "technical", "fail", f"Scene {i + 1}: {label} can't be read",
+                              rel, "critical", "Replace the file."), i)
+                continue
+            if p["w"] and min(p["w"], p["h"]) < rules["min_media_px"]:
+                _scene(_check(checks, f"media.lowres.{i}.{label}", "visual", "warning",
+                              f"Scene {i + 1}: {label} is only {p['w']}×{p['h']}", "It will be upscaled and may look soft.",
+                              "low", "Use a sharper clip if one exists."), i)
+            if label == "media" and not p["still"] and p["dur"] and sc.media_start >= p["dur"]:
+                _scene(_check(checks, f"media.start.{i}", "technical", "fail",
+                              f"Scene {i + 1}: footage starts at {sc.media_start:.1f} s, past the clip's end ({p['dur']:.1f} s)",
+                              "", "high", "Move the start point back in the timeline."), i)
+    auto = [i + 1 for i, sc in enumerate(scenes) if not sc.media and not script.art_style]
+    _check(checks, "media.refs", "technical", "pass" if not any(c["detector"].startswith("media.missing") for c in checks) else "fail",
+           "Media references", f"Footage picked automatically at render for scenes {', '.join(map(str, auto))}." if auto
+           else "Every scene has its media chosen.", "info")
+
+    # --- overlays: timing and safe area (estimated from the font size) ---
+    sx, sy = rules["safe_x"], rules["safe_y"]
+    for i, sc in enumerate(scenes):
+        for k, t in enumerate(sc.texts):
+            if not t.text.strip():
+                continue
+            fs = profile.font_size * {"s": 0.6, "m": 0.85, "l": 1.2}.get(t.size, 0.85)  # captions.OVERLAY_SIZES
+            half = len(t.text) * fs * CHAR_W / 2 / W
+            if t.x - half < 0 or t.x + half > 1:
+                _scene(_check(checks, f"captions.clip.{i}.{k}", "captions", "warning", f"Scene {i + 1}: text “{t.text[:24]}” may run off the frame",
+                              "Estimated from its length and size.", "medium", "Shorten it, make it smaller or move it to the middle."), i)
+            elif t.x - half < sx[0] or t.x + half > sx[1] or not sy[0] <= t.y <= sy[1]:
+                _scene(_check(checks, f"captions.safe.{i}.{k}", "captions", "warning", f"Scene {i + 1}: text “{t.text[:24]}” is outside the safe area",
+                              "The platform's buttons, title or top bar may cover it.", "low", "Move it toward the middle."), i)
+            if lengths[i] and t.at >= lengths[i]:
+                _scene(_check(checks, f"captions.late.{i}.{k}", "captions", "warning", f"Scene {i + 1}: text “{t.text[:24]}” starts after the scene ends",
+                              f"At {t.at:.1f} s, scene is {lengths[i]:.1f} s.", "medium", "Move it earlier; it won't show."), i)
+        for k, b in enumerate(sc.broll):
+            if lengths[i] and b.at >= lengths[i]:
+                _scene(_check(checks, f"media.broll_late.{i}.{k}", "technical", "warning", f"Scene {i + 1}: cutaway {k + 1} starts after the scene ends",
+                              "", "medium", "Move it earlier; it won't show."), i)
+        if len(sc.on_screen_text) > rules["headline_chars"]:
+            _scene(_check(checks, f"captions.headline.{i}", "captions", "warning", f"Scene {i + 1}: headline is {len(sc.on_screen_text)} characters",
+                          "Long headlines wrap to several lines and are hard to read in a second.", "low", "Cut it to a few words."), i)
+    cs = script.captions
+    if not sy[0] <= cs.y <= sy[1]:
+        _check(checks, "captions.position", "captions", "warning", f"Captions sit at {cs.y:.0%} of the height",
+               "Outside the safe area: the platform's buttons or description may cover them.", "medium",
+               "Drag them up in the Captions panel.")
+    else:
+        _check(checks, "captions.position", "captions", "pass", "Captions inside the safe area")
+    per = cs.words or profile.words_per_caption
+    fast = []
+    for i, sc in enumerate(scenes):
+        words = len(sc.narration.split())
+        if lengths[i] > 0.5 and words:
+            rate = words / per / lengths[i]
+            if rate > rules["caption_changes_per_sec"]:
+                fast.append(i)
+                _scene(_check(checks, f"captions.speed.{i}", "captions", "warning",
+                              f"Scene {i + 1}: captions change {rate:.1f} times a second",
+                              f"{words} words in {lengths[i]:.1f} s, {per} per caption: hard to read.", "low",
+                              "Show more words per caption, slow the voice, or cut words.", starts[i], starts[i] + lengths[i]), i)
+    if any(lengths) and not fast:
+        _check(checks, "captions.speed", "captions", "pass", "Captions change at a readable pace",
+               f"Under {rules['caption_changes_per_sec']} changes a second in every voiced scene.")
+
+    # --- audio ---
+    voiced = sum(bool(sc.narration.strip()) for sc in scenes)
+    _check(checks, "audio.voice", "audio", "pass" if voiced else "warning",
+           f"Voiceover in {voiced} of {len(scenes)} scenes" if voiced else "No voiceover at all", "",
+           "low" if voiced else "medium")
+    if music == "none":
+        _check(checks, "audio.music", "audio", "pass", "No background music (your choice)")
+    elif music and not (ASSETS_DIR / "music" / Path(music).name).is_file():
+        _check(checks, "audio.music", "audio", "fail", f"Music track missing: {music}", "", "high", "Pick another track.")
+    else:
+        _check(checks, "audio.music", "audio", "pass", f"Music: {music or 'picked at render'}")
+
+    # --- storytelling (advice, never a verdict) ---
+    first = scenes[0].narration.strip()
+    from .packaging import fluff_opening
+
+    if fluff := fluff_opening(script.narration):
+        _scene(_check(checks, "story.hook", "storytelling", "warning", f"The opening warms up instead of hooking ({', '.join(fluff)})",
+                      f"“{first[:60]}”", "low", "Consider opening with the claim or the most surprising detail.", 0, lengths[0] or 0), 0)
+    elif first:
+        _check(checks, "story.hook", "storytelling", "pass", "Opens without a warm-up phrase")
+    last = scenes[-1].narration.strip()
+    if last and TERMINAL.search(last):
+        _check(checks, "story.loop", "storytelling", "pass", "Ends on a complete sentence",
+               "If you want a seamless loop, end mid-sentence so it runs into the opening.")
+
+    # --- publishing ---
+    for field, label, sev in (("title", "Title", "medium"), ("caption", "Description", "low")):
+        if not getattr(script, field).strip():
+            _check(checks, f"publish.{field}", "rights", "warning", f"{label} is empty", "", sev, f"Write a {label.lower()} in the Post tab.")
+    if not script.hashtags:
+        _check(checks, "publish.hashtags", "rights", "warning", "No hashtags", "", "info")
+    result["fingerprint"] = _fp([script.model_dump(), lang, music, lengths, full])
+    return _finish(result, SHORT_NOT_YET)
+
+
+# ---------- Lyric Studio ----------
+
+def _song_inputs(folder: Path) -> list:
+    """What a lyric preview depends on: change any and the report is outdated."""
+    files = [folder / "song.json", folder / "lyrics.lrc", folder / "pictures.json"]  # neonmekong.pictures.NAME
+    pics = folder / "pictures"  # neonmekong.pictures.DIR
+    files += sorted(pics.iterdir()) if pics.is_dir() else []
+    files += [f for f in folder.iterdir() if f.suffix.lower() in (".mp3", ".wav")]
+    return [(f.name, f.stat().st_size, f.stat().st_mtime) for f in files if f.is_file()]
+
+
+def inspect_song(folder: Path, full: bool) -> dict:
+    try:
+        from neonmekong import analyze, pictures, songjson
+    except ImportError as e:  # the installed app doesn't bundle the lyric pipeline
+        result = {"stage": "preview", "profile": "lyric", "profile_label": "Lyric video", "mode": "full" if full else "quick",
+                  "file": folder.name, "created": datetime.now().isoformat(timespec="seconds"), "checks": [],
+                  "cancelled": False, "fingerprint": "", "sampled": "nothing"}
+        _check(result["checks"], "lyrics.pipeline", "lyrics", "not_checked", "Lyric checks unavailable",
+               f"The lyric video pipeline isn't installed here ({e.name}).")
+        return _finish(result, LYRIC_NOT_YET)
+
+    rules, checks = rules_for("lyric_preview"), []
+    result = {"stage": "preview", "profile": "lyric", "profile_label": "Lyric video", "mode": "full" if full else "quick",
+              "file": folder.name, "created": datetime.now().isoformat(timespec="seconds"), "checks": checks,
+              "cancelled": False, "fingerprint": _fp(_song_inputs(folder)),
+              "sampled": "song files" + (" and the lyric layout measured with the video's font" if full else " only")}
+    _check(checks, "project.size", "technical", "pass", "Lyric video renders at 1920×1080; chorus Short at 1080×1920")
+
+    audio = analyze.find_audio(folder)[0]
+    song_len = None
+    if not audio:
+        _check(checks, "audio.song", "audio", "fail", "No song file", "", "critical", "Upload the mp3 or wav.")
+    else:
+        try:
+            from .render import duration
+
+            song_len = duration(audio)
+            _check(checks, "audio.song", "audio", "pass", f"Song {audio.name}: {int(song_len // 60)}:{song_len % 60:04.1f}")
+        except Exception:
+            _check(checks, "audio.song", "audio", "fail", f"{audio.name} can't be read", "", "critical", "Upload it again.")
+
+    try:
+        data = json.loads((folder / "song.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    lrc = folder / "lyrics.lrc"
+    if not data or not lrc.exists():
+        _check(checks, "lyrics.analyzed", "lyrics", "fail", "Song not analysed yet", "No lyric timing to check.", "critical",
+               "Run Analyze in Lyric Studio.")
+        return _finish(result, LYRIC_NOT_YET)
+    lines = [ln for ln in analyze.parse_lrc(lrc.read_text(encoding="utf-8")) if ln["text"]]
+    if not lines:
+        _check(checks, "lyrics.present", "lyrics", "fail", "No timed lyric lines", "", "high", "Paste the lyrics and analyse again.")
+        return _finish(result, LYRIC_NOT_YET)
+    _check(checks, "lyrics.present", "lyrics", "pass", f"{len(lines)} timed lyric lines")
+
+    # --- timing ---
+    order = [ln["start"] for ln in lines]
+    if order != sorted(order):
+        bad = next(i for i in range(1, len(order)) if order[i] < order[i - 1])
+        _check(checks, "lyrics.order", "lyrics", "fail", f"Line {bad + 1} is timed before the line above it",
+               f"“{lines[bad]['text'][:40]}”", "high", "Fix its time in the lyric timing editor.", order[bad])
+    else:
+        _check(checks, "lyrics.order", "lyrics", "pass", "Lines are in time order")
+    if song_len:
+        late = [ln for ln in lines if ln["start"] >= song_len]
+        for ln in late:
+            _check(checks, "lyrics.beyond", "lyrics", "fail", f"“{ln['text'][:30]}” starts after the song ends",
+                   f"At {ln['start']:.1f} s; the song is {song_len:.1f} s.", "high", "Fix or remove the line.", ln["start"])
+        if not late:
+            _check(checks, "lyrics.beyond", "lyrics", "pass", "Every line starts within the song")
+    flashes = [ln for ln in lines if ln["end"] - ln["start"] < rules["min_line_sec"]]
+    for ln in flashes[:10]:
+        _check(checks, "lyrics.flash", "lyrics", "warning", f"“{ln['text'][:30]}” shows for only {ln['end'] - ln['start']:.1f} s",
+               "Too quick to read.", "low", "Check its timing; merge it with the next line if they're sung together.", ln["start"], ln["end"])
+    for a, b in zip(lines, lines[1:]):
+        if a["text"].lower() == b["text"].lower() and b["start"] - a["start"] < 1.0:
+            _check(checks, "lyrics.duplicate", "lyrics", "warning", f"“{a['text'][:30]}” appears twice in a row",
+                   "Possibly a duplicated line.", "medium", "Remove one if it's not sung twice.", a["start"], b["end"])
+        elif b["start"] - a["start"] > rules["gap_sec"]:
+            _check(checks, "lyrics.gap", "lyrics", "warning", f"No lyrics for {b['start'] - a['start']:.0f} s after “{a['text'][:24]}”",
+                   "Fine for an instrumental break; otherwise lines are missing.", "info", "", a["end"], b["start"])
+    long_lines = [ln for ln in lines if len(ln["text"]) > rules["max_chars"]]
+    for ln in long_lines[:10]:
+        _check(checks, "lyrics.long", "lyrics", "warning", f"Long line ({len(ln['text'])} characters)",
+               f"“{ln['text'][:60]}”", "low", "Split it so it reads at a glance.", ln["start"], ln["end"])
+    if not flashes and not long_lines:
+        _check(checks, "lyrics.readable", "lyrics", "pass", "Lines are a readable length and stay on screen long enough")
+    chorus = data.get("chorus") or {}
+    if song_len and chorus.get("end") and chorus["end"] > song_len:
+        _check(checks, "lyrics.chorus", "lyrics", "warning", "Chorus ends after the song", "", "medium", "Re-run Analyze.")
+
+    # --- layout with the real font (full) ---
+    if full:
+        try:
+            from neonmekong import lyricvideo as lv
+            from neonmekong import thumbnail
+
+            maxw = int(lv.FULL[0] * 0.82)  # lyricvideo.Scene's wrap_frac
+            shrunk = []
+            for ln in lines:
+                _, px = lv.wrap(ln["text"], rules["font_px"], maxw, 2, thumbnail.lyric_font)
+                if px < rules["min_font_px"]:
+                    shrunk.append((ln, px))
+            for ln, px in shrunk[:10]:
+                _check(checks, "lyrics.font", "lyrics", "warning", f"“{ln['text'][:30]}” shrinks to {px} px to fit",
+                       "Smaller than the other lines and harder to read.", "low", "Split the line.", ln["start"], ln["end"])
+            if not shrunk:
+                _check(checks, "lyrics.font", "lyrics", "pass", "Every line fits on two lines at full size")
+        except Exception as e:  # the music-video extras (PIL/cv2) aren't installed
+            _check(checks, "lyrics.font", "lyrics", "not_checked", "Lyric layout", f"Couldn't measure: {e}")
+
+    # --- sync against the sung vocal (full) ---
+    if full:
+        sync_checks(checks, folder, lines, song_len, rules)
+
+    # --- pictures ---
+    plan = pictures.load(folder)
+    slots = plan.get("slots", [])
+    missing = [s for s in slots if s.get("file") and not (folder / pictures.DIR / s["file"]).is_file()]
+    for s in missing:
+        _check(checks, "media.picture", "visual", "fail", f"Picture for {s.get('tag') or s['id']} is missing", s["file"],
+               "high", "Draw or upload it again.", float(s.get("start", 0)))
+    empty = [s for s in slots if not s.get("file")]
+    if slots and not missing:
+        _check(checks, "media.picture", "visual", "pass" if not empty else "warning",
+               f"{len(slots) - len(empty)} of {len(slots)} section pictures ready",
+               "Sections without a picture show the cover." if empty else "", "info")
+
+    # --- publishing ---
+    for w in songjson.warnings(data):
+        _check(checks, f"publish.{_fp(w)[:6]}", "rights", "warning", w.split(":")[0], w, "medium")
+    return _finish(result, LYRIC_NOT_YET)
+
+
+def vocal_silences(vocals: Path, db: float) -> list[tuple[float, float]]:
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-i", str(vocals), "-af", f"silencedetect=n={db}dB:d=0.5",
+                          "-f", "null", "-"], stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace")
+    spans, start = [], None
+    for line in out.stderr.splitlines():
+        if m := re.search(r"silence_start: (-?[\d.]+)", line):
+            start = max(0.0, float(m[1]))
+        elif (m := re.search(r"silence_end: ([\d.]+)", line)) and start is not None:
+            spans.append((start, float(m[1])))
+            start = None
+    if start is not None:
+        spans.append((start, float("inf")))
+    return spans
+
+
+def sync_checks(checks: list, folder: Path, lines: list[dict], song_len: float | None, rules: dict) -> None:
+    """Line start times against where the vocal stem (vocals.wav, from the vocal separation) actually has singing:
+    a line shown while the singer is silent is early; singing that starts with no line near it means a late line."""
+    vocals = folder / "vocals.wav"
+    if not vocals.is_file():
+        _check(checks, "lyrics.sync", "lyrics", "not_checked", "Lyric sync against the singing",
+               "No vocal stem (vocals.wav): the AI add-on separates it when the song is analysed.")
+        return
+    gaps = vocal_silences(vocals, rules["vocal_silence_db"])
+    tol = rules["sync_sec"]
+    off = 0
+    for ln in lines:
+        gap = next(((a, b) for a, b in gaps if a <= ln["start"] < b), None)
+        if gap and gap[1] - ln["start"] > tol and gap[1] - gap[0] < 30:  # not a whole instrumental break
+            off += 1
+            if off <= 10:
+                _check(checks, "lyrics.sync", "lyrics", "warning", f"“{ln['text'][:30]}” shows {gap[1] - ln['start']:.1f} s before the singing",
+                       "The vocal stem is silent when this line appears.", "medium",
+                       "Move the line later in the lyric timing editor.", ln["start"], gap[1])
+    starts = [ln["start"] for ln in lines]
+    for a, b in gaps:  # b = singing starts again
+        if b == float("inf") or (song_len and b >= song_len - 0.5):
+            continue
+        if not any(b - tol <= t <= b + tol for t in starts):
+            later = [t for t in starts if t > b]
+            if later and later[0] - b > tol and later[0] - b < 15:
+                off += 1
+                if off <= 10:
+                    _check(checks, "lyrics.sync", "lyrics", "warning", f"Singing starts at {b:.1f} s, its line {later[0] - b:.1f} s later",
+                           "Possibly a late line (or a sung part without lyrics).", "medium",
+                           "Check the timing of the next line.", b, later[0])
+    if not off:
+        _check(checks, "lyrics.sync", "lyrics", "pass", "Line starts match the singing",
+               f"Measured against the vocal stem, within {tol} s. Line level only, not word by word.")
+
+
+# ---------- API ----------
+
+class ShortPreviewRequest(BaseModel):
+    script: VideoScript
+    lang: str = "en"
+    music: str = ""
+    lengths: list[float] = []
+    full: bool = False
+
+
+STORY_ASPECTS = ("hook", "promise", "early_payoff", "purpose", "narration_footage", "structure", "ending")
+STORY_SCHEMA = {
+    "type": "object",
+    "properties": {"items": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"aspect": {"type": "string", "enum": list(STORY_ASPECTS)},
+                       "ok": {"type": "boolean"}, "title": {"type": "string"}, "note": {"type": "string"},
+                       "scene": {"type": "integer"}},
+        "required": ["aspect", "ok", "title", "note", "scene"], "additionalProperties": False}}},
+    "required": ["items"], "additionalProperties": False,
+}
+STORY_SYSTEM = """You are an editorial assistant reviewing the script of a short vertical video (YouTube Shorts,
+Reels, TikTok) before it is rendered. Give exactly one item per aspect:
+- hook: is there an immediate reason to keep watching in the first line?
+- promise: does the opening set up a clear question, event or claim?
+- early_payoff: is something of the promise delivered early, not only at the end?
+- purpose: is there a scene with no clear narrative purpose? (scene = its 1-based number, else 0)
+- narration_footage: does each scene's footage search (visual_query) / headline fit what the narration says? (name the worst scene)
+- structure: is there a hook, development and payoff?
+- ending: does it end complete, abruptly, or loop back to the opening on purpose?
+ok = true when it works. title: one short line. note: one or two sentences, specific to this script, phrased as advice
+("consider...", "possible pacing issue..."). Never predict views, retention or virality, and never promise an edit will
+improve them. Write in English; quote the script in its own language."""
+
+
+class StoryRequest(BaseModel):
+    script: VideoScript
+    lang: str = "en"
+
+
+@router.post("/api/inspect/preview/short/story")
+def story_review(req: StoryRequest):
+    """Optional AI review of the script text (no media is sent). Advisory only: every item is pass or warning."""
+    from fastapi import HTTPException
+
+    from .config import LLM_MODEL
+    from .script import make_client
+
+    sc = req.script
+    if not sc.scenes:
+        raise HTTPException(400, "The script has no scenes.")
+    text = {"title": sc.title, "language": LANGS.get(req.lang, LANGS["en"]).name,
+            "scenes": [{"n": i + 1, "narration": x.narration, "visual_query": x.visual_query,
+                        "headline": x.on_screen_text} for i, x in enumerate(sc.scenes)]}
+    try:
+        response = make_client().beta.messages.create(
+            model=LLM_MODEL, max_tokens=2500, system=STORY_SYSTEM,
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": STORY_SCHEMA}},
+            messages=[{"role": "user", "content": json.dumps(text, ensure_ascii=False)}])
+        items = json.loads(next(b.text for b in response.content if b.type == "text"))["items"]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"The AI review didn't work: {e}. The other checks don't need it.")
+    checks = []
+    result = {"stage": "preview", "profile": "short", "profile_label": "AI story review (Gemini)", "mode": "full",
+              "created": datetime.now().isoformat(timespec="seconds"), "checks": checks, "cancelled": False,
+              "sampled": "the script text only (title, narration, footage searches, headlines), reviewed by Gemini; "
+                         "advice for a human to weigh, not a prediction of views"}
+    seen = set()
+    for it in items:
+        if it["aspect"] in seen or it["aspect"] not in STORY_ASPECTS:
+            continue
+        seen.add(it["aspect"])
+        n = it["scene"] - 1 if 0 < it["scene"] <= len(sc.scenes) else None
+        item = _check(checks, f"ai.story.{it['aspect']}", "storytelling", "pass" if it["ok"] else "warning",
+                      it["title"][:120], f"{it['note'][:500]}\n(AI-assisted: review it yourself.)", "info" if it["ok"] else "low")
+        if n is not None:
+            _scene(item, n)
+    for a in STORY_ASPECTS:
+        if a not in seen:
+            _check(checks, f"ai.story.{a}", "storytelling", "not_checked", a.replace("_", " ").capitalize(), "The AI gave no answer.")
+    return _finish(result, [])
+
+
+@router.post("/api/inspect/preview/short")
+def preview_short(req: ShortPreviewRequest):
+    return inspect_short(req.script, req.lang, req.music, req.lengths, req.full)
+
+
+def _song_report(folder: Path) -> Path:
+    return folder / "quality" / "preview.json"
+
+
+@router.post("/api/inspect/preview/song/{slug}")
+def preview_song(slug: str, full: bool = False):
+    from . import lyricvideo
+
+    folder = lyricvideo._folder(slug)
+    rep = inspect_song(folder, full)
+    _song_report(folder).parent.mkdir(exist_ok=True)
+    _song_report(folder).write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {**rep, "outdated": False}
+
+
+@router.get("/api/inspect/preview/song/{slug}")
+def get_preview_song(slug: str):
+    from . import lyricvideo
+
+    folder = lyricvideo._folder(slug)
+    try:
+        rep = json.loads(_song_report(folder).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"report": None}
+    rep["outdated"] = rep.get("fingerprint") != _fp(_song_inputs(folder))
+    return {"report": rep}
