@@ -71,6 +71,9 @@ def write(job: Path, ep, tl: Timeline, entries: list[dict], made: dict, log=prin
     log(f"      cover: beat {cover['beat']} at {cover['t']:.1f}s -> cover.png")
     (job / "metadata.txt").write_text(metadata(ep), encoding="utf-8")
     tags = " ".join(f"#{t}" for t in ep.hashtags)
-    (job / "post.txt").write_text(post_body(ep.title, ep.description, tags, (made.get("music") or [None])[0]),
-                                  encoding="utf-8")
+    from ..commons import credit
+
+    photos = [credit(Path(c["file"])) for e in entries for c in (e["chosen"], *e.get("credits", [])) if c.get("file")]
+    (job / "post.txt").write_text(post_body(ep.title, ep.description, tags, (made.get("music") or [None])[0],
+                                            photos=photos), encoding="utf-8")
     return cover

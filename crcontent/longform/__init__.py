@@ -142,8 +142,24 @@ def pick_footage(job: Path, n: int, item_key: str, log=print) -> dict:
     if item is None:
         raise KeyError(f"Scene {n} has no alternative {item_key}.")
     footage.use(entries[i], item, script.scenes[i], tl.slots[i].length, cfg, job / "storyboard", log=log)
+    entries[i]["chosen"]["picked"] = True  # chosen by hand: a Director Plan applied later keeps it
     _save(job, entries, cfg, script)
     return entries[i]
+
+
+def apply_plan(job: Path, plan) -> list[str]:
+    """Each scene cuts through the Director Plan's shots (plan_render.long_entries); the storyboard is rewritten so
+    it shows them before the render is approved. Returns what was done, in plain words."""
+    from .. import plan_render
+    from . import footage
+
+    cfg, script, tl, entries = _load(job)
+    entries, notes = plan_render.long_entries(plan, entries, [s.voiceover for s in script.scenes])
+    for e in entries:
+        if e["chosen"].get("plan"):
+            footage._thumb(Path(e["chosen"]["file"]), job / "storyboard" / f"scene-{e['scene']:02d}.jpg")
+    _save(job, entries, cfg, script)
+    return notes
 
 
 def search_footage(job: Path, n: int, query: str, log=print) -> dict:

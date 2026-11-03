@@ -315,15 +315,15 @@ def _clean_log(entry: dict) -> None:
                       "used_in": [u.label() for u in uses]} for m, src, q, uses in s["deferred"]]
 
 
-def choose(ep, tl, media: Path, out: Path, cfg: dict, log=print) -> list[dict]:
-    """footage.json's entries for a Short (see the module notes)."""
+def choose(ep, tl, media: Path, out: Path, cfg: dict, log=print, director: dict[int, str] | None = None) -> list[dict]:
+    """footage.json's entries for a Short (see the module notes). director: {beat: the AI Director's shots}."""
     out.mkdir(parents=True, exist_ok=True)
     name_animal(ep, log)
     log(f"      animal: {ep.animal}")
     p = Picker(ep, tl, media, out, cfg, Registry(OUTPUT_DIR, ep.script.slug), log)
     if p.skipped_sources:
         log(f"      ! skipped: {'; '.join(p.skipped_sources)}")
-    plans = queries.plan(ep, log)
+    plans = queries.plan(ep, log, director)
     scenes = ep.script.scenes
     entries = [_entry(s, plan) for s, plan in zip(scenes, plans)]
     best: dict[int, dict | None] = {}

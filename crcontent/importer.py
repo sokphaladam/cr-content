@@ -19,7 +19,9 @@ EMOJI = re.compile(
 )
 STOPWORDS = set("""close a an the of to and or with on in at by for from into onto then simple animation appearing
 appear each its it is are be being close-up closeup shot shots camera staring scene showing shows show while
-that this these those very like as up down out over under some more most almost just""".split())
+that this these those very like as up down out over under some more most almost just
+they them their he she his her we you your our even next time also when what which who will would can could has
+have had was were not but if than there here about after before again ever every only all did does way""".split())
 
 
 def strip_emoji(text: str) -> str:
@@ -127,7 +129,10 @@ def parse_basic(text: str) -> VideoScript:
             current[last_field] = (current[last_field] + " " + line.strip('"“”')).strip()
 
     scenes = [s for s in scenes if s["narration"] or s["text"]]
-    if not scenes:
+    if not scenes:  # no labels at all: a plain finished script, read as prose
+        prose = _prose(text)
+        if prose:
+            return prose
         raise ValueError("Couldn't find any scenes. Label lines with “Voiceover:”, “Visual:” and “On-screen text:”, "
                          "or connect Gemini to import scripts in any format.")
     return _clean(VideoScript(
@@ -137,6 +142,44 @@ def parse_basic(text: str) -> VideoScript:
                       on_screen_text=s["text"]) for s in scenes],
         caption=caption,
         hashtags=hashtags,
+    ))
+
+
+SENTENCE = re.compile(r"(?<=[.!?។])\s+")
+MAX_WORDS = 30  # a longer paragraph is split into scenes of whole sentences up to about this many words
+
+
+def _prose(text: str) -> VideoScript | None:
+    """A script with no labels: an optional title line (short, no closing punctuation), then one scene per line or
+    paragraph (long ones split at sentence ends), narration kept word for word. None when there's nothing to say."""
+    lines = [l.strip() for l in text.splitlines()]
+    lines = [l for l in lines if l and not END_MARKERS.match(l)]
+    title = ""
+    if len(lines) > 1 and len(lines[0].split()) <= 10 and not re.search(r"[.!?។,:;]$", lines[0]):
+        title = lines.pop(0).lstrip("#").strip()
+    parts: list[str] = []
+    for line in lines:
+        chunk = ""
+        for sentence in SENTENCE.split(line):
+            if chunk and len((chunk + " " + sentence).split()) > MAX_WORDS:
+                parts.append(chunk)
+                chunk = sentence
+            else:
+                chunk = f"{chunk} {sentence}".strip()
+        if chunk:
+            parts.append(chunk)
+    parts = [x for x in parts if re.search(r"\w", x)]
+    if not parts:
+        return None
+    # shortcut: _keywords reads Latin letters only, so Khmer prose searches by its title's words or a generic
+    # background; upgrade with a Khmer word list if offline Khmer imports matter
+    subject = _keywords(title).split()[:1]
+    return _clean(VideoScript(
+        title=title or "Imported script",
+        scenes=[Scene(narration=x, visual_query=" ".join(dict.fromkeys(subject + _keywords(x).split()[:2]))
+                      or "abstract background", on_screen_text="") for x in parts],
+        caption="",
+        hashtags=[],
     ))
 
 

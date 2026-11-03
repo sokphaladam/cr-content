@@ -54,7 +54,7 @@ def _media_asset(rel: str, n: int) -> Asset:
     from . import commons
 
     if line := commons.credit(ROOT / rel):
-        return Asset(id=f"media:{rel}", name=f"Scene {n} {kind}: {name}", type=kind, source="Wikimedia Commons",
+        return Asset(id=f"media:{rel}", name=f"Scene {n} {kind}: {name}", type=kind, source=commons.site(ROOT / rel),
                      license=line, attribution_required="yes", attribution_text=line, auto=True)
     own = rel.startswith("uploads/")
     return Asset(id=f"media:{rel}", name=f"Scene {n} {kind}: {name}", type=kind,

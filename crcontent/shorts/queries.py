@@ -73,15 +73,20 @@ def local_plan(scene, animal: str) -> dict:
             "reuse_opening": bool(REUSE_OPENING.search(scene.visual)) and scene.n > 1}
 
 
-def plan(ep, log=print) -> list[dict]:
-    """[{beat, shot, queries, key_objects, reuse_opening}] for every beat of `ep` (ep.animal_search must be set)."""
+def plan(ep, log=print, director: dict[int, str] | None = None) -> list[dict]:
+    """[{beat, shot, queries, key_objects, reuse_opening}] for every beat of `ep` (ep.animal_search must be set).
+    director: {beat: the AI Director's shots for it}, which the planned shot follows."""
     animal = ep.animal_search or "animal"
     scenes = ep.script.scenes
-    listing = "\n".join(f"{s.n}. VISUAL: {s.visual} | TEXT: {s.text} | VO: {s.voiceover}" for s in scenes)
+    director = director or {}
+    listing = "\n".join(f"{s.n}. VISUAL: {s.visual} | TEXT: {s.text} | VO: {s.voiceover}"
+                        + (f" | DIRECTOR'S SHOTS: {director[s.n]}" if director.get(s.n) else "") for s in scenes)
+    follow = (" When a beat has DIRECTOR'S SHOTS, the planned shot is the director's first shot (it was planned from "
+              "the Visual), and the searches look for it." if director else "")
     try:
         got = _ask(
             f"A YouTube Short about: {ep.animal or animal} (stock search word: \"{animal}\").\nIts beats:\n{listing}\n\n"
-            f"For every beat: shot: the planned shot in a few plain words. {RULES} reuse_opening: true only when the "
+            f"For every beat: shot: the planned shot in a few plain words.{follow} {RULES} reuse_opening: true only when the "
             "Visual says to cut back to the opening / same shot as the start (never for beat 1).", PLAN_SCHEMA)
         by_beat = {b["beat"]: b for b in got["beats"]}
         out = []

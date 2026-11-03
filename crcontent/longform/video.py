@@ -239,8 +239,12 @@ def scene_clip(chosen: dict, length: float, out: Path, size: tuple[int, int], lo
         start = min(0.5, max(duration(footage) - length, 0.0))
     parts = [Path(p) for p in chosen.get("parts") or []][1:]
     if parts:
-        cut = length / (len(parts) + 1)
-        broll = [(p, cut * (k + 1), cut + (0.05 if k < len(parts) - 1 else 0.5)) for k, p in enumerate(parts)]
+        # a Director Plan's shots keep their planned share of the scene; a montage cuts evenly
+        weights = chosen.get("weights") or [1] * (len(parts) + 1)
+        unit = length / sum(weights)
+        starts = [unit * sum(weights[:k + 1]) for k in range(len(parts))]
+        broll = [(p, at, (starts[k + 1] - at + 0.05) if k < len(parts) - 1 else length - at + 0.5)
+                 for k, (p, at) in enumerate(zip(parts, starts))]
         render_scene(footage, None, length, out, start=start, size=size, look=look, broll=broll)
         return
     narrow = chosen["source"] not in ("own", "card") and aspect(footage) < (1.5 if footage.suffix.lower() not in
@@ -251,19 +255,38 @@ def scene_clip(chosen: dict, length: float, out: Path, size: tuple[int, int], lo
 JOIN_GROUP = 12  # clips dissolved together in one FFmpeg run (each open input holds decoded 1080p frames)
 
 
-def _dissolve(inputs: list[str], starts: list[float], fade: float, work: Path, out_name: str) -> None:
-    """`inputs` (names in work/) dissolved into each other; input k fades in at starts[k] - starts[0]."""
+CUT = 1 / 30  # a "hard cut" is a one-frame xfade, so every clip keeps the start time the timeline gave it
+# a Director Plan's transition into the next scene -> (xfade transition, share of the crossfade setting)
+TRANSITIONS = {"cross_dissolve": ("fade", 1.0), "dip_to_black": ("fadeblack", 1.0)}
+
+
+def transition(entry: dict | None, fade: float) -> tuple[str, float]:
+    """How the scene after `entry` comes in: the plan's choice, else (no plan) the crossfade setting as before."""
+    if not entry or "transition" not in entry:
+        return "fade", fade
+    kind, share = TRANSITIONS.get(entry["transition"], ("fade", 0.0))
+    return (kind, fade * share) if share else ("fade", CUT)
+
+
+def _dissolve(inputs: list[str], starts: list[float], fade: float, work: Path, out_name: str,
+              ways: list[tuple[str, float]] | None = None) -> None:
+    """`inputs` (names in work/) dissolved into each other; input k fades in at starts[k] - starts[0].
+    ways[k - 1]: how input k comes in (xfade transition, seconds); a plain `fade` dissolve when not given."""
     cmd, parts, last = ["ffmpeg", "-y", "-hide_banner"], [], "0:v"
     for name in inputs:
         cmd += ["-i", name]
     for k in range(1, len(inputs)):
-        parts.append(f"[{last}][{k}:v]xfade=transition=fade:duration={fade:.3f}:offset={starts[k] - starts[0]:.3f}[j{k}]")
+        kind, length = ways[k - 1] if ways else ("fade", fade)
+        # never longer than the `fade` seconds of extra picture each clip carries
+        parts.append(f"[{last}][{k}:v]xfade=transition={kind}:duration={max(min(length, fade), CUT):.3f}"
+                     f":offset={starts[k] - starts[0]:.3f}[j{k}]")
         last = f"j{k}"
     run([*cmd, "-filter_complex", ";".join(parts) or "[0:v]null[j0]", "-map", f"[{last if parts else 'j0'}]", "-an",
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "10", "-pix_fmt", "yuv420p", out_name], cwd=work)
 
 
-def join(clips: list[Path], tl: Timeline, fade: float, work: Path, out_name: str) -> Path:
+def join(clips: list[Path], tl: Timeline, fade: float, work: Path, out_name: str,
+         ways: list[tuple[str, float]] | None = None) -> Path:
     """The scene clips joined by `fade`-second dissolves, each starting at its scene's real time.
 
     Every clip but the last carries `fade` seconds of extra picture, so a dissolve into scene k starting at its real
@@ -275,15 +298,17 @@ def join(clips: list[Path], tl: Timeline, fade: float, work: Path, out_name: str
         return concat(clips, work, out_name)
     starts = [s.start for s in tl.slots]
     if len(clips) <= JOIN_GROUP:
-        _dissolve([c.name for c in clips], starts, fade, work, out_name)
+        _dissolve([c.name for c in clips], starts, fade, work, out_name, ways)
         return work / out_name
     groups, group_starts = [], []
     for g in range(0, len(clips), JOIN_GROUP):
         name = f"group_{g // JOIN_GROUP:02d}.mp4"
-        _dissolve([c.name for c in clips[g:g + JOIN_GROUP]], starts[g:g + JOIN_GROUP], fade, work, name)
+        _dissolve([c.name for c in clips[g:g + JOIN_GROUP]], starts[g:g + JOIN_GROUP], fade, work, name,
+                  ways[g:g + JOIN_GROUP - 1] if ways else None)
         groups.append(name)
         group_starts.append(starts[g])
-    _dissolve(groups, group_starts, fade, work, out_name)
+    _dissolve(groups, group_starts, fade, work, out_name,
+              [ways[g - 1] for g in range(JOIN_GROUP, len(clips), JOIN_GROUP)] if ways else None)
     for name in groups:
         (work / name).unlink(missing_ok=True)
     return work / out_name
@@ -314,8 +339,10 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
 
     with ThreadPoolExecutor(3) as pool:
         list(pool.map(one, range(len(clips))))
-    log(f"      joining with {fade:.1f}s dissolves")
-    join(clips, tl, fade, work, "joined.mp4")
+    ways = [transition(entries[k], fade) for k in range(len(clips) - 1)]
+    planned = any("transition" in e for e in entries)
+    log(f"      joining with {'the planned transitions' if planned else f'{fade:.1f}s dissolves'}")
+    join(clips, tl, fade, work, "joined.mp4", ways)
     for c in clips:
         c.unlink(missing_ok=True)
 

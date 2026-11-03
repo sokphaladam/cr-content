@@ -45,6 +45,7 @@ import { MusicFinder } from "./MusicFinder";
 import { CaptionPanel } from "./LivePreview";
 import { SceneCard, type DraftScene } from "./SceneCard";
 import { Timeline } from "./Timeline";
+import { DirectorPlanPanel } from "./DirectorPlanPanel";
 import { Transcript, clock } from "./Transcript";
 import { Button, Chip, Field, IconButton, ResizeHandle, Segmented, Spinner, useToast } from "./ui";
 
@@ -769,6 +770,25 @@ export function Storyboard({
         <Transcript draft={draft} setDraft={setDraft} timeline={timeline} onActive={(uid) => onActive(uid, false)} />
       </div>
     ),
+    director: draft.id ? (
+      <DirectorPlanPanel
+        key={draft.id}
+        kind="draft"
+        refId={draft.id}
+        onAssemble={async () => {
+          const r = await api.assemblePlan("draft", draft.id!, draft.scenes.map(({ uid: _, ...s }) => s)); // eslint-disable-line @typescript-eslint/no-unused-vars
+          // an ordinary edit: it can be undone, and autosave keeps it
+          setDraft((d) => ({
+            ...d,
+            mood: d.mood || r.mood || "",
+            scenes: d.scenes.map((s, i) => (r.scenes?.[i] ? { ...s, ...r.scenes[i], uid: s.uid } : s)),
+          }));
+          return r.notes;
+        }}
+      />
+    ) : (
+      <p className="m-0 p-3 text-sm text-ink-soft">The Director Plan shows once the draft is saved.</p>
+    ),
     visuals: visualsPanel,
     audio: audioPanel,
     post: postPanel,
@@ -944,12 +964,13 @@ export function Storyboard({
   );
 }
 
-type LeftTab = "scenes" | "script" | "visuals" | "audio" | "post";
+type LeftTab = "scenes" | "script" | "director" | "visuals" | "audio" | "post";
 type RightTab = "scene" | "captions" | "check" | "export";
 
 const LEFT_TABS: { value: LeftTab; label: string; icon: ReactNode }[] = [
   { value: "scenes", label: "Scenes", icon: <ListVideo className="size-4" /> },
   { value: "script", label: "Script", icon: <ScrollText className="size-4" /> },
+  { value: "director", label: "Director", icon: <Clapperboard className="size-4" /> },
   { value: "visuals", label: "Visuals", icon: <Palette className="size-4" /> },
   { value: "audio", label: "Audio", icon: <AudioLines className="size-4" /> },
   { value: "post", label: "Post", icon: <Send className="size-4" /> },

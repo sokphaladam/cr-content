@@ -569,6 +569,32 @@ Everything lands in `output/<time>-<lang>-<title>/`: `video.mp4` and the files a
   (`auto`, `nvenc` or `cpu`), `captions`, and how long title cards and lower thirds stay up.
 - `music`: `dir` and `volume`.
 
+## AI Director (paste a script, get a directed video)
+
+In the app: **Create Video → Script to video**, paste a finished script, pick **Shorts** (9:16) or **Long Video**
+(16:9). Your narration is never rewritten: it is split into scenes, and every scene gets a **Director Plan**
+(`crcontent/director_plan.py`, schema version 1) saved with the project: in the draft (`drafts/<id>/draft.json`) for a
+Short, `output/<job>/plan.json` for a long video or a Shorts Mode job.
+
+1. **Direct** (`ai_director.py`): Gemini reads the whole script once and plans the story, the beats, each scene's
+   shots (type, angle, movement, framing, duration, transitions, sound cues), continuity and what footage would
+   prove each line. Answers are validated against the schema and cached; re-directing one scene only asks about that
+   scene. Without `GEMINI_API_KEY` the plan stays one shot per scene and the app says so.
+2. **Footage per shot** (`shot_footage.py`): your own file first, `media/<script>/shot-003-2.mp4` (or .jpg...), or
+   `scene-03.mp4` for a scene's first shot; then the Script to Video libraries above. Gemini scores each pick for
+   subject, action and quality; a weak match is flagged on the shot instead of passed off as the real thing, and a
+   few alternatives are kept. A shot you edit or pick by hand is locked, so a new search or plan keeps it.
+3. **Assemble** (`plan_render.py`): **Put footage in the video** cuts each scene through its shots, in the Short's
+   editor (undoable) or the long video's storyboard. Then render as usual.
+4. **Inspect**: a rendered video opens with the Quality check above (timestamped issues).
+
+**Stopping and recovery**: every render and footage job has a **Stop** button (`POST /api/jobs/<id>/cancel`). A
+queued job never starts; a running one stops at its next step and a running FFmpeg encode is killed. What was made
+so far stays: footage is saved per shot as it is found, voiceover and downloads stay cached. Jobs live in the engine,
+so a restart ends them; the plan panel then says the search was interrupted and **Find the missing footage**
+searches only the shots that still have none. A stopped or interrupted render is started again from its draft,
+storyboard or pre-flight page.
+
 ## Shorts Mode (YouTube Shorts from a content plan, held to your analytics)
 
 One upload-ready 1080×1920 Short per episode of an Excel plan, checked against rules that come from the channel's

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Download, Film, ImageIcon, ImageUp, ListMusic, Music, Sparkles, Trash2 } from "lucide-react";
+import { Check, Copy, Download, Film, ImageIcon, ImageUp, ListMusic, Music, Sparkles, Square, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { API_BASE, api, fileUrl, outputUrl, type Job, type Lang, type MusicVideoSettings, type Options, type PostSuggestion, type Scene, type ThumbStyle, type ThumbSuggestion, type ThumbSuggestions, type VideoDetail, type VideoSummary } from "@/lib/api";
 import { isImagePath, relativeTime } from "@/lib/format";
@@ -274,9 +274,32 @@ function Progress({ job, title }: { job: Job | null; title: string }) {
   const finished = job?.status === "done";
   const progress = job?.status === "running" ? job.progress : null;
   const timeLeft = useTimeLeft(step, progress);
+  const [stoppingId, setStoppingId] = useState<string | null>(null); // per job: a new job starts unstopped
+  const stopping = !!job && stoppingId === job.id;
+  const toast = useToast();
+  const stoppable =
+    !!job && (job.status === "queued" || job.status === "running") && !["publish", "lyric_video", "inspect"].includes(job.kind ?? "");
+  async function stop() {
+    if (!job) return;
+    setStoppingId(job.id);
+    try {
+      await api.cancelJob(job.id);
+    } catch (e) {
+      setStoppingId(null);
+      toast((e as Error).message, "error");
+    }
+  }
   return (
     <div className="flex h-full flex-col gap-3.5 px-5 pt-7 pb-4">
-      <p className="m-0 font-display text-xl leading-tight font-bold">{title}</p>
+      <div className="flex items-start justify-between gap-3">
+        <p className="m-0 font-display text-xl leading-tight font-bold">{title}</p>
+        {stoppable && (
+          <Button size="sm" variant="ghost" loading={stopping} disabled={stopping} icon={<Square className="size-3.5" />} onClick={() => void stop()}
+            title="Stops at the next step. Footage, voice and files made so far are kept.">
+            {stopping ? "Stopping…" : "Stop"}
+          </Button>
+        )}
+      </div>
       <ol className="m-0 grid list-none gap-2 p-0">
         {stepsFor(job).map((label, i) => {
           const n = i + 1;

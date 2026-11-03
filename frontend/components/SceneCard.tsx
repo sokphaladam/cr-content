@@ -352,7 +352,9 @@ export function SceneCard({
     }
   }
 
-  const setBroll = (k: number, patch: Partial<BRoll>) => onChange({ broll: broll.map((b, j) => (j === k ? { ...b, ...patch } : b)) });
+  // a time typed by hand is meant literally: it's no longer stretched to the voice like a planned one
+  const setBroll = (k: number, patch: Partial<BRoll>) =>
+    onChange({ broll: broll.map((b, j) => (j === k ? { ...b, ...patch, ...(("at" in patch || "duration" in patch) && { basis: 0 }) } : b)) });
   const setText = (k: number, patch: Partial<TextOverlay>) => onChange({ texts: texts.map((t, j) => (j === k ? { ...t, ...patch } : t)) });
   const ListenIcon = listenState === "loading" ? Spinner : listenState === "playing" ? Pause : Play;
   const uploadButton = (target: PickTarget, label: string) => (

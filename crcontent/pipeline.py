@@ -2150,10 +2150,13 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
     second = {i: _existing(scene.media2) or picker.pick(scene.visual_query)
               for i, scene in enumerate(script.scenes) if scene.layout == "split"}
     base_fx = fx.default_effects(art_style, music=False) if art_style else ["vignette"]
-    clips, hits, scene_at = [], [], 0.0
+    clips, hits, scene_at, cut_sounds = [], [], 0.0, []
     for i, (scene, (mp3, words, length)) in enumerate(zip(script.scenes, timed)):
-        broll = [(path, b.at, b.duration) for b in scene.broll
-                 if (path := _existing(b.media)) and b.duration > 0 and b.at < length]
+        stretch = [length / b.basis if b.basis > 0 else 1.0 for b in scene.broll]  # planned on an estimate
+        broll = [(path, b.at * f, b.duration * f, b.fade) for b, f in zip(scene.broll, stretch)
+                 if (path := _existing(b.media)) and b.duration > 0 and b.at * f < length]
+        cut_sounds += [(sfx.sound(b.sound), scene_at + b.at * f, 0.5) for b, f in zip(scene.broll, stretch)
+                       if b.sound in sfx.SOUNDS and _existing(b.media) and b.at * f < length]
         clip = work / f"scene_{i:02d}.mp4"
         still = picked[i] is not None and picked[i].suffix.lower() in IMAGE_EXTS
         # pacing: a hit on the punchy words (and always one in the hook, within its first 2 s), and cuts to new
@@ -2202,7 +2205,8 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
     log("[5/5] Final render")
     final = job / "video.mp4"
     track = pick_music(music, script.mood)
-    finalize(work, "joined.mp4", "captions.ass", final, track, effects=sfx.impact_track(pacing.sound_times(hits)),
+    finalize(work, "joined.mp4", "captions.ass", final, track,
+             effects=sfx.impact_track(pacing.sound_times(hits)) + cut_sounds,
              animation=bool(art_style))  # drawn scenes: x264 tuned for flat colour and line art
     try:
         if 1 <= script.key_scene <= len(clips):  # the cover shows the key visual
@@ -2235,7 +2239,8 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
     tags = " ".join(f"#{h}" for h in script.hashtags)
     from .commons import credit as photo_credit
 
-    photos = [photo_credit(p) for p in picked if p]  # real photos used (Wikimedia Commons) must be credited
+    shown = [*picked, *second.values(), *(_existing(b.media) for s in script.scenes for b in s.broll)]
+    photos = [photo_credit(p) for p in shown if p]  # downloaded photos and clips whose licence asks for a credit
     (job / "post.txt").write_text(post_body(script.title, script.caption, tags, track, script.sources, photos),
                                   encoding="utf-8")
     log(f"Done: {final}  ({t:.1f}s)")

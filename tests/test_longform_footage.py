@@ -65,3 +65,24 @@ def test_credits_name_the_new_libraries():
     lines = _attributions(entries)
     assert lines[0].startswith("Photo: A. Birder, CC BY 4.0, via iNaturalist")
     assert "Internet Archive" in lines[1]
+
+
+def test_a_montage_credits_each_part_from_its_source_record(tmp_path):
+    import json
+    com = tmp_path / "abc.jpg"
+    com.with_suffix(".json").write_text(json.dumps({"author": "G. L.", "licence": "CC BY-SA 4.0", "page": "https://c/f"}))
+    inat = tmp_path / "inaturalist-photo-1.jpg"
+    inat.with_suffix(".json").write_text(json.dumps({"source": "inaturalist", "kind": "photo", "author": "J. E.",
+                                                     "licence": "CC BY 4.0", "page": "https://i/o"}))
+    stock, own = tmp_path / "pixabay-video-9.mp4", tmp_path / "mine.mp4"  # no records
+    parts = [str(p) for p in (com, inat, stock, own)]
+    script = Script("Birds", "birds", "en", [Scene(1, 0, "v", "", "")])
+    entries = [{"scene": 1, "chosen": {"source": "montage", "kind": "video", "file": parts[0], "parts": parts,
+                                       "page": "", "author": "", "licence": "", "licence_url": ""}}]
+    text = credits(script, entries, [])
+    assert "montage of the video's other scenes" in text
+    assert "by G. L. on Wikimedia Commons, CC BY-SA 4.0" in text and "by J. E. on iNaturalist, CC BY 4.0" in text
+    assert "on Pixabay" in text and "mine.mp4" not in text.split("montage")[1]
+    assert _attributions(entries) == ["Photo: G. L., CC BY-SA 4.0, via Wikimedia Commons (https://c/f)",
+                                      "Photo: J. E., CC BY 4.0, via iNaturalist (https://i/o)",
+                                      "Stock footage: Pixabay."]

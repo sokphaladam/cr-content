@@ -17,10 +17,28 @@ GRADIENT_PALETTES = [
 ]
 
 
-def run(cmd: list[str], cwd: Path | None = None) -> None:
+# a scene's FFmpeg run is given this long before it counts as stalled: ~5 s of work for 7 s of 1080p normally,
+# so even a slow CPU-only machine is far inside it
+SCENE_TIMEOUT = 90.0
+SCENE_TIMEOUT_PER_SECOND = 10.0
+
+
+def run(cmd: list[str], cwd: Path | None = None, timeout: float | None = None) -> None:
+    """Run FFmpeg; RuntimeError when it fails. `timeout` (seconds): kill a run that takes longer and try once more,
+    then fail. FFmpeg 8.1 has been seen to freeze for good just before finishing a scene (no CPU, file never closed);
+    without a limit the job would show as rendering forever."""
     # stdin=DEVNULL: ffmpeg reads stdin for key commands; it must never touch ours (the desktop app's keep-alive pipe)
-    proc = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
+    for attempt in (1, 2):
+        try:
+            proc = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=timeout)
+            break
+        except subprocess.TimeoutExpired:  # subprocess.run has killed it
+            print(f"  ! ffmpeg stalled for {timeout:.0f}s on {Path(cmd[-1]).name}"
+                  + ("; trying again" if attempt == 1 else ""), flush=True)
+    else:
+        raise RuntimeError(f"ffmpeg stalled twice ({timeout:.0f}s each) making {Path(cmd[-1]).name}. "
+                           "Try the render again.")
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg failed ({proc.returncode}):\n{' '.join(cmd)}\n{proc.stderr[-2000:]}")
 
@@ -33,10 +51,15 @@ def run_progress(cmd: list[str], seconds: float, progress, cwd: Path | None = No
         proc = subprocess.Popen([cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]], cwd=cwd,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err, text=True,
                                 encoding="utf-8", errors="replace")
-        for line in proc.stdout:
-            key, _, value = line.strip().partition("=")
-            if key in ("out_time_us", "out_time_ms") and value.isdigit() and seconds > 0:
-                progress(min(int(value) / 1e6 / seconds, 1.0))  # both are microseconds (FFmpeg's naming)
+        try:
+            for line in proc.stdout:
+                key, _, value = line.strip().partition("=")
+                if key in ("out_time_us", "out_time_ms") and value.isdigit() and seconds > 0:
+                    progress(min(int(value) / 1e6 / seconds, 1.0))  # both are microseconds (FFmpeg's naming)
+        except BaseException:  # the job was stopped (or progress failed): don't leave FFmpeg encoding on its own
+            proc.kill()
+            proc.wait()
+            raise
         code = proc.wait()
         if code != 0:
             err.seek(0)
@@ -175,10 +198,12 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
 
     # cutaways: each one timed to start `at` seconds in and laid over the frame while it lasts
     current = "base"
-    for k, (clip, at, seconds) in enumerate(broll):
+    for k, (clip, at, seconds, *more) in enumerate(broll):
+        fade = min(float(more[0]), seconds / 2) if more and more[0] else 0.0  # (clip, at, seconds[, dissolve seconds])
+        dissolve = f",format=yuva420p,fade=t=in:st={at:.3f}:d={fade:.3f}:alpha=1" if fade > 0 else ""
         n_inputs = sum(1 for a in inputs if a == "-i")
         inputs += _media_input(clip, seconds, 0.0, size)
-        vf += (f";[{n_inputs}:v]{_cover(W, H)},trim=duration={seconds:.3f},setpts=PTS-STARTPTS+{at:.3f}/TB,{grade}[b{k}];"
+        vf += (f";[{n_inputs}:v]{_cover(W, H)},trim=duration={seconds:.3f},setpts=PTS-STARTPTS+{at:.3f}/TB,{grade}{dissolve}[b{k}];"
                f"[{current}][b{k}]overlay=enable='between(t,{at:.3f},{at + seconds:.3f})':eof_action=pass[o{k}]")
         current = f"o{k}"
     vf += f";[{current}]{_pace_filter(W, H, impacts, cuts)}[v]"
@@ -192,7 +217,7 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
          # generations of loss
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "10",
          "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
-         str(out)])
+         str(out)], timeout=SCENE_TIMEOUT + SCENE_TIMEOUT_PER_SECOND * length)
 
 
 def concat(clips: list[Path], workdir: Path, out_name: str) -> Path:

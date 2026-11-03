@@ -19,6 +19,77 @@ export type Lang = "en" | "km";
 // must match director_plan.STYLES in the engine
 export type VisualStyle = "cinematic_documentary" | "cinematic_wildlife" | "educational" | "storytelling";
 
+/** The Director Plan of a Script-to-Video project (crcontent/director_plan.py). */
+export type FootageMatch = "own" | "drawn" | "exact" | "good" | "subject_only" | "weak" | "unchecked";
+export interface PlanFootage {
+  source: string;
+  kind: "video" | "photo";
+  file: string;
+  thumb: string;
+  page: string;
+  author: string;
+  licence: string;
+  licence_url: string;
+  query: string;
+  width: number;
+  height: number;
+  duration: number;
+  subject_score: number | null;
+  action_score: number | null;
+  quality_score: number | null;
+  problem: string;
+  match: FootageMatch;
+}
+export interface PlanShot {
+  id: string;
+  scene_id: string;
+  purpose: string;
+  shot_type: string;
+  subject: string;
+  action: string;
+  visual_description: string;
+  camera: { angle: string; movement: string; framing: string };
+  lighting: string;
+  duration_seconds: number;
+  narration_reference: string;
+  footage_queries: string[];
+  sound_design: string[];
+  transition_out: string;
+  visual_priority: "low" | "normal" | "high";
+  factual_requirements: string[];
+  alternatives: string[];
+  evidence: "exact_action" | "subject" | "supporting" | "illustrative";
+  locked: boolean;
+  footage: PlanFootage | null;
+  candidates: PlanFootage[];
+  warnings: string[];
+}
+export interface PlanScene {
+  id: string;
+  narration: string;
+  on_screen_text: string;
+  visual_notes: string;
+  purpose: string;
+  viewer_objective: string;
+  emotion: string;
+  transition_out: string;
+}
+export interface DirectorPlan {
+  version: number;
+  planned_by: "script" | "ai";
+  project: { title: string; format: "short" | "long"; aspect_ratio: string; language: string; visual_style: string };
+  story: { hook: string; central_idea: string; emotional_arc: string[]; payoff: string; audience: string; key_facts: string[] };
+  continuity: { subjects: string[]; locations: string[]; lighting: string[]; visual_style: string };
+  scenes: PlanScene[];
+  shots: PlanShot[];
+  edit_plan: { music_mood: string; sound_effects: string[]; colour_grade: string; pacing: string };
+  suggestions: string[];
+  warnings: string[];
+  footage_job?: string | null; // a footage search running for it (GET and re-plan answers only)
+  media_folder?: string; // where your own clips for its shots go (GET only)
+}
+export type PlanKind = "draft" | "long" | "short"; // short: a Shorts Mode job
+
 export interface Scene {
   narration: string;
   visual_query: string;
@@ -97,6 +168,9 @@ export interface BRoll {
   media: string;
   at: number;
   duration: number;
+  fade?: number; // seconds it dissolves in over (0 = hard cut)
+  sound?: string; // a sound effect on the cut: whoosh, impact or thunder
+  basis?: number; // >0: timed on the Director Plan's estimate; the render stretches it to the real voice
 }
 
 /** Extra text on the frame for a while (seconds from the scene's start); x, y = its middle as fractions. */
@@ -334,7 +408,7 @@ export type Aspect = "16:9" | "9:16";
 
 export interface Job {
   id: string;
-  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short" | "lyric_video" | "inspect";
+  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short" | "lyric_video" | "inspect" | "plan_footage";
   status: "queued" | "running" | "done" | "error";
   step: number;
   progress?: number | null; // how far the current step is, 0..1 (null/absent: no measure for it)
@@ -343,6 +417,7 @@ export interface Job {
   title: string;
   video?: string;
   error?: string;
+  cancelled?: boolean; // stopped by the user (error says what was kept)
   summary?: string; // excel: "5 of 6 videos made; failed: Ep 3"
   videos?: string[]; // short: every pre-flight folder made (video is the first)
   platform?: Platform; // publish
@@ -1126,8 +1201,30 @@ export const api = {
     request<{ script: VideoScript; lang: Lang; method: "claude" | "basic" }>("/api/import", { method: "POST", json: { text, lang: "auto" }, timeout: 0 }),
   /** Script to Video: a finished script becomes a Short draft or starts a Long Video storyboard, with its Director Plan. */
   scriptVideo: (body: { text: string; format: "short" | "long"; lang: Lang | "auto"; visual_style: VisualStyle }) =>
-    request<{ format: "short" | "long"; id: string; title: string; scenes: number; method?: "claude" | "basic" }>(
+    request<{
+      format: "short" | "long"; id: string; title: string; scenes: number; method?: "claude" | "basic";
+      planned_by?: "script" | "ai"; director_note?: string; footage_job?: string;
+    }>(
       "/api/script-video", { method: "POST", json: body, timeout: 0 }),
+  plan: (kind: PlanKind, ref: string) => request<DirectorPlan>(`/api/plans/${kind}/${encodeURIComponent(ref)}`),
+  savePlan: (kind: PlanKind, ref: string, plan: DirectorPlan) =>
+    request<DirectorPlan>(`/api/plans/${kind}/${encodeURIComponent(ref)}`, { method: "PUT", json: plan }),
+  /** Ask the AI Director again: the whole video, or only `scenes` (shots the user edited are kept). */
+  directPlan: (kind: PlanKind, ref: string, body: { scenes?: string[]; note?: string }) =>
+    request<DirectorPlan>(`/api/plans/${kind}/${encodeURIComponent(ref)}/direct`, { method: "POST", json: body, timeout: 0 }),
+  /** Find, download and check footage for the plan's shots (all, or `shots`) in the background. */
+  planFootage: (kind: PlanKind, ref: string, shots: string[] = []) =>
+    request<{ id: string }>(`/api/plans/${kind}/${encodeURIComponent(ref)}/footage`, { method: "POST", json: { shots } }),
+  stopPlanFootage: (kind: PlanKind, ref: string) =>
+    request<{ id: string | null }>(`/api/plans/${kind}/${encodeURIComponent(ref)}/footage/cancel`, { method: "POST" }),
+  /** Put the plan's footage into the video. A Short gets its scenes back (to load into the editor); a long video's
+   *  storyboard is updated on the engine. */
+  assemblePlan: (kind: PlanKind, ref: string, scenes: Scene[] = []) =>
+    request<{ scenes?: Scene[]; mood?: string; notes: string[] }>(`/api/plans/${kind}/${encodeURIComponent(ref)}/assemble`, {
+      method: "POST", json: { scenes } }),
+  pickFootage: (kind: PlanKind, ref: string, shot: string, index: number) =>
+    request<DirectorPlan>(`/api/plans/${kind}/${encodeURIComponent(ref)}/shots/${encodeURIComponent(shot)}/pick`, {
+      method: "POST", json: { index }, timeout: 0 }),
   translate: (script: VideoScript, target: Lang) =>
     request<VideoScript>("/api/translate", { method: "POST", json: { script, target }, timeout: 0 }),
   ideas: (narration: string, current: string) =>
@@ -1232,6 +1329,8 @@ export const api = {
     request<{ id: string; updated: string }>(`/api/drafts/${encodeURIComponent(id)}`, { method: "PUT", json: d }),
   deleteDraft: (id: string) => request<unknown>(`/api/drafts/${encodeURIComponent(id)}`, { method: "DELETE" }),
   job: (id: string) => request<Job>(`/api/jobs/${id}`),
+  /** Stop a render or footage job: a queued one never starts, a running one stops at its next step. */
+  cancelJob: (id: string) => request<{ id: string; status: Job["status"] }>(`/api/jobs/${id}/cancel`, { method: "POST" }),
   inspection: (t: InspectTarget) => request<{ report: QualityReport | null; job: string | null }>(inspectPath(t)),
   inspect: (t: InspectTarget) => request<{ id: string }>(inspectPath(t), { method: "POST" }),
   previewShort: (body: { script: VideoScript; lang: Lang; music: string; lengths: number[]; full: boolean }) =>

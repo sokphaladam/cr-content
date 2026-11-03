@@ -131,8 +131,8 @@ export function Timeline({
           j !== drag.k
             ? item
             : drag.edge
-              ? { ...item, duration: round(Math.min(Math.max(drag.duration + dt, 0.2), drag.max - drag.at)) }
-              : { ...item, at: round(Math.min(Math.max(drag.at + dt, 0), Math.max(drag.max - drag.duration, 0))) },
+              ? { ...item, ...(drag.list === "broll" && { basis: 0 }), duration: round(Math.min(Math.max(drag.duration + dt, 0.2), drag.max - drag.at)) }
+              : { ...item, ...(drag.list === "broll" && { basis: 0 }), at: round(Math.min(Math.max(drag.at + dt, 0), Math.max(drag.max - drag.duration, 0))) },
         ),
       }));
     }

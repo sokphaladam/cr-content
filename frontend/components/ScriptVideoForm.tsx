@@ -40,9 +40,11 @@ export function ScriptVideoForm({
       else
         onDraft(
           r.id,
-          r.method === "basic"
+          (r.method === "basic"
             ? `Made ${r.scenes} scenes with the basic reader (Gemini wasn't available). Check the footage searches.`
-            : `Made ${r.scenes} scenes. Your voiceover is kept word for word.`,
+            : `Made ${r.scenes} scenes. Your voiceover is kept word for word.`) +
+            (r.planned_by === "ai" ? " The AI Director's shot plan is under Director." : r.director_note ? ` ${r.director_note}` : "") +
+            (r.footage_job ? " Footage for every shot is being found and checked now." : ""),
         );
     } catch (err) {
       setMsg({ text: (err as Error).message, error: true });

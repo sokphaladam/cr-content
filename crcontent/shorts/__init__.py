@@ -67,7 +67,9 @@ def make_job(ep, log=print, job: Path | None = None) -> Path:
 
 def _make_steps(ep, script, cfg, job: Path, media: Path, log) -> Path:
     from ..longform import voice
-    from . import footage, preflight, timing
+    from . import directed, footage, preflight, timing
+
+    plan = directed.plan_for(ep, job, log=log)
 
     log(f"[2/{STEPS}] Voiceover ({cfg['voice']['engine']})")
     voices = voice.make_voices(script, media, job / "voice", cfg, log=log)
@@ -79,9 +81,10 @@ def _make_steps(ep, script, cfg, job: Path, media: Path, log) -> Path:
     log(f"      {tl.total:.1f}s from the real voiceover (the sheet planned {tl.planned_total:.0f}s)")
 
     log(f"[4/{STEPS}] Footage (your files in {media}, then {', '.join(cfg['footage']['sources'])})")
-    entries = footage.choose(ep, tl, media, job / "storyboard", cfg, log=log)
+    entries = footage.choose(ep, tl, media, job / "storyboard", cfg, log=log, director=directed.shot_notes(plan))
     ep.save(job / "episode.json")  # with its animal named
     (job / "footage.json").write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    directed.save(directed.record(plan, entries, job.name), job)  # the Director tab shows each beat's clip
 
     log(f"[5/{STEPS}] Pre-flight")
     preflight.write(job, ep, tl, voices, entries, cfg, media, log=log)

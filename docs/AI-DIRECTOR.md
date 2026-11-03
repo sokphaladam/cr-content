@@ -936,64 +936,94 @@ Implement in the following order.
 
 ## Milestone 1 — Unified Script-to-Video foundation
 
-- Audit actual source code.
-- Create unified creation workflow.
-- Add Shorts/Long Video format selection.
-- Connect script input to both existing pipelines.
-- Preserve Lyric Studio separately.
-- Establish shared Director Plan schema.
-- Add plan persistence and validation.
+- [x] Audit actual source code.
+- [x] Create unified creation workflow.
+- [x] Add Shorts/Long Video format selection.
+- [x] Connect script input to both existing pipelines.
+- [x] Preserve Lyric Studio separately.
+- [x] Establish shared Director Plan schema.
+- [x] Add plan persistence and validation.
 
 **Deliverable:** The user can paste a script and create a valid project in either format.
 
 ## Milestone 2 — AI Director Engine
 
-- Whole-script analysis.
-- Narrative beat extraction.
-- Scene planning.
-- Shot planning.
-- Camera and composition decisions.
-- Visual continuity.
-- Structured edit plan.
-- Factual accuracy safeguards.
+- [x] Whole-script analysis.
+- [x] Narrative beat extraction.
+- [x] Scene planning.
+- [x] Shot planning.
+- [x] Camera and composition decisions.
+- [x] Visual continuity.
+- [x] Structured edit plan.
+- [x] Factual accuracy safeguards.
 
 **Deliverable:** A complete, structured Director Plan based on the user's script.
 
 ## Milestone 3 — Cinematic footage intelligence
 
-- Shot-specific footage searches.
-- Subject and action matching.
-- Footage quality scoring.
-- Footage alternatives.
-- Continuity checking.
-- Missing-footage warnings.
-- User footage priority.
+- [x] Shot-specific footage searches.
+- [x] Subject and action matching.
+- [x] Footage quality scoring.
+- [x] Footage alternatives.
+- [x] Continuity checking.
+- [x] Missing-footage warnings.
+- [x] User footage priority.
 
 **Deliverable:** Suitable footage selected for each planned shot, with transparent warnings when the exact visual is unavailable.
 
 ## Milestone 4 — Cinematic editing and production
 
-- Translate Director Plan to existing render pipelines.
-- Integrate shot-level sequences.
-- Improve pacing and transitions.
-- Add planned audio cues.
-- Improve shot variation and visual composition.
-- Keep captions synchronized.
-- Support preview and user corrections.
+- [x] Translate Director Plan to existing render pipelines.
+- [x] Integrate shot-level sequences.
+- [x] Improve pacing and transitions.
+- [ ] Add planned audio cues. (partial: Short cutaways get impact/thunder/whoosh only)
+- [x] Improve shot variation and visual composition.
+- [x] Keep captions synchronized.
+- [x] Support preview and user corrections.
 
 **Deliverable:** A complete cinematic video assembled automatically.
 
 ## Milestone 5 — Production reliability and quality
 
-- Progress reporting.
-- Cancellation and recovery.
-- Final render inspection.
-- Error handling.
-- Regression tests.
-- Packaging verification.
-- Documentation updates.
+- [x] Progress reporting.
+- [x] Cancellation and recovery.
+- [x] Final render inspection.
+- [x] Error handling.
+- [x] Regression tests.
+- [ ] Packaging verification. (Tauri build not run yet)
+- [x] Documentation updates.
 
 **Deliverable:** A reliable production workflow that generates, previews, renders, and inspects videos.
+
+## Progress (updated 2026-11-04)
+
+Code for all five milestones is in, but none of it is committed yet. Work goes one small task at a time: plan it, get approval, then build it.
+
+Done and checked:
+
+- [x] Test A: raven Short, end to end (Gemini on): plan, footage, assemble, render, inspect.
+- [x] Footage credits: every licensed photo or clip, including a Short's cutaways, is credited in post.txt.
+- [x] Plain prose scripts import without Gemini (Test D, partly).
+- [x] Test B: a cut-down long video, end to end. Fixed along the way: a stalled FFmpeg scene render is now stopped after a time limit and tried once more.
+- [x] A long video's montage photos are credited in credits.txt and description.txt.
+- [x] A card scene now also cuts to the footage the plan found for it. Before, the plan's other shots were dropped.
+- [x] Test E: 341 automated tests pass.
+
+Remaining, in the suggested order:
+
+- [ ] Sudden volume jumps: the inspector flags them in every render.
+- [ ] Slow motion from the plan (9.4, 10): render.py supports `speed`; plan_render.py doesn't pass it yet.
+- [ ] Planned sound effects (10, Audio): long videos, and the plan's other sound notes.
+- [ ] Create Video form (12, Step 1): voice, music and target-length fields; advanced options folded away.
+- [ ] Analytics feeding the AI Director (8.3).
+- [ ] Simpler main navigation (3).
+- [ ] Test C: a video made from the user's own footage.
+- [ ] Test F: build the desktop app (Tauri); check the packaged engine includes the new modules.
+
+Test leftovers that can be deleted:
+
+- the drafts 20261103-152140-7358 and 20261103-190255-6227 and their videos
+- the long video output/20261103-204104-en-smartest-birds-test-cut. Its video predates the card-scene fix.
 
 # 18. Definition of done
 

@@ -22,7 +22,7 @@ def test_seeded_plan_keeps_narration_and_stable_ids():
     plan = director_plan.from_scenes("Ravens", "short", "en", "cinematic_wildlife", SCENES)
     assert plan.project.aspect_ratio == "9:16" and plan.planned_by == "script"
     assert [s.id for s in plan.scenes] == ["scene-001", "scene-002"]
-    assert [(s.id, s.scene_id) for s in plan.shots] == [("shot-001", "scene-001"), ("shot-002", "scene-002")]
+    assert [(s.id, s.scene_id) for s in plan.shots] == [("shot-001-1", "scene-001"), ("shot-002-1", "scene-002")]
     assert plan.scenes[0].narration == SCENES[0]["narration"]  # word for word
     assert plan.shots[0].footage_queries == ["raven wire"] and plan.shots[0].duration_seconds > 0
     again = director_plan.load(plan.model_dump())  # round trip through JSON-shaped data
@@ -77,6 +77,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(drafts, "DRAFTS_DIR", tmp_path / "drafts")
     monkeypatch.setattr(web, "LONG_SCRIPTS", tmp_path / "scripts")
     started = []
+    monkeypatch.setattr(web.footage_pool, "submit", lambda fn, job_id, *args: web.jobs[job_id].update(status="done"))
     monkeypatch.setattr(web.renderer, "submit", lambda fn, *args: started.append((fn.__name__, args)))
     c = TestClient(web.app)
     c.started = started

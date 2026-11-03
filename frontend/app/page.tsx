@@ -24,6 +24,7 @@ import {
   type VideoSummary,
 } from "@/lib/api";
 import { CreateForm } from "@/components/CreateForm";
+import { DirectorPlanPanel } from "@/components/DirectorPlanPanel";
 import { Library, type LibraryTab } from "@/components/Library";
 import {
   ExportCards,
@@ -96,6 +97,7 @@ function Studio() {
   const libraryPane = usePaneWidth("library", 288, 240, 440);
   const previewPane = usePaneWidth("preview", 340, 300, 560);
   const [view, setView] = useState<AppView>("studio");
+  const [showPlan, setShowPlan] = useState(false); // a long video's Director Plan instead of its storyboard page
   const [previewOpen, setPreviewOpen] = useState(false);
   // Song being edited (not autosaved; composing writes song.json into its output folder)
   const [song, setSongState] = useState<{
@@ -514,6 +516,10 @@ function Studio() {
           }
           return;
         }
+        if (j.status === "error" && j.cancelled) {
+          toast(j.error ?? "Stopped.");
+          return;
+        }
         if (j.status === "error") {
           toast(
             `${j.kind === "song" ? "Composing" : j.kind === "lyrics_sync" ? "Lyric sync" : "Rendering"} failed: ${j.error ?? "unknown error"}`,
@@ -893,16 +899,31 @@ function Studio() {
               <div className="flex h-full min-h-0 flex-col">
                 <div className="pane-header px-5">
                   <h2 className="pane-title m-0 truncate">{storyboard.title}</h2>
-                  <Button variant="ghost" size="sm" onClick={() => void selectVideo(null, false)}>
-                    Close
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" aria-pressed={showPlan} onClick={() => setShowPlan((v) => !v)}>
+                      {showPlan ? (storyboard.kind === "short" ? "Pre-flight" : "Storyboard") : "Director plan"}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => void selectVideo(null, false)}>
+                      Close
+                    </Button>
+                  </div>
                 </div>
-                <iframe
-                  key={`${storyboard.name}-${storyboard.video}`}
-                  title={`${storyboard.kind === "short" ? "Pre-flight" : "Storyboard"}: ${storyboard.title}`}
-                  src={outputUrl(storyboard.name, storyboard.kind === "short" ? "preflight.html" : "storyboard.html")}
-                  className="min-h-0 w-full flex-1 border-0 bg-paper"
-                />
+                {showPlan ? (
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    <DirectorPlanPanel
+                      key={storyboard.name}
+                      kind={storyboard.kind === "short" ? "short" : "long"}
+                      refId={storyboard.name}
+                    />
+                  </div>
+                ) : (
+                  <iframe
+                    key={`${storyboard.name}-${storyboard.video}`}
+                    title={`${storyboard.kind === "short" ? "Pre-flight" : "Storyboard"}: ${storyboard.title}`}
+                    src={outputUrl(storyboard.name, storyboard.kind === "short" ? "preflight.html" : "storyboard.html")}
+                    className="min-h-0 w-full flex-1 border-0 bg-paper"
+                  />
+                )}
               </div>
             )}
             {!draft && !song && !timing && !storyboard && (

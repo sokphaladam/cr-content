@@ -14,6 +14,34 @@ MADE = {"own": "your own media", "placeholder": "placeholder card (made by the a
 from .timing import Timeline
 
 
+def _part(path: str) -> dict | None:
+    """A montage part's credit, from the source record saved beside the download (commons.py, archives.py);
+    Pexels/Pixabay keep none, so their file name says the site. None for anything else (own media, cards)."""
+    p = Path(path)
+    try:
+        item = json.loads(p.with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        item = None
+    if isinstance(item, dict) and item.get("licence"):
+        return {**item, "source": item.get("source", "commons"), "kind": item.get("kind", "photo"), "file": str(p)}
+    site = p.name.split("-")[0]
+    if site in ("pexels", "pixabay"):
+        return {"source": site, "kind": "video" if "-video-" in p.name else "photo", "file": str(p),
+                "licence": f"{SOURCES[site]} licence"}
+    return None
+
+
+def _shown(e: dict) -> list[dict]:
+    """Everything a scene shows: its chosen footage (a montage's parts), and the other shots a Director Plan cuts
+    in (plan_render.py)."""
+    c = e["chosen"]
+    if c["source"] == "montage":
+        first = [r for r in map(_part, c.get("parts") or []) if r]
+    else:
+        first = [] if c["source"] in MADE else [c]
+    return [*first, *e.get("credits", [])]
+
+
 def credits(script: Script, entries: list[dict], music: list[str]) -> str:
     """Every downloaded file by scene: source page, author, licence. Your own files and placeholders are listed too,
     so nothing in the video is unaccounted for."""
@@ -23,11 +51,12 @@ def credits(script: Script, entries: list[dict], music: list[str]) -> str:
         what = MADE.get(c["source"])
         if what:
             lines.append(f"Scene {e['scene']:02d}: {what} ({Path(c['file']).name})")
-            continue
-        name = SOURCES.get(c["source"], c["source"])
-        lines.append(f"Scene {e['scene']:02d}: {c['kind']} by {c.get('author') or 'unknown'} on {name}, {c['licence']}"
-                     + (f" ({c['licence_url']})" if c.get("licence_url") and c["licence_url"] != c.get("page") else "")
-                     + f"\n          {c.get('page') or c.get('url', '')}")
+        for k, c in enumerate(_shown(e)):
+            name = SOURCES.get(c["source"], c["source"])
+            lines.append(f"Scene {e['scene']:02d}{f' (shot {k + 1})' if k else ''}: {c['kind']} by "
+                         f"{c.get('author') or 'unknown'} on {name}, {c['licence']}"
+                         + (f" ({c['licence_url']})" if c.get("licence_url") and c["licence_url"] != c.get("page") else "")
+                         + f"\n          {c.get('page') or c.get('url', '')}")
     lines += ["", "MUSIC"]
     for t in music:
         lines.append(f"{Path(t).name}: {music_credit(t) or 'your own track (you hold the rights)'}")
@@ -42,18 +71,18 @@ def _attributions(entries: list[dict]) -> list[str]:
     licence named), and a line for the public-domain archives (not required, but it's how they ask to be cited).
     Pexels and Pixabay don't require credit; they're thanked in one line."""
     out = []
-    for e in entries:
-        c = e["chosen"]
+    shown = [c for e in entries for c in _shown(e)]
+    for c in shown:
         if c["source"] in ("commons", "inaturalist"):
             line = (f"Photo: {c.get('author') or 'unknown'}, {c['licence']}, via {SOURCES[c['source']]} "
                     f"({c.get('page', '')})")
             if line not in out:
                 out.append(line)
-    archive = [SOURCES[s] for s in ("archive", "nasa", "met") if any(e["chosen"]["source"] == s for e in entries)]
+    archive = [SOURCES[s] for s in ("archive", "nasa", "met") if any(c["source"] == s for c in shown)]
     if archive:
         out.append(f"Archive footage and images: {', '.join(archive)} (public domain).")
-    stock = sorted({ {"pexels": "Pexels", "pixabay": "Pixabay"}[e["chosen"]["source"]]
-                     for e in entries if e["chosen"]["source"] in ("pexels", "pixabay")})
+    stock = sorted({ {"pexels": "Pexels", "pixabay": "Pixabay"}[c["source"]]
+                     for c in shown if c["source"] in ("pexels", "pixabay")})
     if stock:
         out.append(f"Stock footage: {' and '.join(stock)}.")
     return out

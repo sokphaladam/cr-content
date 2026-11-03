@@ -17,6 +17,11 @@ class BRoll(BaseModel):
     media: str
     at: float = 0
     duration: float = 2
+    fade: float = 0     # seconds it dissolves in over (0 = a hard cut)
+    sound: str = ""     # a sound effect on the cut (sfx.SOUNDS: whoosh, impact, thunder)
+    # >0: `at` and `duration` were planned for a scene this many seconds long (a Director Plan's estimate); the render
+    # stretches them to the recorded voice's real length. Moving the cutaway by hand sets it back to 0.
+    basis: float = 0
 
 
 class TextOverlay(BaseModel):

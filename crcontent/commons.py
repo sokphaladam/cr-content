@@ -92,10 +92,31 @@ def download(item: dict) -> Path:
     return path
 
 
+SITES = {"commons": "Wikimedia Commons", "inaturalist": "iNaturalist", "archive": "the Internet Archive", "nasa": "NASA",
+         "met": "The Metropolitan Museum of Art"}
+
+
 def credit(path: Path) -> str:
-    """'Photo: <author>, <licence>, via Wikimedia Commons' for a photo from here; "" for anything else."""
+    """'Photo: <author>, <licence>, via <site> (<page>)' for a downloaded file whose source record (the .json beside
+    it, written by this module and longform/archives.py) names a licence; "" for anything else (Pexels and Pixabay
+    keep no record: their licence asks for no credit)."""
     meta = Path(path).with_suffix(".json")
-    if Path(path).parent.resolve() != CACHE.resolve() or not meta.exists():
+    try:
+        item = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return ""
-    item = json.loads(meta.read_text(encoding="utf-8"))
-    return f"Photo: {item['author']}, {item['licence']}, via Wikimedia Commons ({item['page']})"
+    if not isinstance(item, dict) or not item.get("licence"):
+        return ""
+    what = "Clip" if item.get("kind") == "video" else "Photo"
+    site = SITES.get(item.get("source", "commons"), item.get("source", ""))
+    page = f" ({item['page']})" if item.get("page") else ""
+    return f"{what}: {item.get('author') or 'unknown author'}, {item['licence']}, via {site}{page}"
+
+
+def site(path: Path) -> str:
+    """The site a credited file came from ("" when it has no source record)."""
+    try:
+        item = json.loads(Path(path).with_suffix(".json").read_text(encoding="utf-8"))
+        return SITES.get(item.get("source", "commons"), item.get("source", "")) if item.get("licence") else ""
+    except (OSError, ValueError, AttributeError):
+        return ""

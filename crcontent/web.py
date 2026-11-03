@@ -68,7 +68,34 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-renderer = ThreadPoolExecutor(max_workers=1)  # FFmpeg is heavy: render one video at a time
+class JobStopped(Exception):
+    """Raised by a job's log function once the user has stopped the job (POST /api/jobs/<id>/cancel)."""
+
+
+STOPPED = "Stopped. Work saved so far is kept: start it again to carry on."
+
+
+class JobPool(ThreadPoolExecutor):
+    """A queue of job runners (fn(job_id, ...)): a job stopped while queued never starts, and one whose runner lets
+    JobStopped escape (or swallows it) still ends as stopped instead of looking like it's running forever."""
+
+    def submit(self, fn, job_id, *args, **kwargs):
+        def run():
+            job = jobs.get(job_id)
+            try:
+                if not (job and job.get("cancel")):
+                    fn(job_id, *args, **kwargs)
+            except JobStopped:
+                pass
+            finally:
+                with jobs_lock:
+                    # runners that catch errors themselves mark a stop as a failure: it was the user's stop
+                    if job and job.get("cancel") and job.get("status") in ("queued", "running", "error"):
+                        job.update(status="error", error=STOPPED, cancelled=True)
+        return super().submit(run)
+
+
+renderer = JobPool(max_workers=1)  # FFmpeg is heavy: render one video at a time
 uploader = ThreadPoolExecutor(max_workers=1)  # uploads to YouTube/TikTok, separate so renders don't wait on them
 jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
@@ -1141,6 +1168,8 @@ def _run_storyboard(job_id: str, script_md: Path, plan=None) -> None:
     with jobs_lock:
         job["status"] = "running"
     try:
+        if plan is not None:
+            plan = _direct_or_keep(plan, log)
         folder = longform.make_storyboard(script_md, log=log)
         if plan is not None:  # a Script-to-Video project keeps its Director Plan beside the storyboard
             (folder / "plan.json").write_text(plan.model_dump_json(indent=2), encoding="utf-8")
@@ -1218,10 +1247,32 @@ def script_video(req: ScriptVideoRequest):
         raise HTTPException(422, str(e))
     plan = director_plan.from_scenes(script.title, req.format, lang, req.visual_style,
                                      [s.model_dump() for s in script.scenes])
-    if req.format == "long":
+    if req.format == "long":  # the job directs it, so the plan shows up in its progress log
         return _start_long(director_plan.longform_markdown(plan), plan) | {"method": method}
+    problems: list[str] = []
+    plan = _direct_or_keep(plan, problems.append)
     draft_id, _ = drafts.create(drafts.Draft(script=script, lang=lang, topic=script.title, plan=plan))
-    return {"format": "short", "id": draft_id, "title": script.title, "scenes": len(script.scenes), "method": method}
+    footage_job = _start_plan_footage("draft", draft_id, [], script.title)  # the AI finds the footage, not the user
+    return {"format": "short", "id": draft_id, "title": script.title, "scenes": len(script.scenes), "method": method,
+            "planned_by": plan.planned_by, "director_note": problems[-1] if problems else "", "footage_job": footage_job}
+
+
+def _direct_or_keep(plan: "director_plan.DirectorPlan", log) -> "director_plan.DirectorPlan":
+    """The AI Director's plan when Gemini is set up and answers; otherwise the plan seeded from the script, said in `log`."""
+    from . import ai_director
+
+    if not os.getenv("GEMINI_API_KEY"):
+        log("Director: Gemini isn't set up, so the plan is one shot per scene from your script. Add a key in Settings.")
+        return plan
+    log("Director: reading the whole script and planning the shots")
+    try:
+        directed = ai_director.direct(plan)
+    except (llm.APIError, RuntimeError, ValueError) as e:
+        log(f"Director: couldn't plan the shots ({_llm_error(e).detail if isinstance(e, llm.APIError) else e}); "
+            "kept one shot per scene from your script")
+        return plan
+    log(f"Director: {len(directed.shots)} shots planned for {len(directed.scenes)} scenes")
+    return directed
 
 
 def _start_long(markdown: str, plan: "director_plan.DirectorPlan") -> dict:
@@ -1273,6 +1324,283 @@ def longform_approve(name: str):
     return {"id": job_id}
 
 
+# ---------- Director Plans: read, edit and re-direct the plan of a Script-to-Video project ----------
+# kind "draft": a Short's draft id (the plan lives in draft.json); kind "long": a long video's output folder (plan.json);
+# kind "short": a Shorts Mode job folder (plan.json, made at its step 1; its footage is found by making it again).
+
+plan_busy: set[str] = set()
+plan_jobs: dict[str, str] = {}  # "kind/ref" -> its footage job id while one is queued or running
+footage_pool = JobPool(max_workers=1)  # footage searches don't wait behind a render
+
+
+def _plan_get(kind: str, ref: str) -> "director_plan.DirectorPlan":
+    if kind == "draft":
+        try:
+            plan = drafts.load(ref).plan
+        except KeyError:
+            raise HTTPException(404, "Draft not found. It may have been deleted.")
+    elif kind in ("long", "short"):
+        path = _plan_file(kind, ref)
+        try:
+            plan = director_plan.DirectorPlan.model_validate_json(path.read_text(encoding="utf-8")) if path.exists() else None
+        except ValueError as e:  # hand-edited or from a newer app
+            raise HTTPException(422, f"This project's plan.json can't be read: {str(e).splitlines()[0]}")
+    else:
+        raise HTTPException(404, "Unknown project kind.")
+    if plan is None and kind == "short":  # made before the AI Director: one shot per beat until it's made again
+        from .shorts import directed, plan as splan
+
+        plan = directed.seed(splan.ShortPlan.load(_short_dir(ref) / "episode.json"))
+    if plan is None:
+        raise HTTPException(404, "This project has no Director Plan. Projects made with Script to video have one.")
+    return plan
+
+
+def _plan_file(kind: str, ref: str) -> Path:
+    return (_short_dir(ref) if kind == "short" else _longform_dir(ref)) / "plan.json"
+
+
+def _plan_put(kind: str, ref: str, plan: "director_plan.DirectorPlan") -> None:
+    if kind == "draft":
+        draft = drafts.load(ref)
+        draft.plan = plan
+        drafts.save(ref, draft)
+    else:
+        path = _plan_file(kind, ref)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+
+
+def _plan_media(kind: str, ref: str) -> Path:
+    """Where the user's own clips for a plan go: shot-003-2.mp4 (or scene-03.mp4 for a scene's first shot)."""
+    from . import longform
+    from .longform import settings as lsettings
+    from .longform.parse import Script
+
+    if kind == "short":
+        from . import shorts
+        from .shorts import settings as ssettings
+
+        return shorts.media_folder(Script.load(_short_dir(ref) / "scenes.json").slug, ssettings.load())
+    cfg = lsettings.load()
+    if kind == "long":
+        return longform.media_folder(Script.load(_longform_dir(ref) / "scenes.json").slug, cfg)
+    return longform.media_folder(ref, cfg)
+
+
+def _running_plan_job(key: str) -> str | None:
+    job_id = plan_jobs.get(key)
+    return job_id if job_id and jobs.get(job_id, {}).get("status") in ("queued", "running") else None
+
+
+@app.get("/api/plans/{kind}/{ref}")
+def plan_read(kind: str, ref: str):
+    with jobs_lock:
+        job = _running_plan_job(f"{kind}/{ref}")
+    return _plan_get(kind, ref).model_dump() | {"footage_job": job, "media_folder": str(_plan_media(kind, ref))}
+
+
+def _run_plan_footage(job_id: str, kind: str, ref: str, shot_ids: list[str]) -> None:
+    from . import shot_footage
+    from .longform import settings as lsettings
+
+    job = jobs[job_id]
+    log = _job_logger(job, 1)
+    with jobs_lock:
+        job["status"] = "running"
+    save_lock = threading.Lock()
+
+    def save(shot) -> None:
+        """Keep each shot's footage as it's found, merged into the plan on disk (the user may be editing it)."""
+        with save_lock:
+            stored = _plan_get(kind, ref)
+            for s in stored.shots:
+                if s.id == shot.id:
+                    s.footage, s.candidates, s.warnings = shot.footage, shot.candidates, shot.warnings
+            _plan_put(kind, ref, stored)
+
+    try:
+        log("[1/1] Finding footage for every shot")
+        plan = shot_footage.find(_plan_get(kind, ref), _plan_media(kind, ref), lsettings.load(), shot_ids, log=log,
+                                 save=save, cancelled=lambda: job.get("cancel", False))
+        with save_lock:
+            stored = _plan_get(kind, ref)
+            stored.warnings = shot_footage.plan_warnings(stored)
+            _plan_put(kind, ref, stored)
+        if kind == "long" and not job.get("cancel"):  # the storyboard shows the shots, ready to approve
+            from . import longform
+
+            for note in longform.apply_plan(_longform_dir(ref), stored):
+                log(f"      {note}")
+        with jobs_lock:
+            if job.get("cancel"):
+                job.update(status="error", error="Stopped. The shots done so far keep their footage.")
+            else:
+                found = sum(1 for s in plan.shots if s.footage)
+                job.update(status="done", step=1, summary=f"Footage for {found} of {len(plan.shots)} shots")
+    except Exception as e:
+        _fail(job, e)
+
+
+def _start_plan_footage(kind: str, ref: str, shot_ids: list[str], title: str) -> str:
+    key = f"{kind}/{ref}"
+    with jobs_lock:
+        running = _running_plan_job(key)
+        if running:  # a second click: the same job
+            return running
+        job_id = uuid.uuid4().hex[:10]
+        jobs[job_id] = {"id": job_id, "kind": "plan_footage", "status": "queued", "step": 0, "log": [], "title": title}
+        plan_jobs[key] = job_id
+    footage_pool.submit(_run_plan_footage, job_id, kind, ref, shot_ids)
+    return job_id
+
+
+class FootageRequest(BaseModel):
+    shots: list[str] = []  # empty: every shot (locked shots with footage are kept)
+
+
+@app.post("/api/plans/{kind}/{ref}/footage")
+def plan_footage(kind: str, ref: str, req: FootageRequest):
+    """Search, download and check footage for the plan's shots, in the background (watch /api/jobs/<id>)."""
+    plan = _plan_get(kind, ref)
+    if kind == "short":
+        return {"id": _start_short_rebuild(ref, plan.project.title)}
+    unknown = set(req.shots) - {s.id for s in plan.shots}
+    if unknown:
+        raise HTTPException(400, f"Unknown shots: {', '.join(sorted(unknown))}")
+    return {"id": _start_plan_footage(kind, ref, req.shots, plan.project.title)}
+
+
+def _start_short_rebuild(name: str, title: str) -> str:
+    """A Shorts Mode job made again in its folder (voice cached, footage searched with the plan's shots, a new
+    pre-flight), one beat clip each: Shorts Mode picks per beat, not per shot."""
+    from .shorts import plan as splan
+
+    folder = _short_dir(name)
+    _short_idle(name)
+    key = f"short/{name}"
+    with jobs_lock:
+        running = _running_plan_job(key)
+        if running:
+            return running
+        job_id = uuid.uuid4().hex[:10]
+        jobs[job_id] = {"id": job_id, "kind": "short", "source": name, "status": "queued", "step": 0, "log": [],
+                        "title": title}
+        plan_jobs[key] = job_id
+    renderer.submit(_run_shorts, job_id, [splan.ShortPlan.load(folder / "episode.json")], folder)
+    return job_id
+
+
+@app.post("/api/plans/{kind}/{ref}/footage/cancel")
+def plan_footage_cancel(kind: str, ref: str):
+    with jobs_lock:
+        job_id = _running_plan_job(f"{kind}/{ref}")
+        if job_id:
+            jobs[job_id]["cancel"] = True
+    return {"id": job_id}
+
+
+class PickRequest(BaseModel):
+    index: int
+
+
+class AssembleRequest(BaseModel):
+    scenes: list[dict] = []  # a Short: the editor's scenes as they are now (unsaved edits included)
+
+
+@app.post("/api/plans/{kind}/{ref}/assemble")
+def plan_assemble(kind: str, ref: str, req: AssembleRequest):
+    """Put the plan's footage into the video: a Short gets its scenes back to load into the editor (where they can
+    be undone and are saved like any edit); a long video's storyboard is updated in place."""
+    from . import plan_render
+
+    plan = _plan_get(kind, ref)
+    if kind == "short":
+        raise HTTPException(400, "A Shorts Mode video uses its beats' clips already: check them on the Pre-flight page.")
+    if kind == "long":
+        from . import longform
+
+        if _longform_job(ref):  # takes jobs_lock itself
+            raise HTTPException(409, "This video is rendering. Wait for it to finish.")
+        return {"notes": longform.apply_plan(_longform_dir(ref), plan)}
+    scenes, notes = plan_render.short_scenes(plan, req.scenes)
+    return {"scenes": scenes, "mood": plan.edit_plan.music_mood, "notes": notes}
+
+
+@app.post("/api/plans/{kind}/{ref}/shots/{shot_id}/pick")
+def plan_pick(kind: str, ref: str, shot_id: str, req: PickRequest):
+    """Use one of a shot's alternatives instead (downloaded now if it wasn't yet)."""
+    import requests as _requests
+
+    from . import shot_footage
+
+    if kind == "short":
+        raise HTTPException(400, "Swap a beat's clip on the Pre-flight page.")
+    try:
+        plan = shot_footage.pick(_plan_get(kind, ref), shot_id, req.index)
+    except KeyError:
+        raise HTTPException(404, "That shot isn't in the plan any more.")
+    except IndexError:
+        raise HTTPException(400, "That alternative is gone. Reload the plan.")
+    except (_requests.RequestException, OSError, RuntimeError) as e:
+        raise HTTPException(502, f"Couldn't download that alternative: {e}")
+    _plan_put(kind, ref, plan)
+    return plan.model_dump()
+
+
+@app.put("/api/plans/{kind}/{ref}")
+def plan_update(kind: str, ref: str, plan: director_plan.DirectorPlan):
+    """The user's edits (validated like any plan). Edited shots should come back with locked=true.
+    Footage isn't edited here (a search may be saving some right now): it changes through /footage and /pick."""
+    stored = {s.id: s for s in _plan_get(kind, ref).shots}  # 404 for a project without one
+    for shot in plan.shots:
+        if shot.id in stored:
+            old = stored[shot.id]
+            shot.footage, shot.candidates, shot.warnings = old.footage, old.candidates, old.warnings
+    from . import shot_footage
+
+    plan.warnings = shot_footage.plan_warnings(plan)
+    _plan_put(kind, ref, plan)
+    return plan.model_dump()
+
+
+class DirectRequest(BaseModel):
+    scenes: list[str] = []  # empty: the whole video
+    note: str = ""
+
+
+@app.post("/api/plans/{kind}/{ref}/direct")
+def plan_direct(kind: str, ref: str, req: DirectRequest):
+    """Ask the AI Director again: the whole plan, or only some scenes (locked shots are kept)."""
+    from . import ai_director
+
+    if not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(400, "The AI Director needs Gemini. Add your key in Settings.")
+    key = f"{kind}/{ref}"
+    with jobs_lock:
+        if _running_plan_job(key):
+            raise HTTPException(409, "Footage is still being found for this plan. Wait for it (or stop it), then re-plan.")
+        if key in plan_busy:
+            raise HTTPException(409, "The AI Director is already planning this video.")
+        plan_busy.add(key)
+    try:
+        plan = ai_director.direct(_plan_get(kind, ref), req.scenes, req.note[:1000])
+        _plan_put(kind, ref, plan)
+        new = [] if kind == "short" else [s.id for s in plan.shots if s.footage is None and s.shot_type != "graphic"]
+        job = _start_plan_footage(kind, ref, new, plan.project.title) if new else None  # only the re-planned shots
+        return plan.model_dump() | {"footage_job": job}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except llm.APIError as e:
+        raise _llm_error(e)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    finally:
+        with jobs_lock:
+            plan_busy.discard(key)
+
+
 # ---------- Shorts Mode (crcontent/shorts): a Short per episode, held to the channel's rules ----------
 # The pre-flight page (<job>/preflight.html, served under /media) approves the render through /api/shorts/<job>/approve.
 
@@ -1317,8 +1645,8 @@ class ShortsRequest(BaseModel):
     eps: list[int]
 
 
-def _run_shorts(job_id: str, episodes: list) -> None:
-    """Steps 1-5 (up to the pre-flight report) for each episode, one after another."""
+def _run_shorts(job_id: str, episodes: list, folder: Path | None = None) -> None:
+    """Steps 1-5 (up to the pre-flight report) for each episode, one after another (again in `folder`: one episode)."""
     from . import shorts
 
     job = jobs[job_id]
@@ -1330,11 +1658,11 @@ def _run_shorts(job_id: str, episodes: list) -> None:
         with jobs_lock:
             job.update(step=0, title=f"Ep {ep.ep} ({i}/{len(episodes)}): {ep.title}")
         try:
-            folder = shorts.make_job(ep, log=log)
-            made.append(folder.name)
-            ready += shorts.report_status(folder).get("state") == "ready"
+            out = shorts.make_job(ep, log=log, job=folder)
+            made.append(out.name)
+            ready += shorts.report_status(out).get("state") == "ready"
             with jobs_lock:
-                job.setdefault("video", folder.name)  # the first one opens when they're all ready
+                job.setdefault("video", out.name)  # the first one opens when they're all ready
         except Exception as err:  # keep going with the next episode
             traceback.print_exc()
             failed.append(ep.ep)
@@ -1910,9 +2238,12 @@ def video_ideas(name: str):
 def _job_logger(job: dict, steps: int):
     """A log function for a job: "[n/steps]" lines move it to step n (and reset its progress); "@progress f text"
     lines (pipeline.progress_reporter) set how far the current step is, 0..1, and what it's doing, without going
-    into the log; everything else is appended to the log."""
+    into the log; everything else is appended to the log. Once the job is stopped, any log call raises JobStopped:
+    the work stops at its next line of progress (a running FFmpeg encode is killed by render.run_progress)."""
     def log(line: str) -> None:
         with jobs_lock:
+            if job.get("cancel"):
+                raise JobStopped(STOPPED)
             if line.startswith("@progress "):
                 _, fraction, *detail = line.split(" ", 2)
                 job["progress"], job["detail"] = float(fraction), (detail[0] if detail else "")
@@ -1924,6 +2255,10 @@ def _job_logger(job: dict, steps: int):
 
 
 def _fail(job: dict, e: Exception) -> None:
+    if isinstance(e, JobStopped) or job.get("cancel"):
+        with jobs_lock:
+            job.update(status="error", error=STOPPED, cancelled=True)
+        return
     traceback.print_exc()
     with jobs_lock:
         job.update(status="error", error=str(e).strip().splitlines()[-1] if str(e).strip() else repr(e))
@@ -2050,6 +2385,20 @@ def job_status(job_id: str):
         if job_id not in jobs:
             raise HTTPException(404, "Job not found (the app may have restarted).")
         return dict(jobs[job_id], log=list(jobs[job_id]["log"]))
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def job_cancel(job_id: str):
+    """Stop a render or footage job: a queued one never starts, a running one stops at its next step of progress."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Job not found (the app may have restarted).")
+        if job.get("kind") in ("lyric_video", "inspect", "publish"):  # their own runners: no stop between steps
+            raise HTTPException(400, "This job can't be stopped here.")
+        if job["status"] in ("queued", "running"):
+            job["cancel"] = True
+        return {"id": job_id, "status": job["status"]}
 
 
 # ---------- Drafts (drafts/<id>/draft.json) ----------
