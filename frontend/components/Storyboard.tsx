@@ -194,25 +194,25 @@ const SAMPLE: Record<Lang, string> = {
   en: "Did you know octopuses have three hearts? Follow for more.",
   km: "តើអ្នកដឹងទេ ថាមឹកដៃប្រាំបី មានបេះដូងបី? តាមដានយើង ដើម្បីដឹងបន្ថែម។",
 };
-const RATES = [
+export const RATES = [
   { value: "-10%", label: "Slower" },
   { value: "+0%", label: "Normal" },
   { value: "+5%", label: "Slightly fast" },
   { value: "+15%", label: "Fast" },
 ];
 
-const REGION: Record<string, string> = { "en-US": "English (US)", "en-GB": "English (UK)", "en-AU": "English (Australia)", "km-KH": "Khmer" };
+export const REGION: Record<string, string> = { "en-US": "English (US)", "en-GB": "English (UK)", "en-AU": "English (Australia)", "km-KH": "Khmer" };
 
 /** "playful-sneaky-pizzicato_Sneaky-Snitch.mp3" -> "playful sneaky pizzicato · Sneaky Snitch" */
-const trackName = (file: string) => file.replace(/\.mp3$/i, "").replace("_", " · ").replace(/-/g, " ");
+export const trackName = (file: string) => file.replace(/\.mp3$/i, "").replace("_", " · ").replace(/-/g, " ");
 
 /** "en-US-AndrewMultilingualNeural" -> "Andrew Multilingual" */
-function voiceName(v: string) {
+export function voiceName(v: string) {
   return v.split("-").slice(2).join(" ").replace(/Neural$/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
 }
 
 /** Voices grouped by region, keeping the engine's order (recommended voices first). */
-function groupVoices(voices: string[]) {
+export function groupVoices(voices: string[]) {
   const groups = new Map<string, string[]>();
   for (const v of voices) {
     const region = v.split("-").slice(0, 2).join("-");

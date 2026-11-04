@@ -1160,7 +1160,64 @@ def longform_upload(name: str, n: int, file: UploadFile = File(...)):
 LONG_SCRIPTS = ROOT / "scripts"  # uploaded script .md files; the file name picks its media/<name>/ folder
 
 
-def _run_storyboard(job_id: str, script_md: Path, plan=None) -> None:
+def _analytics_view(data: dict | None) -> dict:
+    from .shorts import analytics
+
+    if not data:
+        return {"imported": None}
+    return {"imported": data.get("imported", ""), "videos": len(data.get("videos", [])),
+            "summary": data.get("summary", {}), "evidence": analytics.director_brief(data)[1],
+            "min_videos": analytics.EVIDENCE_MIN}
+
+
+@app.get("/api/analytics")
+def analytics_get():
+    """The last YouTube Studio import (what the AI Director and the hook judge are given)."""
+    from .shorts import analytics
+
+    return _analytics_view(analytics.load())
+
+
+@app.post("/api/analytics")
+def analytics_import(file: UploadFile = File(...)):
+    """Import YouTube Studio's Content export: the .csv, or the .zip it downloads as (its "Table data.csv")."""
+    import csv
+    import io
+    import tempfile
+    import zipfile
+
+    from .shorts import analytics
+
+    name = Path(file.filename or "").name
+    data = file.file.read(20_000_001)
+    if len(data) > 20_000_000:
+        raise HTTPException(400, "That file is too big for a Studio export.")
+    with tempfile.TemporaryDirectory() as tmp:
+        csv_path = Path(tmp) / "Table data.csv"
+        if name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(data)) as z:
+                    inner = [n for n in z.namelist() if n.lower().endswith(".csv")]
+                    pick = next((n for n in inner if Path(n).name.lower() == "table data.csv"), inner[0] if inner else None)
+                    if pick is None:
+                        raise HTTPException(400, "No .csv inside that zip. Export the Content tab from YouTube Studio.")
+                    csv_path.write_bytes(z.read(pick))
+            except zipfile.BadZipFile:
+                raise HTTPException(400, "That zip can't be opened.")
+        elif name.lower().endswith(".csv"):
+            csv_path.write_bytes(data)
+        else:
+            raise HTTPException(400, "Use the .csv (or .zip) YouTube Studio exports.")
+        try:
+            saved = analytics.import_csv(csv_path)
+        except (ValueError, csv.Error, UnicodeDecodeError) as e:
+            raise HTTPException(400, f"Couldn't read it: {e}")
+    saved["source"] = name  # not the temp file's path
+    analytics.PATH.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+    return _analytics_view(saved)
+
+
+def _run_storyboard(job_id: str, script_md: Path, plan=None, choice: dict | None = None) -> None:
     from . import longform
 
     job = jobs[job_id]
@@ -1170,7 +1227,7 @@ def _run_storyboard(job_id: str, script_md: Path, plan=None) -> None:
     try:
         if plan is not None:
             plan = _direct_or_keep(plan, log)
-        folder = longform.make_storyboard(script_md, log=log)
+        folder = longform.make_storyboard(script_md, log=log, choice=choice)
         if plan is not None:  # a Script-to-Video project keeps its Director Plan beside the storyboard
             (folder / "plan.json").write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         with jobs_lock:
@@ -1212,6 +1269,13 @@ class ScriptVideoRequest(BaseModel):
     format: str  # "short" (9:16 draft) or "long" (16:9 storyboard)
     lang: str = "auto"
     visual_style: str = director_plan.STYLES[0]
+    voice: str = ""  # "" = the language's default voice (a long video: the one in Settings → Script Video)
+    rate: str = ""
+    music: str = ""  # "" = matches the mood (a long video: your tracks in Settings), "none", or a track in assets/music
+    target_seconds: float = 0  # optional; a pacing hint for the AI Director, the narration is never cut
+
+
+RATES = ("-10%", "+0%", "+5%", "+15%")  # the editor's Speed choices
 
 
 @app.post("/api/script-video")
@@ -1226,6 +1290,14 @@ def script_video(req: ScriptVideoRequest):
         raise HTTPException(400, f"Unknown visual style {req.visual_style}.")
     if len(req.text) > 2_000_000:
         raise HTTPException(400, "That script is too big (over 2 MB). It should be text only.")
+    if req.rate and req.rate not in RATES:
+        raise HTTPException(400, f"Unknown speed {req.rate}.")
+    if req.music not in ("", "none") and not (ASSETS_DIR / "music" / Path(req.music).name).is_file():
+        raise HTTPException(400, f"Music track not found: {req.music}")
+    if not 0 <= req.target_seconds <= 4 * 3600:
+        raise HTTPException(400, "The target length should be between 0 and 4 hours.")
+    if req.voice and req.voice not in {v for code in LANGS for v in _voices(code)}:
+        raise HTTPException(400, f"Unknown voice {req.voice}.")
     if req.format == "long":  # a script already written as the long-video table keeps its chapters and title cards
         LONG_SCRIPTS.mkdir(parents=True, exist_ok=True)
         probe = LONG_SCRIPTS / f".paste-{uuid.uuid4().hex[:8]}.md"
@@ -1240,21 +1312,27 @@ def script_video(req: ScriptVideoRequest):
             title = "Untitled" if table.title == probe.stem else table.title  # no "# Title" line
             plan = director_plan.from_scenes(title, "long", table.lang, req.visual_style, [
                 {"narration": s.voiceover, "visual_query": s.visual, "on_screen_text": s.text} for s in table.scenes])
-            return _start_long(req.text, plan)
+            plan.project.target_seconds = req.target_seconds
+            return _start_long(req.text, plan, _choice(req))
     try:
         script, lang, method = import_script(req.text, req.lang, use_claude=bool(os.getenv("GEMINI_API_KEY")))
     except ValueError as e:
         raise HTTPException(422, str(e))
     plan = director_plan.from_scenes(script.title, req.format, lang, req.visual_style,
                                      [s.model_dump() for s in script.scenes])
+    plan.project.target_seconds = req.target_seconds
     if req.format == "long":  # the job directs it, so the plan shows up in its progress log
-        return _start_long(director_plan.longform_markdown(plan), plan) | {"method": method}
+        return _start_long(director_plan.longform_markdown(plan), plan, _choice(req)) | {"method": method}
     problems: list[str] = []
     plan = _direct_or_keep(plan, problems.append)
-    draft_id, _ = drafts.create(drafts.Draft(script=script, lang=lang, topic=script.title, plan=plan))
+    voice = req.voice if req.voice in _voices(lang) else ""  # a voice for the other language: its default instead
+    voice_note = f"{req.voice} doesn't speak this script's language, so the default voice is used." if req.voice and not voice else ""
+    draft_id, _ = drafts.create(drafts.Draft(script=script, lang=lang, topic=script.title, plan=plan, voice=voice,
+                                             rate=req.rate or drafts.Draft.model_fields["rate"].default, music=req.music))
     footage_job = _start_plan_footage("draft", draft_id, [], script.title)  # the AI finds the footage, not the user
     return {"format": "short", "id": draft_id, "title": script.title, "scenes": len(script.scenes), "method": method,
-            "planned_by": plan.planned_by, "director_note": problems[-1] if problems else "", "footage_job": footage_job}
+            "planned_by": plan.planned_by, "director_note": problems[-1] if problems else "", "footage_job": footage_job,
+            "voice_note": voice_note}
 
 
 def _direct_or_keep(plan: "director_plan.DirectorPlan", log) -> "director_plan.DirectorPlan":
@@ -1275,7 +1353,12 @@ def _direct_or_keep(plan: "director_plan.DirectorPlan", log) -> "director_plan.D
     return directed
 
 
-def _start_long(markdown: str, plan: "director_plan.DirectorPlan") -> dict:
+def _choice(req: ScriptVideoRequest) -> dict | None:
+    """A long video's own voice, speed and music from the form (None: the Script Video settings as they are)."""
+    return {"voice": req.voice, "rate": req.rate, "music": req.music} if req.voice or req.rate or req.music else None
+
+
+def _start_long(markdown: str, plan: "director_plan.DirectorPlan", choice: dict | None = None) -> dict:
     from .pipeline import slugify
 
     # the file name picks media/<name>/ for the user's own clips: never overwrite another script's file
@@ -1287,7 +1370,7 @@ def _start_long(markdown: str, plan: "director_plan.DirectorPlan") -> dict:
     job_id = uuid.uuid4().hex[:10]
     with jobs_lock:
         jobs[job_id] = {"id": job_id, "kind": "long_video", "status": "queued", "step": 0, "log": [], "title": plan.project.title}
-    renderer.submit(_run_storyboard, job_id, dest, plan)
+    renderer.submit(_run_storyboard, job_id, dest, plan, choice)
     return {"format": "long", "id": job_id, "title": plan.project.title, "scenes": len(plan.scenes)}
 
 

@@ -74,3 +74,30 @@ def test_judge_suggestions_follow_the_channel_numbers():
     ranked = judge.rank_suggestions(items, stats)
     assert [r["style"] for r in ranked] == ["your cat + hidden meaning", "science explainer", "pov / situation"]
     assert ranked[0]["stayed"] == 59.4 and ranked[0]["claude_rank"] == 3 and ranked[2]["stayed"] is None
+
+
+def test_import_endpoint_takes_the_studio_zip(tmp_path, monkeypatch):
+    import io
+    import zipfile
+
+    from fastapi.testclient import TestClient
+
+    from crcontent import web
+    from crcontent.shorts import settings
+
+    monkeypatch.setattr(analytics, "PATH", tmp_path / "shorts-analytics.json")
+    monkeypatch.setattr(settings, "load", lambda: {"analytics": {"ai_tags": False}})
+    client = TestClient(web.app)
+    assert client.get("/api/analytics").json() == {"imported": None}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("Chart data.csv", "x,y\n")
+        z.writestr("Table data.csv", STUDIO_CSV)
+    r = client.post("/api/analytics", files={"file": ("Content 2026.zip", buf.getvalue(), "application/zip")})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["videos"] == 5 and body["imported"] and body["summary"]["hook_style"]
+    assert client.get("/api/analytics").json()["videos"] == 5
+    assert analytics.load()["source"] == "Content 2026.zip"
+    bad = client.post("/api/analytics", files={"file": ("notes.txt", b"hi", "text/plain")})
+    assert bad.status_code == 400

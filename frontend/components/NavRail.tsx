@@ -64,7 +64,7 @@ export function NavRail({
         <span aria-hidden className="h-5 w-2.5 rounded-[3px] bg-white shadow-[inset_0_-6px_0_var(--color-caption)]" />
       </span>
       <div className="grid w-full gap-1">
-        <RailButton label="New" onClick={onNew}>
+        <RailButton label="Create" onClick={onNew}>
           <Plus className="size-5" />
         </RailButton>
         <RailButton label="Library" active={view === "studio" && libraryOpen} onClick={onLibrary}>

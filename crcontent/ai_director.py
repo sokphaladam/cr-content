@@ -151,6 +151,13 @@ def _task(plan: DirectorPlan, only: set[str] | None, note: str) -> str:
     p = plan.project
     task = (f"Title: {p.title!r}\nLanguage of the narration: {p.language}\nVisual style: {p.visual_style}\n"
             f"{FORMAT_RULES[p.format]}\n\nScenes (id, estimated narration seconds, the fewest shots it needs, narration):\n{_listing(plan, only)}")
+    from .shorts.analytics import director_brief
+
+    if brief := director_brief()[0]:
+        task += f"\n\n{brief}"
+    if p.target_seconds:
+        task += (f"\n\nThe creator aims for about {round(p.target_seconds)} seconds in total; the narration above is fixed, "
+                 "so pace the shots (holds, cuts) for that length.")
     if only:
         story = plan.story.model_dump_json()
         task += (f"\n\nRe-plan ONLY the scenes marked [PLAN THIS]; return only those scenes. Keep this story and "
@@ -244,6 +251,9 @@ def _apply(plan: DirectorPlan, data: dict, only: set[str] | None, locked: set[st
                                     sound_effects=[str(x) for x in edit.get("sound_effects", [])],
                                     pacing=_pick(edit.get("pacing"), ("slow", "normal", "fast"), "normal"))
         out.suggestions = [str(x).strip() for x in data.get("suggestions", []) if str(x).strip()]
+        from .shorts.analytics import director_brief
+
+        out.evidence = director_brief()[1]
 
     planned = {r.get("scene_id"): r for r in data.get("scenes", []) if isinstance(r, dict)}
     shots_by_scene: dict[str, list[Shot]] = {}

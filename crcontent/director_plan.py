@@ -99,6 +99,7 @@ class Project(BaseModel):
     aspect_ratio: str = ""
     language: str = "en"
     visual_style: str = STYLES[0]
+    target_seconds: float = 0  # the length the creator aims for (0 = none); the narration is never cut to fit
 
     @model_validator(mode="after")
     def _aspect(self):
@@ -140,6 +141,7 @@ class DirectorPlan(BaseModel):
     edit_plan: EditPlan = Field(default_factory=EditPlan)
     suggestions: list[str] = []  # optional script improvements; the narration itself is never changed
     warnings: list[str] = []     # whole-video footage problems (repeated shot sizes, too many photos)
+    evidence: str = ""           # the channel analytics the AI Director was given ("" = none)
 
     @model_validator(mode="before")
     @classmethod

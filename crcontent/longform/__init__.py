@@ -22,14 +22,14 @@ def media_folder(slug: str, cfg: dict) -> Path:
     return folder(cfg["footage"]["media_dir"]) / slug
 
 
-def make_storyboard(script_md: Path, log=print, job: Path | None = None) -> Path:
-    """Steps 1-5 for `script_md`, in a new output folder (or again in `job`). Returns the job folder."""
+def make_storyboard(script_md: Path, log=print, job: Path | None = None, choice: dict | None = None) -> Path:
+    """Steps 1-5 for `script_md`, in a new output folder (or again in `job`). Returns the job folder.
+    choice: this video's own {voice, rate, music} (settings.save_choice); a remade one keeps what it had."""
     from ..config import OUTPUT_DIR
     from ..pipeline import slugify
     from . import footage, settings, storyboard, timing, voice
     from .parse import parse, stamp
 
-    cfg = settings.load()
     log(f"[1/{STEPS}] Reading {Path(script_md).name}")
     script = parse(Path(script_md))
     for note in script.notes:
@@ -50,6 +50,13 @@ def make_storyboard(script_md: Path, log=print, job: Path | None = None) -> Path
             "kind": "long_video", "lang": script.lang, "title": script.title, "topic": script.title,
             "script": str(Path(script_md).resolve()), "created": datetime.now().isoformat(timespec="seconds"),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
+    if choice:
+        narrator = choice.get("voice", "")
+        if narrator and narrator.split("-")[0] != script.lang:  # "en-US-AvaNeural" speaks en
+            log(f"      {narrator} doesn't speak this script's language, so the voice in Settings is used")
+            narrator = ""
+        settings.save_choice(job, narrator, choice.get("rate", ""), choice.get("music", ""))
+    cfg = settings.for_job(job)
     (job / storyboard.APPROVAL).unlink(missing_ok=True)  # a new storyboard needs approving again
     shutil.copy(script_md, job / "script.md")
     script.save(job / "scenes.json")
@@ -111,7 +118,7 @@ def _load(job: Path):
     from .parse import Script
     from .timing import Timeline
 
-    cfg = settings.load()
+    cfg = settings.for_job(job)
     script = Script.load(job / "scenes.json")
     tl = Timeline.from_json(json.loads((job / "timeline.json").read_text(encoding="utf-8")))
     entries = json.loads((job / "footage.json").read_text(encoding="utf-8"))

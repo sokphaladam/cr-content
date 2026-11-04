@@ -55,7 +55,10 @@ class FakeClient:
 
 @pytest.fixture(autouse=True)
 def no_cache(tmp_path, monkeypatch):
+    from crcontent.shorts import analytics
+
     monkeypatch.setattr(ai_director, "CACHE", tmp_path / "director")
+    monkeypatch.setattr(analytics, "PATH", tmp_path / "no-analytics.json")  # the user's own import never leaks in
 
 
 def seeded(fmt="short"):
@@ -186,3 +189,27 @@ def test_a_gemini_rate_limit_in_a_job_reads_as_one(capsys):
     job = {}
     web._fail(job, llm.RateLimitError("You exceeded your current quota.\nPlease retry in 19.48s.", 429))
     assert job["status"] == "error" and job["error"].startswith("Gemini rate limit")
+
+
+def test_channel_numbers_reach_the_director_as_evidence(tmp_path, monkeypatch):
+    from crcontent.shorts import analytics
+
+    row = lambda tag, n, stayed: {"tag": tag, "videos": n, "views": 1000 * n, "stayed": stayed, "viewed": 70.0}  # noqa: E731
+    data = {"imported": "2026-11-05T10:00:00", "videos": [{}] * 9,
+            "summary": {"hook_style": [row("question", 4, 61.0), row("shock fact", 3, 47.0), row("myth bust", 1, 90.0)],
+                        "length": [row("20-30s", 5, 60.0)], "animal": []}}
+    analytics.PATH.write_text(json.dumps(data), encoding="utf-8")
+    client = FakeClient(ANSWER)
+    plan = ai_director.direct(seeded(), client=client)
+    sent = client.calls[0]["messages"][0]["content"]
+    assert "question: 4 videos, stayed to watch 61%" in sent and "shock fact" in sent
+    assert "myth bust" not in sent  # one video is no evidence
+    assert "20-30s" not in sent  # a single length bucket compares with nothing
+    assert "evidence and not rules" in sent and "never suggest a misleading or clickbait hook" in sent
+    assert plan.evidence == "Planned with your channel's numbers: 9 videos, imported 2026-11-05."
+
+
+def test_no_channel_numbers_no_block():
+    client = FakeClient(ANSWER)
+    plan = ai_director.direct(seeded(), client=client)
+    assert "channel's past Shorts" not in client.calls[0]["messages"][0]["content"] and plan.evidence == ""

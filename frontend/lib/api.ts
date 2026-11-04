@@ -77,7 +77,7 @@ export interface PlanScene {
 export interface DirectorPlan {
   version: number;
   planned_by: "script" | "ai";
-  project: { title: string; format: "short" | "long"; aspect_ratio: string; language: string; visual_style: string };
+  project: { title: string; format: "short" | "long"; aspect_ratio: string; language: string; visual_style: string; target_seconds?: number };
   story: { hook: string; central_idea: string; emotional_arc: string[]; payoff: string; audience: string; key_facts: string[] };
   continuity: { subjects: string[]; locations: string[]; lighting: string[]; visual_style: string };
   scenes: PlanScene[];
@@ -85,6 +85,7 @@ export interface DirectorPlan {
   edit_plan: { music_mood: string; sound_effects: string[]; colour_grade: string; pacing: string };
   suggestions: string[];
   warnings: string[];
+  evidence?: string; // the channel analytics the AI Director was given ("" = none; missing on an older engine)
   footage_job?: string | null; // a footage search running for it (GET and re-plan answers only)
   media_folder?: string; // where your own clips for its shots go (GET only)
 }
@@ -396,6 +397,23 @@ export interface VideoIdeaSuggestion {
   idea: string;
   look: Look;
   lyric_style: LyricPreset;
+}
+
+/** One tag's numbers from a YouTube Studio import (crcontent/shorts/analytics.py summary). */
+export interface AnalyticsRow {
+  tag: string;
+  videos: number;
+  views: number;
+  stayed: number | null; // Stayed to watch %, views-weighted
+  viewed: number | null; // Average percentage viewed
+}
+
+export interface ChannelAnalytics {
+  imported: string | null; // null = never imported
+  videos?: number;
+  summary?: Record<"hook_style" | "length" | "animal", AnalyticsRow[]>;
+  evidence?: string; // "" when no tag has enough videos to count
+  min_videos?: number;
 }
 
 export interface Options {
@@ -1203,10 +1221,13 @@ export const api = {
   importScript: (text: string) =>
     request<{ script: VideoScript; lang: Lang; method: "claude" | "basic" }>("/api/import", { method: "POST", json: { text, lang: "auto" }, timeout: 0 }),
   /** Script to Video: a finished script becomes a Short draft or starts a Long Video storyboard, with its Director Plan. */
-  scriptVideo: (body: { text: string; format: "short" | "long"; lang: Lang | "auto"; visual_style: VisualStyle }) =>
+  scriptVideo: (body: {
+    text: string; format: "short" | "long"; lang: Lang | "auto"; visual_style: VisualStyle;
+    voice?: string; rate?: string; music?: string; target_seconds?: number;
+  }) =>
     request<{
       format: "short" | "long"; id: string; title: string; scenes: number; method?: "claude" | "basic";
-      planned_by?: "script" | "ai"; director_note?: string; footage_job?: string;
+      planned_by?: "script" | "ai"; director_note?: string; footage_job?: string; voice_note?: string;
     }>(
       "/api/script-video", { method: "POST", json: body, timeout: 0 }),
   plan: (kind: PlanKind, ref: string) => request<DirectorPlan>(`/api/plans/${kind}/${encodeURIComponent(ref)}`),
@@ -1251,6 +1272,13 @@ export const api = {
   deleteCampaign: (id: string) => request<{ deleted: string }>(`/api/campaigns/${id}`, { method: "DELETE" }),
   addReference: (id: string, url: string, title = "") =>
     request<Campaign>(`/api/campaigns/${id}/references`, { method: "POST", json: { url, title } }),
+  /** The last YouTube Studio import (what the AI Director and the hook judge are given). */
+  analytics: () => request<ChannelAnalytics>("/api/analytics"),
+  importAnalytics: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<ChannelAnalytics>("/api/analytics", { method: "POST", body: form, timeout: 0 });
+  },
   uploadReference: (id: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -1340,6 +1368,9 @@ export const api = {
     request<QualityReport>("/api/inspect/preview/short", { method: "POST", json: body }),
   storyReview: (body: { script: VideoScript; lang: Lang }) =>
     request<QualityReport>("/api/inspect/preview/short/story", { method: "POST", json: body, timeout: 0 }),
+  /** Optional AI check: three frames of each scene's footage against its narration (Gemini). */
+  footageReview: (body: { script: VideoScript; lengths: number[] }) =>
+    request<QualityReport>("/api/inspect/preview/short/footage", { method: "POST", json: body, timeout: 0 }),
   rights: (scope: "video" | "song", name: string) => request<RightsList>(`/api/rights/${scope}/${encodeURIComponent(name)}`),
   saveRights: (scope: "video" | "song", name: string, items: RightsAsset[]) =>
     request<RightsList>(`/api/rights/${scope}/${encodeURIComponent(name)}`, { method: "PUT", json: { items } }),

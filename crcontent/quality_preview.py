@@ -15,7 +15,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from .config import ASSETS_DIR, LANGS, ROOT, frame_size
-from .quality import _check, _finish, _num, _read_samples, has_filter, probe, rules_for
+from .quality import _check, _finish, _num, _read_samples, analyze, has_filter, probe, rules_for
 from .script import VideoScript
 
 router = APIRouter()
@@ -34,8 +34,8 @@ LYRIC_RULES = {"max_chars": 42, "min_line_sec": 0.7, "gap_sec": 12, "min_font_px
 TERMINAL = re.compile(r"[.!?。]['\"”’)]*$")
 CHAR_W = 0.55  # average glyph width as a share of the font size (latin bold), for the text-width estimate
 
-SHORT_NOT_YET = [("audio", "Mix levels: run the Quality check after rendering"),
-                 ("storytelling", "Whether the narration matches the footage")]
+SHORT_NOT_YET = [("audio", "The finished mix (ducking, sound effects): run the Quality check after rendering"),
+                 ("storytelling", "Whether the footage shows what the narration says: run the AI footage check below")]
 LOOK_FRAMES = 3  # frames sampled from each media file, one a second from where the scene starts it
 LYRIC_NOT_YET = [("lyrics", "Word-level sync accuracy (only line start times are known)"), ("lyrics", "Lyric spelling"),
                  ("visual", "Picture quality and how distracting the motion is"), ("rights", "Song and picture rights")]
@@ -163,6 +163,39 @@ def rights_checks(checks: list, script: VideoScript, music: str) -> None:
                    "" if use == "ok" else "No licence saved with the track: check where it came from.")
     _check(checks, "rights.youtube", "rights", "not_checked", "Copyright (Content ID) and ad suitability",
            "Only YouTube Studio can check these: upload privately or unlisted and wait for its checks.")
+
+
+MUSIC_LRA_MAX = 15.0  # LU; past this the track's loud parts rise over the voice even with the ducking
+
+
+def music_level_checks(checks: list, track: Path | None, full: bool) -> None:
+    """The music track's own loudness and loudness range. The render sets the voice and the music under it
+    (render._mix_audio), but can raise the music only so far, and can't tame a track that swings from soft to loud."""
+    from .render import MUSIC_BELOW, VOICE_LUFS
+
+    if not full or track is None:
+        _check(checks, "audio.music_level", "audio", "not_checked", "Music loudness",
+               "Run a Full check: it measures the track." if track else "The track is picked at render.")
+        return
+    found = analyze(track, False, True, 0, {"silence_db": -50, "silence_sec": 2, "sample_fps": 1})
+    lufs, lra = found["lufs"], found["lra"]
+    if found["exit_code"] != 0 or lufs is None or lufs <= -69:
+        _check(checks, "audio.music_level", "audio", "fail", "Music track can't be measured (unreadable or silent)",
+               track.name, "high", "Pick another track.")
+        return
+    shown = f"{lufs:.1f} LUFS, loudness range {lra or 0:.1f} LU"
+    bad = False
+    if VOICE_LUFS - MUSIC_BELOW - lufs > 24:  # render._gain raises a track by 24 dB at most
+        bad = True
+        _check(checks, "audio.music_quiet", "audio", "warning", "Music will sit too low under the voice",
+               f"The track is very quiet ({shown}); the render can't raise it far enough.", "medium", "Pick a louder track.")
+    if lra and lra > MUSIC_LRA_MAX:
+        bad = True
+        _check(checks, "audio.music_range", "audio", "warning", "Music swings from soft to loud",
+               f"{shown}: its loud parts may rise over the voice even with the ducking.", "medium",
+               "Pick a steadier track or lower the music volume.")
+    if not bad:
+        _check(checks, "audio.music_level", "audio", "pass", "Music level fits under the voice", shown)
 
 
 # ---------- Shorts ----------
@@ -317,6 +350,7 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
         _check(checks, "audio.music", "audio", "fail", f"Music track missing: {music}", "", "high", "Pick another track.")
     else:
         _check(checks, "audio.music", "audio", "pass", f"Music: {music or 'picked at render'}")
+        music_level_checks(checks, ASSETS_DIR / "music" / Path(music).name if music else None, full)
 
     # --- storytelling (advice, never a verdict) ---
     first = scenes[0].narration.strip()
@@ -612,6 +646,96 @@ def story_review(req: StoryRequest):
     for a in STORY_ASPECTS:
         if a not in seen:
             _check(checks, f"ai.story.{a}", "storytelling", "not_checked", a.replace("_", " ").capitalize(), "The AI gave no answer.")
+    return _finish(result, [])
+
+
+FOOTAGE_PASS = 7  # shorts.match.PASS: footage that shows what's said
+FOOTAGE_SCHEMA = {
+    "type": "object",
+    "properties": {"score": {"type": "integer"}, "seen": {"type": "string"}, "problem": {"type": "string"}},
+    "required": ["score", "seen", "problem"], "additionalProperties": False,
+}
+
+
+def footage_verdict(f: Path, narration: str, start: float, length: float, client=None) -> dict | None:
+    """Gemini's {score 0-10, seen, problem} for whether the frames shown in this window match the narration; cached
+    next to the clip per narration and window. None when no frame could be read."""
+    from .shorts.match import frames
+
+    key = hashlib.sha1(f"{narration}|{start:.2f}|{length:.2f}".encode()).hexdigest()[:12]
+    note = f.with_name(f"{f.stem}.story-{key}.json")
+    if note.exists():
+        return json.loads(note.read_text(encoding="utf-8"))
+    shots = frames(f, start, length)
+    if not shots:
+        return None
+    if client is None:
+        from .script import make_client
+
+        client = make_client()
+    content = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": d}} for d in shots]
+    content.append({"type": "text", "text": (
+        f"Frames (start, middle, end) of the footage shown while a short video's voiceover says:\n\"{narration}\"\n"
+        "score 0-10, does the footage show what the narration is talking about? 9-10 = exactly what's said; "
+        "7-8 = the right subject, fitting; 4-6 = loosely related; 0-3 = something else. seen: what the footage shows, "
+        "in a few words. problem: what doesn't match, or \"\". Write in English.")})
+    from .config import LLM_MODEL
+
+    response = client.beta.messages.create(
+        model=LLM_MODEL, max_tokens=600,
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": FOOTAGE_SCHEMA}},
+        messages=[{"role": "user", "content": content}])
+    data = json.loads(next(b.text for b in response.content if b.type == "text"))
+    verdict = {"score": max(0, min(int(data["score"]), 10)), "seen": str(data["seen"]).strip(),
+               "problem": str(data.get("problem", "")).strip()}
+    note.write_text(json.dumps(verdict), encoding="utf-8")
+    return verdict
+
+
+class FootageRequest(BaseModel):
+    script: VideoScript
+    lengths: list[float] = []
+
+
+@router.post("/api/inspect/preview/short/footage")
+def footage_review(req: FootageRequest):
+    """Optional AI check of each scene's footage against its narration: three frames of the part shown go to
+    Gemini. Advisory only: every item is pass, warning or not checked."""
+    from fastapi import HTTPException
+
+    scenes = req.script.scenes
+    if not scenes:
+        raise HTTPException(400, "The script has no scenes.")
+    lengths = [*req.lengths, *[0.0] * len(scenes)][: len(scenes)]
+    checks = []
+    result = {"stage": "preview", "profile": "short", "profile_label": "AI footage check (Gemini)", "mode": "full",
+              "created": datetime.now().isoformat(timespec="seconds"), "checks": checks, "cancelled": False,
+              "sampled": "three frames of each scene's footage (the part shown) and its narration, reviewed by Gemini; "
+                         "cutaways not included"}
+    for i, sc in enumerate(scenes):
+        f = _library_file(sc.media) if sc.media else None
+        if not sc.narration.strip():
+            continue
+        if not f or not f.is_file():
+            _scene(_check(checks, f"ai.footage.{i}", "storytelling", "not_checked", f"Scene {i + 1}: no footage picked yet",
+                          "Footage picked at render can't be checked here."), i)
+            continue
+        length = lengths[i] or max(sc.seconds, 2.0)
+        try:
+            v = footage_verdict(f, sc.narration.strip(), max(sc.media_start, 0.0), length)
+        except Exception as e:
+            raise HTTPException(502, f"The AI footage check didn't work: {e}. The other checks don't need it.")
+        if v is None:
+            _scene(_check(checks, f"ai.footage.{i}", "storytelling", "not_checked", f"Scene {i + 1}: footage can't be read", sc.media), i)
+        elif v["score"] >= FOOTAGE_PASS:
+            _scene(_check(checks, f"ai.footage.{i}", "storytelling", "pass", f"Scene {i + 1}: footage fits the narration",
+                          f"Shows: {v['seen']}\n(AI-assisted: review it yourself.)", "info"), i)
+        else:
+            _scene(_check(checks, f"ai.footage.{i}", "storytelling", "warning",
+                          f"Scene {i + 1}: footage may not show what the narration says",
+                          f"Shows: {v['seen']}. {v['problem']}\n(AI-assisted: review it yourself.)", "low",
+                          "Pick footage that shows what's said, or reword the line.",
+                          *((sum(lengths[:i]), sum(lengths[:i + 1])) if lengths[i] else ())), i)
     return _finish(result, [])
 
 

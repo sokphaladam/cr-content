@@ -141,8 +141,8 @@ def graphic(shot: Shot, scene_text: str, fmt: str, lang: str) -> Footage:
     if not out.exists():
         CARDS.mkdir(parents=True, exist_ok=True)
         cards.draw(card, out, SIZES[fmt], lang)
-    return Footage(source="card", kind="photo", file=str(out), author="drawn by the app", licence="made by the app",
-                   match="drawn")
+    return Footage(source="card", kind="photo", file=str(out), thumb=f"/cache/{CARDS.name}/{out.name}",
+                   author="drawn by the app", licence="made by the app", match="drawn")
 
 
 def _footage(item: dict, query: str) -> Footage:
@@ -196,7 +196,8 @@ def plan_warnings(plan: DirectorPlan) -> list[str]:
         if run_size == 3:
             out.append(f"Three {b.shot_type.replace('_', ' ')} shots in a row (up to {b.id}): vary the framing.")
     for s in plan.shots:
-        run_photo = run_photo + 1 if s.footage and s.footage.kind == "photo" else 0
+        # a drawn card is a designed graphic, not a stock still: it breaks a slideshow run instead of extending it
+        run_photo = run_photo + 1 if s.footage and s.footage.kind == "photo" and s.footage.source != "card" else 0
         if run_photo == 3:
             out.append(f"Three still photos in a row (up to {s.id}): the video feels like a slideshow there.")
     found = [s for s in plan.shots if s.footage]

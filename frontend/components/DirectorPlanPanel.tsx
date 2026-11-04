@@ -5,13 +5,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   API_BASE,
   api,
+  type ChannelAnalytics,
   type DirectorPlan,
   type FootageMatch,
   type PlanFootage,
   type PlanKind,
   type PlanShot,
 } from "@/lib/api";
-import { Button, Chip, Message } from "./ui";
+import { Button, Chip, FileInput, Message } from "./ui";
 
 const words = (v: string) => v.replace(/_/g, " ");
 const EVIDENCE: Record<PlanShot["evidence"], string> = {
@@ -313,6 +314,7 @@ export function DirectorPlanPanel({
               {story.key_facts.join("; ")}
             </p>
           )}
+          {plan.evidence && <p className="m-0 text-xs text-ink-soft">{plan.evidence}</p>}
           {plan.suggestions.length > 0 && (
             <div className="mt-1 rounded-lg border border-line p-2">
               <b>Script suggestions</b> (optional; your narration isn&apos;t
@@ -326,6 +328,8 @@ export function DirectorPlanPanel({
           )}
         </section>
       )}
+
+      <ChannelNumbers />
 
       <ol className="m-0 grid list-none gap-3 p-0">
         {plan.scenes.map((scene, i) => {
@@ -484,7 +488,8 @@ function Thumb({ f, className = "" }: { f: PlanFootage; className?: string }) {
         {f.source === "own" ? "your file" : f.kind}
       </span>
     );
-  const src = f.thumb.startsWith("/media/") ? `${API_BASE}${f.thumb}` : f.thumb; // a Shorts Mode beat's own thumbnail
+  // a Shorts Mode beat's own thumbnail, or a drawn card
+  const src = /^\/(media|cache)\//.test(f.thumb) ? `${API_BASE}${f.thumb}` : f.thumb;
   // eslint-disable-next-line @next/next/no-img-element -- remote stock thumbnails from any library
   return <img src={src} alt="" loading="lazy" className={`rounded object-cover ${className}`} />;
 }
@@ -574,5 +579,80 @@ function FootageView({ shot, onPick, onSearch }: { shot: PlanShot; onPick: (i: n
         </div>
       )}
     </div>
+  );
+}
+
+const DIMS: { key: "hook_style" | "length" | "animal"; label: string }[] = [
+  { key: "hook_style", label: "Hook style" },
+  { key: "length", label: "Length" },
+  { key: "animal", label: "Subject" },
+];
+
+/** The YouTube Studio numbers the AI Director is given, and where to import them. */
+function ChannelNumbers() {
+  const [data, setData] = useState<ChannelAnalytics | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
+
+  useEffect(() => {
+    api.analytics().then(setData, () => setData({ imported: null }));
+  }, []);
+
+  async function upload(file: File) {
+    setBusy(true);
+    setMsg({ text: "" });
+    try {
+      const d = await api.importAnalytics(file);
+      setData(d);
+      setMsg({ text: d.evidence ? "Imported. The next time you direct a video, the AI Director gets these numbers." : `Imported, but no tag has ${d.min_videos} videos yet, so the AI Director isn't given them.` });
+    } catch (e) {
+      setMsg({ text: (e as Error).message, error: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const pct = (x: number | null) => (x === null ? "–" : `${x.toFixed(0)}%`);
+  return (
+    <details className="grid gap-2 rounded-lg border border-line p-2 text-sm">
+      <summary className="cursor-pointer font-semibold">
+        Your channel&apos;s numbers{" "}
+        <span className="font-normal text-ink-soft">
+          {data?.imported ? `${data.videos} videos, imported ${data.imported.slice(0, 10)}` : "not imported"}
+        </span>
+      </summary>
+      <p className="m-0 text-xs text-ink-soft">
+        From YouTube Studio: Analytics → Advanced mode → Content → Export (the .zip or its .csv). The AI Director reads them
+        as evidence about your channel, not as rules, and only tags with {data?.min_videos ?? 3}+ videos. It never uses them
+        to suggest a misleading hook.
+      </p>
+      {data?.summary &&
+        DIMS.map(({ key, label }) =>
+          data.summary![key].length ? (
+            <table key={key} className="w-full text-xs tabular-nums">
+              <thead>
+                <tr className="text-left text-ink-soft">
+                  <th className="font-semibold">{label}</th>
+                  <th className="text-right font-normal">videos</th>
+                  <th className="text-right font-normal">stayed</th>
+                  <th className="text-right font-normal">viewed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.summary![key].map((r) => (
+                  <tr key={r.tag} className={r.videos < (data.min_videos ?? 3) ? "text-ink-soft" : ""}>
+                    <td>{r.tag}</td>
+                    <td className="text-right">{r.videos}</td>
+                    <td className="text-right">{pct(r.stayed)}</td>
+                    <td className="text-right">{pct(r.viewed)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null,
+        )}
+      <FileInput id="analytics-csv" accept=".csv,.zip" file="" disabled={busy} onFile={(f) => void upload(f)} onReject={(t) => setMsg({ text: t, error: true })} />
+      <Message {...msg} />
+    </details>
   );
 }

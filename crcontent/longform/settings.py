@@ -73,6 +73,32 @@ def load() -> dict:
         return copy.deepcopy(DEFAULTS)
 
 
+CHOICE = "choice.json"  # in a long video's folder: its own {voice, rate, music}, over these settings
+
+
+def save_choice(job: Path, voice: str = "", rate: str = "", music: str = "") -> None:
+    (Path(job) / CHOICE).write_text(json.dumps({"voice": voice, "rate": rate, "music": music}), encoding="utf-8")
+
+
+def for_job(job: Path) -> dict:
+    """The settings with this video's own narrator, speed and music (choice.json, from the Create Video form) over
+    them. A video made before that, or with nothing chosen, uses the settings as they are."""
+    cfg = load()
+    try:
+        choice = json.loads((Path(job) / CHOICE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return cfg
+    if choice.get("voice"):  # an Edge voice; your own recordings still win over it (as in Shorts Mode)
+        if cfg["voice"]["engine"] == "elevenlabs":
+            cfg["voice"]["engine"] = "edge"
+        cfg["voice"]["edge"][choice["voice"].split("-")[0]] = choice["voice"]
+    if choice.get("rate"):
+        cfg["voice"]["edge"]["rate"] = choice["rate"]
+    if choice.get("music"):
+        cfg["music"]["track"] = choice["music"]  # "none", or a track in assets/music
+    return cfg
+
+
 def folder(value: str) -> Path:
     """A folder setting: absolute, or relative to the data folder."""
     path = Path(value).expanduser()

@@ -929,35 +929,11 @@ function Studio() {
             {!draft && !song && !timing && !storyboard && (
               <CreateForm
                 options={options}
-                onImportSong={(id, title) => {
-                  setSelectedVideo(null);
-                  setDetail(null);
-                  setJobTitle(title);
-                  setJob({
-                    id,
-                    kind: "lyrics_sync",
-                    status: "queued",
-                    step: 0,
-                    log: [],
-                    title,
-                  });
-                  setPreviewOpen(true);
-                  watch(id);
-                }}
                 onDraft={async (id, notice) => {
                   await loadDrafts();
                   setLibraryTab("drafts");
                   await selectDraft(id);
                   toast(notice, "success");
-                }}
-                onExcelDrafts={async (made) => {
-                  await loadDrafts();
-                  setLibraryTab("drafts");
-                  toast(
-                    `Created ${made.length} draft${made.length === 1 ? "" : "s"}. Check each one's footage, then render.`,
-                    "success",
-                  );
-                  if (made[0]) await selectDraft(made[0].id);
                 }}
                 onLongVideo={(id, title) => {
                   setSelectedVideo(null);
@@ -990,38 +966,6 @@ function Studio() {
                   setLibraryTab("videos");
                   setPreviewOpen(true);
                   watch(id);
-                }}
-                onExcelRender={(id, title) => {
-                  setSelectedVideo(null);
-                  setDetail(null);
-                  setJobTitle(title);
-                  setJob({
-                    id,
-                    kind: "excel",
-                    status: "queued",
-                    step: 0,
-                    log: [],
-                    title,
-                  });
-                  setLibraryTab("videos");
-                  setPreviewOpen(true);
-                  watch(id);
-                }}
-                onSong={(s, lang, topic) => {
-                  setSongState({ song: s, lang, topic });
-                  setSelectedVideo(null);
-                  setDetail(null);
-                  toast(
-                    "Lyrics written. Check them, then compose the song.",
-                    "success",
-                  );
-                }}
-                onScript={async (script, lang, topic, notice) => {
-                  await openDraft(toDraft(script, lang, topic), false);
-                  setSelectedVideo(null);
-                  setDetail(null);
-                  setLibraryTab("drafts");
-                  if (notice) toast(notice, "success");
                 }}
               />
             )}

@@ -73,6 +73,7 @@ export function ShortsPreviewCheck({ script, lang, music, lengths, total, onIssu
         <p className="m-0 text-sm text-ink-soft">Checking…</p>
       )}
       <StoryReview script={script} lang={lang} total={total} onIssue={onIssue} />
+      <FootageReview script={script} lengths={lengths} total={total} onIssue={onIssue} />
     </section>
   );
 }
@@ -149,6 +150,43 @@ function StoryReview({ script, lang, total, onIssue }: { script: VideoScript; la
       <p className="m-0 text-2xs text-ink-soft">
         Sends the script text (title, narration, footage searches, headlines) to Gemini with your API key. No video, pictures
         or audio. You get advice on the hook, payoff, structure and ending, not a prediction of views.
+      </p>
+      {report && <QualityReportView key={report.created} report={{ ...report, outdated: madeFrom !== key }} total={total} onSelect={onIssue} />}
+    </div>
+  );
+}
+
+/** Optional, AI-assisted check that each scene's footage shows what its narration says. Sends frames, only when you ask. */
+function FootageReview({ script, lengths, total, onIssue }: { script: VideoScript; lengths: number[]; total: number; onIssue: (c: QualityCheck) => void }) {
+  const toast = useToast();
+  const [report, setReport] = useState<QualityReport | null>(null);
+  const [madeFrom, setMadeFrom] = useState("");
+  const [busy, setBusy] = useState(false);
+  const key = JSON.stringify({ script, lengths });
+
+  async function run() {
+    setBusy(true);
+    try {
+      setReport(await api.footageReview({ script, lengths }));
+      setMadeFrom(key);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-2 border-t border-line pt-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="field-label">Footage vs narration <span className="font-normal">optional, AI</span></span>
+        <Button size="sm" variant="secondary" icon={<Sparkles className="size-3.5" />} loading={busy} onClick={run}>
+          {report ? "Check again" : "Check footage with Gemini"}
+        </Button>
+      </div>
+      <p className="m-0 text-2xs text-ink-soft">
+        Sends three frames of each scene&apos;s footage (the part shown) and its voiceover text to Gemini with your API key.
+        Cutaways and footage picked at render aren&apos;t checked. Answers are kept, so checking again only asks about changed scenes.
       </p>
       {report && <QualityReportView key={report.created} report={{ ...report, outdated: madeFrom !== key }} total={total} onSelect={onIssue} />}
     </div>

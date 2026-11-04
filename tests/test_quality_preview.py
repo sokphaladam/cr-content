@@ -109,6 +109,58 @@ def test_full_check_samples_footage_quality(lib):
     assert not by(full, "later.visual")  # no longer listed as "not part of this inspector"
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_full_check_measures_the_music(lib):
+    music = lib / "assets" / "music"
+    music.mkdir(parents=True)
+
+    def track(name, expr):
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", f"aevalsrc='{expr}':d=20", str(music / name)],
+                       check=True)
+    track("steady.wav", "0.2*sin(440*2*PI*t)")
+    track("quiet.wav", "0.002*sin(440*2*PI*t)")  # about -57 LUFS
+    track("swings.wav", "if(lt(mod(t,10),5),0.5,0.06)*sin(440*2*PI*t)")  # 5 s loud, 5 s 18 dB softer
+    by_track = {n: qp.inspect_short(script(), "en", n, [3], True) for n in ("steady.wav", "quiet.wav", "swings.wav")}
+    assert by(by_track["steady.wav"], "audio.music_level")[0]["status"] == "pass"
+    assert by(by_track["quiet.wav"], "audio.music_quiet")
+    assert by(by_track["swings.wav"], "audio.music_range")
+    quick = qp.inspect_short(script(), "en", "steady.wav", [3], False)
+    assert by(quick, "audio.music_level")[0]["status"] == "not_checked"
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_footage_review_flags_a_mismatch(lib, monkeypatch):
+    from types import SimpleNamespace
+
+    from crcontent import script as script_mod
+
+    asked = []
+
+    class Client:  # Gemini stub: scores by what the narration talks about
+        class beta:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    text = kw["messages"][0]["content"][-1]["text"]
+                    asked.append(text)
+                    ok = "octopus" in text
+                    body = json.dumps({"score": 8 if ok else 2, "seen": "an octopus", "problem": "" if ok else "no car"})
+                    return SimpleNamespace(content=[SimpleNamespace(type="text", text=body)])
+
+    monkeypatch.setattr(script_mod, "make_client", lambda: Client)
+    clip = lib / "uploads" / "octo.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x240:d=3", str(clip)], check=True)
+    scenes = [Scene(narration="An octopus has three hearts.", visual_query="q", media="uploads/octo.mp4"),
+              Scene(narration="Faster than a race car.", visual_query="q", media="uploads/octo.mp4"),
+              Scene(narration="Picked at render.", visual_query="q")]
+    rep = qp.footage_review(qp.FootageRequest(script=script(*scenes), lengths=[2, 2, 2]))
+    status = {c["scene"]: c["status"] for c in by(rep, "ai.footage")}
+    assert status == {0: "pass", 1: "warning", 2: "not_checked"}
+    assert by(rep, "ai.footage.1")[0]["start"] == 2
+    qp.footage_review(qp.FootageRequest(script=script(*scenes), lengths=[2, 2, 2]))
+    assert len(asked) == 2  # the second run reads the saved answers
+
+
 def test_rights_flags_unknown_files_and_a_non_commercial_track(lib, monkeypatch):
     from crcontent import music, rights
 

@@ -234,7 +234,10 @@ def import_csv(path: Path, episodes: list = (), log=print) -> dict:
         raise ValueError(f"{Path(path).name}: no videos in it")
     match(videos, list(episodes))
     tag(videos, log)
-    data = {"source": str(path), "videos": [asdict(v) for v in videos], "summary": summary(videos)}
+    from datetime import datetime
+
+    data = {"source": str(path), "imported": datetime.now().isoformat(timespec="seconds"),
+            "videos": [asdict(v) for v in videos], "summary": summary(videos)}
     PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return data
 
@@ -250,6 +253,33 @@ def style_stats(data: dict | None = None) -> dict[str, dict]:
     """{hook style: {stayed, viewed, videos}} from the last import (empty without one)."""
     data = data if data is not None else load()
     return {r["tag"]: r for r in (data or {}).get("summary", {}).get("hook_style", [])}
+
+
+EVIDENCE_MIN = 3  # videos a tag needs before the AI Director hears about it: one lucky video steers nothing
+
+
+def director_brief(data: dict | None = None) -> tuple[str, str]:
+    """(the block for the AI Director's prompt, a one-line note for the plan), or ("", "") without an import or
+    without any tag measured on EVIDENCE_MIN videos."""
+    data = data if data is not None else load()
+    if not data:
+        return "", ""
+    f = lambda x: "-" if x is None else f"{x:.0f}%"  # noqa: E731
+    parts = []
+    for dim, label in (("hook_style", "Hook styles"), ("length", "Lengths"), ("animal", "Subjects")):
+        rows = [r for r in data.get("summary", {}).get(dim, []) if r["videos"] >= EVIDENCE_MIN and r["stayed"] is not None]
+        if len(rows) >= 2:  # a single tag compares with nothing
+            parts.append(f"{label} (best first): " + "; ".join(
+                f"{r['tag']}: {r['videos']} videos, stayed to watch {f(r['stayed'])}, viewed {f(r['viewed'])}" for r in rows))
+    if not parts:
+        return "", ""
+    n, when = len(data.get("videos", [])), (data.get("imported") or "")[:10]
+    block = ("This channel's past Shorts, from YouTube Studio (stayed to watch = viewers who didn't swipe away; viewed = "
+             "average share of the video watched). These are patterns from one channel, evidence and not rules: use "
+             "them as one input for pacing, shot choices and your suggestions, never at the expense of accuracy, and "
+             "never suggest a misleading or clickbait hook. When you cite them in a suggestion, give the numbers.\n"
+             + "\n".join(parts))
+    return block, f"Planned with your channel's numbers: {n} videos" + (f", imported {when}" if when else "") + "."
 
 
 def report(data: dict) -> str:

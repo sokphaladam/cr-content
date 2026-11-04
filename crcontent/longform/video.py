@@ -179,9 +179,19 @@ def voice_track(tl: Timeline, voice_dir: Path, out: Path) -> Path:
 
 
 def playlist(cfg: dict, seed: str) -> list[Path]:
-    """Your tracks (music.dir), in an order that differs per video but is the same every time it's rendered."""
+    """Your tracks (music.dir), in an order that differs per video but is the same every time it's rendered; or the
+    one track this video chose (music.track: a file in assets/music, or "none")."""
     from .settings import folder
 
+    track = cfg["music"].get("track")
+    if track == "none":
+        return []
+    if track:
+        from ..config import ASSETS_DIR
+
+        own = ASSETS_DIR / "music" / Path(track).name
+        if own.is_file():
+            return [own]
     music_dir = folder(cfg["music"]["dir"])
     tracks = sorted(p for p in music_dir.glob("*") if p.suffix.lower() in MUSIC_EXTS) if music_dir.is_dir() else []
     if not tracks:
@@ -373,7 +383,10 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
         log(f"      music: {', '.join(t.stem for t in used)}")
     else:
         from .settings import folder
-        log(f"      ! no music: {folder(cfg['music']['dir'])} has no tracks (mp3, wav, m4a, flac)")
+        if cfg["music"].get("track") == "none":
+            log("      no music (this video's choice)")
+        else:
+            log(f"      ! no music: {folder(cfg['music']['dir'])} has no tracks (mp3, wav, m4a, flac)")
 
     cue_list = cues(script, tl, voices)
     burn = bool(rc["captions"])

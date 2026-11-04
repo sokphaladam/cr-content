@@ -322,7 +322,7 @@ export function Library({
       <div className="pane-header">
         <h2 className="pane-title m-0">Library</h2>
         <Button size="sm" variant="primary" icon={<Plus className="size-4" />} onClick={onNew}>
-          New
+          Create
         </Button>
       </div>
       <div className="grid gap-3 px-4 pt-3">
