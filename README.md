@@ -456,6 +456,20 @@ API: `POST /api/inspect/preview/short`, `POST|GET /api/inspect/preview/song/<slu
 - *Story review* (optional, Shorts **Pre-render check → Send to Gemini**): sends the script text only, never media,
   and returns one advisory item per aspect (hook, promise, early payoff, scene purpose, narration vs footage,
   structure, ending), labelled AI-assisted. Unanswered aspects are Not checked. It never predicts views.
+- *Retention checks* (Shorts pre-render, no AI key needed, `quality_preview.retention_checks`): the first shot holding
+  over 4 s with no cut or cutaway (Not checked until scene 1 is voiced); a sentence sharing 70% of its content words with
+  an earlier scene's (a fact said twice); 3 still pictures in a row with no cutaway; captions dragged up into the
+  headline card or onto an overlay; a headline that only repeats the narration (info); an ending that stops
+  mid-sentence (fine if it's a deliberate loop). All advice, never blockers: the thresholds `hook_sec`,
+  `repeat_overlap` and `still_run` are heuristics you can change in `quality_rules.json`. Whether a payoff answers the
+  hook stays with the optional story review: no rule can tell that from the words alone.
+- *Apply and dismiss* (Shorts pre-render): a finding with one safe, obvious fix carries it (`fix` in the report: caption
+  style fields, or an overlay's x/y/start) and shows **Apply: …** naming the change. It's one ordinary editor edit, so
+  Ctrl+Z reverts it, and it isn't offered on an outdated report. Fixes exist for captions outside the safe area or on
+  the headline, overlays off the frame / outside the safe area / on the captions / starting after their scene.
+  Nothing else (narration, footage, order, timing) is ever changed for you. **Dismiss** hides a finding for this
+  session without touching the project. The apply logic is `frontend/lib/qualityFix.ts`; `npm test` in `frontend`
+  runs its tests on Node's own test runner.
 - *Rights checklist* (under a finished video, and under a Lyric Studio song's results): one record per asset (source,
   licence, credit, commercial use, adaptation, restrictions, notes, "I checked this"), pre-filled from stock filenames
   (Pexels/Pixabay), Wikimedia Commons credits, the music track's saved licence and credit, the Suno plan, and TTS. A

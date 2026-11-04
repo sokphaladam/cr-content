@@ -36,11 +36,13 @@ const MARKS: { value: Disposition; label: string }[] = [
   { value: "fixed", label: "Fixed" },
 ];
 
-export function QualityReportView({ report, total, onSelect, onReview }: {
+export function QualityReportView({ report, total, onSelect, onReview, onApply, marks = MARKS }: {
   report: QualityReport;
   total: number;
   onSelect: (c: QualityCheck) => void;
-  onReview?: (c: QualityCheck, d: Disposition) => void; // render reports: mark an issue
+  onReview?: (c: QualityCheck, d: Disposition) => void; // mark an issue
+  onApply?: (c: QualityCheck) => void; // preview reports: apply the issue's safe fix (the editor's undo reverts it)
+  marks?: typeof MARKS;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -116,7 +118,7 @@ export function QualityReportView({ report, total, onSelect, onReview }: {
           {pick.reopened && <p className="m-0 text-sm font-semibold text-warn">You marked this fixed, but the latest check still finds it.</p>}
           {onReview && !report.archived && (pick.status === "warning" || pick.status === "fail") && (
             <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Mark this issue">
-              {MARKS.map((m) => (
+              {marks.map((m) => (
                 <Button key={m.value} size="sm" variant={pick.disposition === m.value ? "primary" : "ghost"}
                   onClick={() => onReview(pick, pick.disposition === m.value ? "unreviewed" : m.value)}>
                   {m.label}
@@ -130,6 +132,13 @@ export function QualityReportView({ report, total, onSelect, onReview }: {
               <span className="font-semibold">Suggested: </span>
               {pick.recommendation}
             </p>
+          )}
+          {/* an outdated report's fix may no longer fit the project: check again first */}
+          {onApply && pick.fix && !report.outdated && pick.disposition !== "dismissed" && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button size="sm" variant="secondary" onClick={() => onApply(pick)}>Apply: {pick.fix.label}</Button>
+              <span className="text-2xs text-ink-soft">Undo (Ctrl+Z) reverts it.</span>
+            </div>
           )}
         </div>
       )}

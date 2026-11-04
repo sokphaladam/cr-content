@@ -29,6 +29,14 @@ SHORT_RULES = {
     "min_media_px": 720,  # shorter side; smaller footage is upscaled and looks soft
 }
 SHORT_RULES["caption_changes_per_sec"] = 3.5  # faster than this, captions flicker past unread
+# retention heuristics (editorial advice, not platform rules; quality_rules.json can change them)
+SHORT_RULES |= {"hook_sec": 4.0,       # the first shot held this long before any cut or cutaway
+                "repeat_overlap": 0.7,  # share of content words two sentences have in common to count as a repeat
+                "still_run": 3}         # this many still pictures in a row reads as a slideshow
+HEADLINE_H, CAPTION_HALF = 0.11, 0.05  # the headline card's height (2 lines), half a caption's: shares of the height
+DEFAULT_CAPTION_Y, DEFAULT_HEADLINE_Y = 0.62, 0.13  # styles.CaptionStyle's
+STOP = set("a an the and or but of to in on at is are was were be it its this that these those for with as by from "
+           "than then so very can could will would has have had do does did not no they them their there here".split())
 LYRIC_RULES = {"max_chars": 42, "min_line_sec": 0.7, "gap_sec": 12, "min_font_px": 48, "font_px": 66,
                "sync_sec": 0.8, "vocal_silence_db": -35}  # a line this far from the singing is off
 TERMINAL = re.compile(r"[.!?。]['\"”’)]*$")
@@ -200,6 +208,101 @@ def music_level_checks(checks: list, track: Path | None, full: bool) -> None:
 
 # ---------- Shorts ----------
 
+def _fix(item: dict, label: str, **change) -> dict:
+    """A safe, one-click change for the editor: `captions` (fields of the caption style) or `text` (the scene's k-th
+    overlay) with `set` (its fields). The editor applies it as one undoable edit."""
+    item["fix"] = {"label": label, **change}
+    return item
+
+
+def _collides(caption_y: float, headline_y: float) -> bool:
+    return caption_y + CAPTION_HALF > headline_y and caption_y - CAPTION_HALF < headline_y + HEADLINE_H
+
+
+def _content(text: str) -> set[str]:
+    return {w for w in re.findall(r"[^\W_]+", text.lower()) if w not in STOP and (len(w) > 2 or w.isdigit())}
+
+
+def retention_checks(checks: list, scenes: list, lengths: list[float], starts: list[float], cs, rules: dict) -> None:
+    """Deterministic retention checks from the project data alone (no AI key needed): a long first shot, a fact said
+    twice, a run of stills, a headline that only repeats the voice or sits on the captions. All advice: stillness or a
+    repeat can be deliberate."""
+    from .visuals import IMAGE_EXTS
+
+    # the opening: how long the first picture holds before a cut or a cutaway changes it
+    if lengths[0]:
+        change = min([b.at for b in scenes[0].broll if b.at > 0] + [lengths[0]])
+        if change > rules["hook_sec"]:
+            _scene(_check(checks, "pacing.opening", "storytelling", "warning",
+                          f"The first shot holds {change:.1f} s before anything changes",
+                          "Viewers decide in the first seconds; one unchanging picture through the hook gives them "
+                          "nothing new to look at.", "low",
+                          "Cut to the behavior the hook talks about, or add a cutaway early in scene 1.", 0, change), 0)
+        else:
+            _check(checks, "pacing.opening", "storytelling", "pass", f"The picture changes within {change:.1f} s")
+    else:
+        _check(checks, "pacing.opening", "storytelling", "not_checked", "Opening pace",
+               "Scene 1 has no voiceover yet, so its length isn't known.")
+
+    # the same fact said twice: sentences sharing most of their content words
+    sentences = [(i, s.strip()) for i, sc in enumerate(scenes) for s in re.split(r"(?<=[.!?。])\s+", sc.narration)
+                 if len(_content(s)) >= 4]
+    repeats = set()
+    for a, (i, s) in enumerate(sentences):
+        for j, t in sentences[a + 1:]:
+            x, y = _content(s), _content(t)
+            if j != i and len(x & y) / min(len(x), len(y)) >= rules["repeat_overlap"] and (i, j) not in repeats:
+                repeats.add((i, j))
+                _scene(_check(checks, f"story.repeat.{i}.{j}", "storytelling", "warning",
+                              f"Scene {j + 1} repeats what scene {i + 1} already said",
+                              f"“{t[:70]}” after “{s[:70]}”: a repeated beat is where viewers swipe away.", "low",
+                              "Cut it, or use the line for a new detail that moves the story on.",
+                              starts[j], starts[j] + lengths[j]), j)
+    if not repeats and len(sentences) > 1:
+        _check(checks, "story.repeat", "storytelling", "pass", "Every scene says something new")
+
+    # a run of still pictures (a drawn card or a photo held on purpose is fine on its own)
+    run = 0
+    for i, sc in enumerate(scenes):
+        run = run + 1 if sc.media and Path(sc.media).suffix.lower() in IMAGE_EXTS and not sc.broll else 0
+        if run == rules["still_run"]:
+            first = i - run + 1
+            _scene(_check(checks, f"visual.stills.{first}", "visual", "warning",
+                          f"Scenes {first + 1}–{i + 1} are all still pictures",
+                          f"{run} stills in a row can read as a slideshow, even with motion added.", "low",
+                          "Swap one for a video clip, or add a moving cutaway in the middle.",
+                          starts[first], starts[i] + lengths[i]), first)
+
+    caption_y = cs.y
+    clash = _collides(caption_y, cs.headline_y)
+    # the safe way out: captions back to their default, or (when that's where the headline was moved) the headline
+    unclash = ({"label": f"Move the captions to {DEFAULT_CAPTION_Y:.0%}", "captions": {"y": DEFAULT_CAPTION_Y}}
+               if not _collides(DEFAULT_CAPTION_Y, cs.headline_y) else
+               {"label": f"Move the headlines to {DEFAULT_HEADLINE_Y:.0%}", "captions": {"headline_y": DEFAULT_HEADLINE_Y}})
+    for i, sc in enumerate(scenes):
+        head = sc.on_screen_text.strip()
+        if head and clash:
+            _scene(_fix(_check(checks, f"captions.collide.{i}", "captions", "warning",
+                               f"Scene {i + 1}: the captions run into the headline",
+                               f"Captions centred at {caption_y:.0%}, headline from {cs.headline_y:.0%} to "
+                               f"{cs.headline_y + HEADLINE_H:.0%} of the height.", "medium",
+                               "Move the captions or the headline in the Captions panel.", starts[i],
+                               starts[i] + lengths[i]), **unclash), i)
+        for k, t in enumerate(sc.texts):
+            if t.text.strip() and abs(t.y - caption_y) < 0.06:
+                y = 0.4 if abs(0.4 - caption_y) >= 0.12 else 0.75  # TextOverlay's default spot, else under the captions
+                _scene(_fix(_check(checks, f"captions.collide.{i}.{k}", "captions", "warning",
+                                   f"Scene {i + 1}: text “{t.text[:24]}” sits on the captions",
+                                   f"Both at about {caption_y:.0%} of the height.", "medium", "Move the text up or down."),
+                            f"Move the text to {y:.0%}", text=k, set={"y": y}), i)
+        words = _content(head)
+        if len(words) >= 3 and words <= _content(sc.narration):
+            _scene(_check(checks, f"captions.echo.{i}", "captions", "warning",
+                          f"Scene {i + 1}: the headline only repeats the narration",
+                          f"“{head[:40]}” is said word for word.", "info",
+                          "A headline earns its place with what the voice doesn't say: a number, a twist, a question."), i)
+
+
 def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[float], full: bool) -> dict:
     """lengths: each scene's length in seconds as the editor's timeline has it (0 = not voiced yet)."""
     rules, checks = rules_for("short_preview"), []
@@ -300,15 +403,20 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
                 continue
             fs = profile.font_size * {"s": 0.6, "m": 0.85, "l": 1.2}.get(t.size, 0.85)  # captions.OVERLAY_SIZES
             half = len(t.text) * fs * CHAR_W / 2 / W
+            centre = {"x": 0.5, "y": round(min(max(t.y, sy[0] + 0.02), sy[1] - 0.02), 2)}
             if t.x - half < 0 or t.x + half > 1:
-                _scene(_check(checks, f"captions.clip.{i}.{k}", "captions", "warning", f"Scene {i + 1}: text “{t.text[:24]}” may run off the frame",
-                              "Estimated from its length and size.", "medium", "Shorten it, make it smaller or move it to the middle."), i)
+                item = _check(checks, f"captions.clip.{i}.{k}", "captions", "warning", f"Scene {i + 1}: text “{t.text[:24]}” may run off the frame",
+                              "Estimated from its length and size.", "medium", "Shorten it, make it smaller or move it to the middle.")
+                # centred is the most room it can get; only offered when that's enough
+                _scene(_fix(item, "Centre the text", text=k, set=centre) if half <= 0.5 - sx[0] else item, i)
             elif t.x - half < sx[0] or t.x + half > sx[1] or not sy[0] <= t.y <= sy[1]:
-                _scene(_check(checks, f"captions.safe.{i}.{k}", "captions", "warning", f"Scene {i + 1}: text “{t.text[:24]}” is outside the safe area",
-                              "The platform's buttons, title or top bar may cover it.", "low", "Move it toward the middle."), i)
+                _scene(_fix(_check(checks, f"captions.safe.{i}.{k}", "captions", "warning", f"Scene {i + 1}: text “{t.text[:24]}” is outside the safe area",
+                                   "The platform's buttons, title or top bar may cover it.", "low", "Move it toward the middle."),
+                            "Move it into the safe area", text=k, set=centre), i)
             if lengths[i] and t.at >= lengths[i]:
-                _scene(_check(checks, f"captions.late.{i}.{k}", "captions", "warning", f"Scene {i + 1}: text “{t.text[:24]}” starts after the scene ends",
-                              f"At {t.at:.1f} s, scene is {lengths[i]:.1f} s.", "medium", "Move it earlier; it won't show."), i)
+                _scene(_fix(_check(checks, f"captions.late.{i}.{k}", "captions", "warning", f"Scene {i + 1}: text “{t.text[:24]}” starts after the scene ends",
+                                   f"At {t.at:.1f} s, scene is {lengths[i]:.1f} s.", "medium", "Move it earlier; it won't show."),
+                            "Show it from the scene's start", text=k, set={"at": 0}), i)
         for k, b in enumerate(sc.broll):
             if lengths[i] and b.at >= lengths[i]:
                 _scene(_check(checks, f"media.broll_late.{i}.{k}", "technical", "warning", f"Scene {i + 1}: cutaway {k + 1} starts after the scene ends",
@@ -318,9 +426,10 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
                           "Long headlines wrap to several lines and are hard to read in a second.", "low", "Cut it to a few words."), i)
     cs = script.captions
     if not sy[0] <= cs.y <= sy[1]:
-        _check(checks, "captions.position", "captions", "warning", f"Captions sit at {cs.y:.0%} of the height",
-               "Outside the safe area: the platform's buttons or description may cover them.", "medium",
-               "Drag them up in the Captions panel.")
+        _fix(_check(checks, "captions.position", "captions", "warning", f"Captions sit at {cs.y:.0%} of the height",
+                    "Outside the safe area: the platform's buttons or description may cover them.", "medium",
+                    "Drag them up in the Captions panel."),
+             f"Move the captions to {DEFAULT_CAPTION_Y:.0%}", captions={"y": DEFAULT_CAPTION_Y})
     else:
         _check(checks, "captions.position", "captions", "pass", "Captions inside the safe area")
     per = cs.words or profile.words_per_caption
@@ -352,6 +461,8 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
         _check(checks, "audio.music", "audio", "pass", f"Music: {music or 'picked at render'}")
         music_level_checks(checks, ASSETS_DIR / "music" / Path(music).name if music else None, full)
 
+    retention_checks(checks, scenes, lengths, starts, cs, rules)
+
     # --- storytelling (advice, never a verdict) ---
     first = scenes[0].narration.strip()
     from .packaging import fluff_opening
@@ -365,6 +476,10 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
     if last and TERMINAL.search(last):
         _check(checks, "story.loop", "storytelling", "pass", "Ends on a complete sentence",
                "If you want a seamless loop, end mid-sentence so it runs into the opening.")
+    elif last:
+        _scene(_check(checks, "story.loop", "storytelling", "warning", "Ends mid-sentence",
+                      f"“…{last[-60:]}”", "low", "Fine if it runs into the opening as a loop on purpose; "
+                      "otherwise finish the thought.", starts[-1], starts[-1] + lengths[-1]), len(scenes) - 1)
 
     # --- publishing ---
     for field, label, sev in (("title", "Title", "medium"), ("caption", "Description", "low")):

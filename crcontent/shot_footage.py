@@ -136,7 +136,8 @@ def graphic(shot: Shot, scene_text: str, fmt: str, lang: str) -> Footage:
     pieces = [p.strip(" .") for p in re.split(r"[;\n]|, (?=[A-Z0-9])", shot.visual_description) if p.strip(" .")]
     items = pieces if 2 <= len(pieces) <= 5 and all(len(p) <= 40 for p in pieces) else []
     card = {"style": "list" if items else "headline", "title": title, "items": items}
-    key = hashlib.sha1(json.dumps([card, fmt, lang], ensure_ascii=False).encode()).hexdigest()[:16]
+    # "v2": cards drawn before the portrait fix are cached under the old key and get redrawn
+    key = hashlib.sha1(json.dumps([card, fmt, lang, "v2"], ensure_ascii=False).encode()).hexdigest()[:16]
     out = CARDS / f"{key}.png"
     if not out.exists():
         CARDS.mkdir(parents=True, exist_ok=True)

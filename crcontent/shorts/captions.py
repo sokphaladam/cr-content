@@ -109,9 +109,11 @@ def caption_events(words: list[Word], at: float, family: str, lang: str, n: int,
 
 
 def build(script: Script, tl: Timeline, voices: dict[int, list[Word]], style: str = "classic",
-          graphics: tuple[str, ...] | list[str] = (), size: float = 1.0, y: float | None = None) -> str:
+          graphics: tuple[str, ...] | list[str] = (), size: float = 1.0, y: float | None = None,
+          focus: list | None = None) -> str:
     """The whole text layer: hook, labels and captions for every beat; `style` is a key of STYLES, `size` scales the
-    captions and `y` places their middle (a share of the height; None: CAPTION_Y)."""
+    captions and `y` places their middle (a share of the height; None: CAPTION_Y). `focus`: each beat's subject point
+    (for the callout graphic)."""
     look = dict(STYLES.get(style, STYLES["classic"]))
     look["px"] = round(look["px"] * size)
     cap_y = CAPTION_Y if y is None else round(HEIGHT * y)
@@ -133,7 +135,7 @@ def build(script: Script, tl: Timeline, voices: dict[int, list[Word]], style: st
     if graphics:
         from . import graphics as gfx
 
-        events = gfx.events(graphics, tl) + events
+        events = gfx.events(graphics, tl, voices, script, focus, heavy, lang) + events
     styles = [
         f"Style: Hook,{heavy},{HOOK_PX},&H00141414&,&H00141414&,&H00FFFFFF&,&H00FFFFFF&,-1,0,0,0,100,100,0,0,1,0,0,"
         "8,0,0,0,1",

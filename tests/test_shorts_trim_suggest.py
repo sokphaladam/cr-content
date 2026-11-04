@@ -50,12 +50,12 @@ def _settings(monkeypatch):
 def test_suggestion_for_a_fast_sea_short(tmp_path):
     s = edit.suggest(_job(tmp_path, [2.0] * 8, "Octopus facts", "An octopus has three hearts! Wow!", "octopus"))
     assert s["look"] == "teal" and s["caption"] == "pop" and s["transition"] == "flash"
-    assert s["graphics"] == ["progress", "burst", "sweep"] and set(s["reasons"]) == {"look", "caption", "transition", "graphics"}
+    assert s["graphics"] == ["progress", "burst", "sweep", "facts", "teaser", "chapters", "callout"] and set(s["reasons"]) == {"look", "caption", "transition", "graphics"}
 
 
 def test_suggestion_for_a_calm_short_is_restrained(tmp_path):
     s = edit.suggest(_job(tmp_path, [5.0] * 5, "Why sloths sleep", "A sloth sleeps slowly in the trees.", "sloth"))
-    assert s["caption"] == "minimal" and s["transition"] == "cut" and s["graphics"] == ["progress"]
+    assert s["caption"] == "minimal" and s["transition"] == "cut" and s["graphics"] == ["progress", "facts", "teaser", "chapters"]
 
 
 def test_suggestion_only_names_options_the_panel_has(tmp_path):

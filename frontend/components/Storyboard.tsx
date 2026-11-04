@@ -41,6 +41,7 @@ import { USE_HINT, USE_LABEL, useMonetizableOnly, type MusicUse } from "@/lib/mu
 import { ArtStylePicker, artBlocker, useArtStatus } from "./ArtControls";
 import { PictureReview } from "./PictureReview";
 import { ShortsPreviewCheck } from "./PreviewInspector";
+import { applyFix } from "@/lib/qualityFix";
 import { MusicFinder } from "./MusicFinder";
 import { CaptionPanel } from "./LivePreview";
 import { SceneCard, type DraftScene } from "./SceneCard";
@@ -832,6 +833,7 @@ export function Storyboard({
             if (scene) onActive(scene.uid, c.start === undefined); // open it in the editor
             if (c.start !== undefined) timeline.seekTime(c.start);
           }}
+          onApply={(c) => setDraft((d) => applyFix(d, c, keptScenes))}
         />
       </div>
     ),

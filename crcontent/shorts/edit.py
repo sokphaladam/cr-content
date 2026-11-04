@@ -202,6 +202,9 @@ def suggest(job: Path) -> dict:
     if tl.total < 12:
         graphics = [g for g in graphics if g != "progress"] or ["brackets"]
         reasons["graphics"] += " (too short for a progress bar)"
+    # the attention traps carry the story at any pace: numbers pop, the hook opens a loop, the counter shows the finish
+    graphics += ["facts", "teaser"] + (["chapters"] if len(lengths) >= 4 else []) + (["callout"] if pace != "calm" else [])
+    reasons["graphics"] += "; fact pop-ups and an open-loop teaser keep them watching"
 
     summary = (f"{LOOKS[look]['label']} mood, {captions.STYLES[caption]['label']} captions, "
                f"{TRANSITIONS[transition].lower()}, {', '.join(graphics_names()[g].lower() for g in graphics)}")
@@ -254,7 +257,8 @@ def preview(job: Path, n: int, choice: dict, out: Path, log=print) -> Path:
         words = {v.scene: v.words for v in voices}
         (work / "text.ass").write_text(captions.build(ep.script, tl, words, choice.get("caption", "classic"),
                                                       choice.get("graphics", []), choice.get("caption_size", 1.0),
-                                                      choice.get("caption_y")), encoding="utf-8")
+                                                      choice.get("caption_y"),
+                                                      [e["chosen"].get("focus") for e in entries]), encoding="utf-8")
         profile = LANGS.get(ep.script.lang, LANGS["en"])
         for _, file in _fonts(ep.script.lang):
             _install_font(profile, work / "fonts", file)

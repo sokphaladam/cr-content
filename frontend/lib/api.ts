@@ -1151,6 +1151,9 @@ export interface QualityCheck {
   evidence?: string; // relative to the report's base
   detector: string;
   scene?: number; // preview (Shorts): the scene to open in the editor, 0-based
+  // preview (Shorts): a safe one-click change, applied as one undoable edit: caption-style fields, or fields of the
+  // scene's `text`-th non-empty overlay
+  fix?: { label: string; captions?: { y?: number; headline_y?: number }; text?: number; set?: { x?: number; y?: number; at?: number } };
   disposition?: Disposition; // render: what you decided about it (kept across re-checks by id)
   reopened?: boolean; // marked fixed, but a later check still found it
 }

@@ -22,16 +22,21 @@ function Header({ children }: { children: React.ReactNode }) {
 
 /** Preview Inspector for a Shorts draft: quick checks follow your edits; the full check also probes every media file.
  *  A full report isn't replaced by quick ones: it's marked outdated when the project changes. */
-export function ShortsPreviewCheck({ script, lang, music, lengths, total, onIssue }: {
+const DISMISS = [{ value: "dismissed" as const, label: "Dismiss" }];
+
+export function ShortsPreviewCheck({ script, lang, music, lengths, total, onIssue, onApply }: {
   script: VideoScript;
   lang: Lang;
   music: string;
   lengths: number[];
   total: number;
   onIssue: (c: QualityCheck) => void;
+  onApply?: (c: QualityCheck) => void;
 }) {
   const toast = useToast();
   const [report, setReport] = useState<QualityReport | null>(null);
+  // hidden for this session only: the project and the evidence are untouched (ids are stable across re-runs)
+  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const [madeFrom, setMadeFrom] = useState("");
   const [busy, setBusy] = useState(false);
   const key = JSON.stringify({ script, lang, music, lengths });
@@ -68,7 +73,26 @@ export function ShortsPreviewCheck({ script, lang, music, lengths, total, onIssu
         {fullShown && <Button size="sm" variant="ghost" onClick={() => run(false, key)}>Back to quick checks</Button>}
       </div>
       {report ? (
-        <QualityReportView key={report.created} report={{ ...report, outdated: madeFrom !== key }} total={total} onSelect={onIssue} />
+        <QualityReportView
+          key={report.created}
+          report={{
+            ...report,
+            outdated: madeFrom !== key,
+            checks: report.checks.map((c) => (dismissed.has(c.id) ? { ...c, disposition: "dismissed" } : c)),
+          }}
+          total={total}
+          onSelect={onIssue}
+          marks={DISMISS}
+          onReview={(c, d) =>
+            setDismissed((s) => {
+              const next = new Set(s);
+              if (d === "dismissed") next.add(c.id);
+              else next.delete(c.id);
+              return next;
+            })
+          }
+          onApply={onApply}
+        />
       ) : (
         <p className="m-0 text-sm text-ink-soft">Checking…</p>
       )}

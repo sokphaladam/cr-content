@@ -97,7 +97,7 @@ def draw(card: dict, out: Path, size: tuple[int, int], lang: str = "en", under: 
     """The card {style, title, items} as a png at `size`. `under`: footage to blur into the backdrop; `pictures`: one
     per versus item."""
     W, H = size
-    k = H / 1080
+    k = min(H, W) / 1080   # a 9:16 frame is 1080 wide: scaling by its 1920 height overflows into the captions
     style = card.get("style") if card.get("style") in STYLES else "headline"
     title = " ".join(str(card.get("title") or "").split())
     items = [" ".join(str(i).split()) for i in card.get("items") or [] if str(i).strip()]
@@ -181,7 +181,8 @@ def draw(card: dict, out: Path, size: tuple[int, int], lang: str = "en", under: 
             font = _fit(d, text, lang, round(120 * k), True, W * 0.8)
         step = font.size * 1.12
         sub = items[0] if title and items else ""
-        y = H / 2 - step * len(lines) / 2 - (30 * k if sub else 0)
+        # portrait: above the middle, clear of the captions in the lower third
+        y = H * (0.42 if H > W else 0.5) - step * len(lines) / 2 - (30 * k if sub else 0)
         bar = 140 * k
         if text:
             d.rectangle((W / 2 - bar / 2, y - 46 * k, W / 2 + bar / 2, y - 36 * k), fill=ACCENT)

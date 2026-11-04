@@ -46,7 +46,7 @@ def documented(a: Asset) -> bool:
 def _media_asset(rel: str, n: int) -> Asset:
     name = Path(rel).name
     kind = "image" if Path(rel).suffix.lower() in (".jpg", ".jpeg", ".png", ".webp") else "footage"
-    m = re.match(r"(pexels|pixabay)-(?:photo|video)-(\d+)", name)
+    m = re.match(r"(pexels|pixabay)-(?:photo-|video-)?(\d+)", name)  # visuals.py saves videos as pixabay-<id>.mp4
     if m:
         site, licence = STOCK[m[1]]
         return Asset(id=f"media:{rel}", name=f"Scene {n} {kind}: {site} #{m[2]}", type=kind, source=site, license=licence,

@@ -170,10 +170,10 @@ def test_rights_flags_unknown_files_and_a_non_commercial_track(lib, monkeypatch)
     (lib / "assets" / "music" / "song.mp3").write_bytes(b"x")
     (lib / "assets" / "music" / "song.json").write_text(json.dumps({"license": "https://creativecommons.org/licenses/by-nc/3.0/"}))
     (lib / "cache").mkdir()
-    for rel in ("cache/mystery.mp4", "cache/pexels-video-123.mp4", "uploads/mine.mp4"):
+    for rel in ("cache/mystery.mp4", "cache/pixabay-6681.mp4", "uploads/mine.mp4"):
         (lib / rel).write_bytes(b"x")
     scenes = [Scene(narration="x", visual_query="q", media=m)
-              for m in ("cache/mystery.mp4", "cache/pexels-video-123.mp4", "uploads/mine.mp4")]
+              for m in ("cache/mystery.mp4", "cache/pixabay-6681.mp4", "uploads/mine.mp4")]
     rep = qp.inspect_short(script(*scenes), "en", "song.mp3", [2, 2, 2], False)
     unknown = by(rep, "rights.media")
     assert [c["scene"] for c in unknown] == [0] and "mystery.mp4" in unknown[0]["title"]
@@ -223,3 +223,85 @@ def test_song_report_outdated_after_lyric_edit(song, monkeypatch):
     assert qp.get_preview_song(song.name)["report"]["outdated"] is False
     write_lrc(song, [(1, "a line"), (4, "changed")])
     assert qp.get_preview_song(song.name)["report"]["outdated"] is True
+
+
+# ---------- retention checks (deterministic, no AI key) ----------
+
+def test_strong_short_passes_the_retention_checks(lib):
+    s = script(Scene(narration="This shark is older than America.", visual_query="q", on_screen_text="400 YEARS OLD",
+                     broll=[BRoll(media="", at=1.5)]),
+               Scene(narration="It grows one centimeter every year in freezing water.", visual_query="q"),
+               Scene(narration="So the one you see today was born before the Mayflower sailed.", visual_query="q"))
+    rep = qp.inspect_short(s, "en", "none", [3.0, 4.0, 4.0], False)
+    assert [c["status"] for c in by(rep, "pacing.opening")] == ["pass"]
+    assert [c["status"] for c in by(rep, "story.repeat")] == ["pass"]
+    assert not by(rep, "captions.echo") and not by(rep, "captions.collide") and not by(rep, "visual.stills")
+    assert by(rep, "story.loop")[0]["status"] == "pass"
+
+
+def test_long_first_shot_and_mid_sentence_ending(lib):
+    s = script(Scene(narration="Deep in the Arctic there is an animal.", visual_query="q"),
+               Scene(narration="And it is still out there", visual_query="q"))
+    rep = qp.inspect_short(s, "en", "none", [6.0, 3.0], False)
+    (opening,) = by(rep, "pacing.opening")
+    assert opening["status"] == "warning" and opening["scene"] == 0 and opening["end"] == 6.0
+    (end,) = by(rep, "story.loop")
+    assert end["status"] == "warning" and end["scene"] == 1 and end["start"] == 6.0
+
+
+def test_unvoiced_opening_is_not_checked(lib):
+    assert by(qp.inspect_short(script(), "en", "none", [0], False), "pacing.opening")[0]["status"] == "not_checked"
+
+
+def test_a_fact_said_twice(lib):
+    s = script(Scene(narration="Greenland sharks can live for four hundred years.", visual_query="q"),
+               Scene(narration="They swim slowly.", visual_query="q"),
+               Scene(narration="A Greenland shark can live four hundred years!", visual_query="q"))
+    (rep,) = by(qp.inspect_short(s, "en", "none", [3, 3, 3], False), "story.repeat.")
+    assert rep["scene"] == 2 and "scene 1" in rep["title"] and rep["start"] == 6
+
+
+def test_a_run_of_stills_but_not_a_single_still(lib):
+    stills = [Scene(narration="x", visual_query="q", media=f"uploads/{k}.jpg") for k in range(3)]
+    assert len(by(qp.inspect_short(script(*stills), "en", "none", [3, 3, 3], False), "visual.stills")) == 1
+    one = [stills[0], Scene(narration="x", visual_query="q", media="uploads/v.mp4"), stills[1]]
+    assert not by(qp.inspect_short(script(*one), "en", "none", [3, 3, 3], False), "visual.stills")
+
+
+def test_headline_collides_with_raised_captions_and_echoes_the_voice(lib):
+    s = script(Scene(narration="Octopuses have three hearts and blue blood.", visual_query="q",
+                     on_screen_text="Three hearts, blue blood", texts=[TextOverlay(text="WOW", y=0.2)]))
+    s.captions.y = 0.2
+    rep = qp.inspect_short(s, "en", "none", [3], False)
+    assert {c["detector"] for c in by(rep, "captions.collide")} == {"captions.collide.0", "captions.collide.0.0"}
+    assert by(rep, "captions.echo")[0]["severity"] == "info"
+
+
+def _apply(s, check):
+    """What the editor does with a finding's fix (Storyboard's onApply)."""
+    fix = check["fix"]
+    if "captions" in fix:
+        s.captions = s.captions.model_copy(update=fix["captions"])
+    if "text" in fix:
+        t = s.scenes[check["scene"]].texts[fix["text"]]
+        s.scenes[check["scene"]].texts[fix["text"]] = t.model_copy(update=fix["set"])
+
+
+@pytest.mark.parametrize("prefix", ["captions.collide", "captions.position", "captions.safe", "captions.clip", "captions.late"])
+def test_each_fix_clears_its_finding(lib, prefix):
+    s = script(Scene(narration="Octopuses have three hearts.", visual_query="q", on_screen_text="3 HEARTS",
+                     texts=[TextOverlay(text="WOW", y=0.2), TextOverlay(text="LOW", y=0.95), TextOverlay(text="EDGE", x=0.97, y=0.5),
+                            TextOverlay(text="LATE", at=9)]))
+    s.captions.y = {"captions.position": 0.9}.get(prefix, 0.2)
+    found = [c for c in by(qp.inspect_short(s, "en", "none", [3], False), prefix) if c["status"] == "warning"]
+    assert found and all(c["fix"]["label"] for c in found)
+    for c in found:
+        _apply(s, c)
+    assert not [c for c in by(qp.inspect_short(s, "en", "none", [3], False), prefix) if c["status"] == "warning"]
+
+
+def test_moved_headline_gets_moved_back_instead(lib):
+    s = script(Scene(narration="Octopuses have three hearts.", visual_query="q", on_screen_text="3 HEARTS"))
+    s.captions.headline_y = 0.58
+    (c,) = by(qp.inspect_short(s, "en", "none", [3], False), "captions.collide")
+    assert c["fix"]["captions"] == {"headline_y": 0.13}

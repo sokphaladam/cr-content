@@ -122,7 +122,8 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
         log(f"      ! no music: {folder(cfg['music']['dir'])} has no tracks (mp3, wav, m4a, flac)")
 
     (work / "text.ass").write_text(captions.build(script, tl, voices, choice['caption'], choice['graphics'],
-                                                  choice["caption_size"], choice["caption_y"]), encoding="utf-8")
+                                                  choice["caption_size"], choice["caption_y"],
+                                                  [e["chosen"].get("focus") for e in entries]), encoding="utf-8")
     profile = LANGS.get(script.lang, LANGS["en"])
     for _, file in _fonts(script.lang):
         _install_font(profile, work / "fonts", file)
