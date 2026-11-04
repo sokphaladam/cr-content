@@ -26,7 +26,7 @@ router = APIRouter()
 
 # Per-workflow thresholds. Size comes from the video's own settings (aspect), not from here.
 VISUAL = {"sample_fps": 2, "blur": 10.0, "blur_sec": 1.5, "border": 0.94, "border_share": 0.6, "cast": 18,
-          "loud_jump_lu": 12, "imbalance_db": 3.0, "mono_loss_db": 6.0}
+          "loud_jump_lu": 12, "quiet_lufs": -30, "imbalance_db": 3.0, "mono_loss_db": 6.0}
 PROFILES = {
     "short": {"label": "Shorts", "black_sec": 0.5, "freeze_sec": 2.0, "silence_sec": 1.5, "silence_db": -50,
               "peak_dbtp": -1.0, "av_drift_warn": 0.3, "av_drift_fail": 2.0, **VISUAL,
@@ -612,8 +612,19 @@ def audio_checks(checks: list, found: dict, rules: dict, issue) -> None:
     for t, v in m:
         secs.setdefault(int(t), []).append(v)
     level = {k: sum(v) / len(v) for k, v in secs.items() if len(v) >= 5}
-    jumps = [(k, level[k] - level[k - 1]) for k in sorted(level) if k - 1 in level
-             and abs(level[k] - level[k - 1]) > rules["loud_jump_lu"] and min(level[k], level[k - 1]) > -60]
+    # A drop into quiet is a pause or the ending fading out, which every video has: not counted. Coming out of a pause,
+    # the sound is compared with how loud it was before the pause, so the voice resuming isn't a jump but an effect
+    # or the music bursting in is (also after a quiet opening, where there's nothing louder to compare with).
+    jumps, before = [], None  # before: the last second that wasn't quiet
+    for k in sorted(level):
+        if k - 1 in level and level[k - 1] > -60:
+            quiet_then = level[k - 1] < rules["quiet_lufs"]
+            ref = before if quiet_then and before is not None else level[k - 1]
+            d = level[k] - ref
+            if abs(d) > rules["loud_jump_lu"] and not (d < 0 and level[k] < rules["quiet_lufs"]):
+                jumps.append((k, d))
+        if level[k] >= rules["quiet_lufs"]:
+            before = level[k]
     if not level:
         _check(checks, "audio.jumps", "audio", "not_checked", "Loudness changes", "No loudness readings.")
     for k, d in jumps[:5]:
@@ -621,7 +632,7 @@ def audio_checks(checks: list, found: dict, rules: dict, issue) -> None:
                "Loudness changes sharply from one second to the next.", "low",
                "Listen here: fine for a drop or a punch-in; otherwise smooth the transition.", k - 1, k + 1)
     if level and not jumps:
-        _check(checks, "audio.jumps", "audio", "pass", "No sudden loudness jumps", f"Threshold: {rules['loud_jump_lu']} LU within a second")
+        _check(checks, "audio.jumps", "audio", "pass", "No sudden loudness jumps", f"Threshold: {rules['loud_jump_lu']} LU within a second (drops into a pause and the ending aren't counted)")
     rms = found["rms"]
     if len(rms) >= 2:
         left, right = rms.get(1, -120.0), rms.get(2, -120.0)

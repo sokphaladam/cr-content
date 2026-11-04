@@ -103,10 +103,10 @@ def _cover_subject(job: Path, source: Path, at: float, image: Path | None) -> tu
     keep off the face; (None, None) when it can't be told (no torch / depth model: the headline takes its usual
     place). The picture is cropped the way the cover is (render.thumbnail) at half size, its depth map (fx) split
     into near and far (Otsu), and the head is the top of what's near: the subject's top, as wide as it is there."""
+    if not fx.available():  # before numpy: the desktop app has it only with the AI add-on
+        return None, None
     import numpy as np
 
-    if not fx.available():
-        return None, None
     W, H = job_size(job)
     try:
         src = image or source
@@ -2153,10 +2153,12 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
     clips, hits, scene_at, cut_sounds = [], [], 0.0, []
     for i, (scene, (mp3, words, length)) in enumerate(zip(script.scenes, timed)):
         stretch = [length / b.basis if b.basis > 0 else 1.0 for b in scene.broll]  # planned on an estimate
-        broll = [(path, b.at * f, b.duration * f, b.fade) for b, f in zip(scene.broll, stretch)
+        broll = [(path, b.at * f, b.duration * f, b.fade, b.speed) for b, f in zip(scene.broll, stretch)
                  if (path := _existing(b.media)) and b.duration > 0 and b.at * f < length]
         cut_sounds += [(sfx.sound(b.sound), scene_at + b.at * f, 0.5) for b, f in zip(scene.broll, stretch)
                        if b.sound in sfx.SOUNDS and _existing(b.media) and b.at * f < length]
+        if scene.sound in sfx.SOUNDS:  # the plan's sound on the cut into the scene
+            cut_sounds.append((sfx.sound(scene.sound), scene_at, 0.5))
         clip = work / f"scene_{i:02d}.mp4"
         still = picked[i] is not None and picked[i].suffix.lower() in IMAGE_EXTS
         # pacing: a hit on the punchy words (and always one in the hook, within its first 2 s), and cuts to new
@@ -2181,7 +2183,8 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
                            beats=[0.0] if "flash" in scene.effects and i > 0 else [])
         else:
             render_scene(picked[i], mp3, length, clip, start=max(scene.media_start, 0.0), layout=scene.layout,
-                         footage2=second.get(i), broll=broll, bright=i == 0, impacts=impacts, cuts=cuts)
+                         footage2=second.get(i), broll=broll, bright=i == 0, impacts=impacts, cuts=cuts,
+                         speed=scene.speed)
         clips.append(clip)
     if hits:
         log(f"      {len(hits)} hits, {len(pacing.sound_times(hits))} with a sound")

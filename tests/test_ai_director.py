@@ -178,3 +178,11 @@ def test_script_video_directs_the_short_or_says_why_not(client, monkeypatch):
     monkeypatch.setattr(script_mod, "make_client", lambda: FakeClient("not json"))
     body = client.post("/api/script-video", json={"text": pasted, "format": "short"}).json()
     assert body["planned_by"] == "script" and "couldn't plan" in body["director_note"]
+
+
+def test_a_gemini_rate_limit_in_a_job_reads_as_one(capsys):
+    from crcontent import llm, web
+
+    job = {}
+    web._fail(job, llm.RateLimitError("You exceeded your current quota.\nPlease retry in 19.48s.", 429))
+    assert job["status"] == "error" and job["error"].startswith("Gemini rate limit")

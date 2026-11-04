@@ -110,6 +110,8 @@ export interface Scene {
   art_seed?: number;
   motion?: Motion | "";
   effects?: Effect[];
+  sound?: string; // a sound effect as the scene starts (from a Director Plan)
+  speed?: number; // playback speed of the scene's clip (0.5 = slow motion, from a Director Plan)
 }
 
 /** Looks the local AI scene art can draw in (crcontent/imagegen.py STYLES). */
@@ -170,6 +172,7 @@ export interface BRoll {
   duration: number;
   fade?: number; // seconds it dissolves in over (0 = hard cut)
   sound?: string; // a sound effect on the cut: whoosh, impact or thunder
+  speed?: number; // playback speed of a video clip (0.5 = slow motion, from a Director Plan)
   basis?: number; // >0: timed on the Director Plan's estimate; the render stretches it to the real voice
 }
 

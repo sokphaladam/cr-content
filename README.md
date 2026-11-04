@@ -62,7 +62,7 @@ so the installed app uses even lyric spacing and bpm-based cuts.
 Same steps, with macOS paths:
 
 ```bash
-brew install ffmpeg python
+brew install ffmpeg python    # and Node.js 20.9+ (Next.js refuses older versions)
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt -r requirements-build.txt
 npm install && (cd frontend && npm install)

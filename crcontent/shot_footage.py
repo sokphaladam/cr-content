@@ -201,7 +201,8 @@ def plan_warnings(plan: DirectorPlan) -> list[str]:
             out.append(f"Three still photos in a row (up to {s.id}): the video feels like a slideshow there.")
     found = [s for s in plan.shots if s.footage]
     if plan.shots and len(found) < len(plan.shots):
-        out.append(f"{len(plan.shots) - len(found)} of {len(plan.shots)} shots have no footage yet.")
+        first = next(s.id for s in plan.shots if not s.footage)
+        out.append(f"{len(plan.shots) - len(found)} of {len(plan.shots)} shots have no footage yet (first: {first}).")
     return out
 
 

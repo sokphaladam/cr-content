@@ -1,5 +1,7 @@
 """Milestone 4: a Director Plan's shots go into the existing Short and long-video renderers, keeping user choices."""
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 
@@ -38,7 +40,8 @@ def test_short_scenes_cut_main_and_cutaways(plan, monkeypatch, tmp_path):
     first, second = out
     assert first["media"] == "a.mp4" and first["motion"] == ""  # a project path; a video needs no camera move
     # after shot 1 + shot 2 it replaces; timed on the plan's 4.5 s estimate (the render stretches it to the voice)
-    assert first["broll"] == [{"media": "b.jpg", "at": 2.5, "duration": 2.5, "fade": 0, "sound": "", "basis": 4.5}]
+    assert first["broll"] == [{"media": "b.jpg", "at": 2.5, "duration": 2.5, "fade": 0, "sound": "", "speed": 1.0,
+                              "basis": 4.5}]
     assert second["media"] == "c.jpg" and second["motion"] == "pan_left" and second["broll"] == []
     assert notes[0] == "Put the plan's footage in 2 scenes."
     again, _ = plan_render.short_scenes(plan, out)  # applying twice is the same (the plan's files are its own)
@@ -75,7 +78,7 @@ def test_long_scene_clip_cuts_by_weight(monkeypatch, tmp_path):
     chosen = {"source": "pexels", "file": str(tmp_path / "a.mp4"),
               "parts": [str(tmp_path / n) for n in ("a.mp4", "b.mp4", "c.mp4")], "weights": [1, 1, 2]}
     video.scene_clip(chosen, 8.0, tmp_path / "o.mp4", (1920, 1080))
-    (_, at1, d1), (_, at2, d2) = calls[0]["broll"]
+    (_, at1, d1, _, _), (_, at2, d2, _, _) = calls[0]["broll"]
     assert (at1, at2) == (2.0, 4.0) and round(d1, 2) == 2.05 and d2 == 4.5
     video.scene_clip({**chosen, "weights": None}, 9.0, tmp_path / "o.mp4", (1920, 1080))  # a montage: even cuts
     assert [b[1] for b in calls[1]["broll"]] == [3.0, 6.0]
@@ -196,3 +199,83 @@ def test_a_drawn_scene_also_cuts_to_its_planned_footage(plan, tmp_path):
     from crcontent.longform.parse import Script
     text = extras.credits(Script(title="T", slug="t", lang="en", scenes=[]), out, [])
     assert "graphic card (made by the app)" in text and "Scene 01: photo by A on Wikimedia Commons" in text
+
+
+def test_scene_openers_and_long_parts_get_planned_sounds(plan, monkeypatch, tmp_path):
+    from crcontent.longform import video
+    from crcontent.longform.timing import Slot, Timeline
+
+    monkeypatch.setattr(plan_render, "ROOT", tmp_path)
+    plan.shots[0] = plan.shots[0].model_copy(update={"sound_design": ["thunder rolls"]})
+    plan.shots[2] = plan.shots[2].model_copy(update={"transition_out": "whip"})  # into scene 2's first shot
+    out, _ = plan_render.short_scenes(plan, [{"narration": n, "media": ""} for n in NARR])
+    assert out[0]["sound"] == "thunder" and out[1]["sound"] == "whoosh"
+
+    entries = [{"scene": i + 1, "kind": "species", "chosen": {"source": "pixabay", "file": "x"}} for i in range(2)]
+    long, _ = plan_render.long_entries(plan, entries, NARR)
+    assert long[0]["chosen"]["sounds"] == ["thunder", ""] and long[1]["chosen"]["sounds"] == ["whoosh"]
+    monkeypatch.setattr(video.sfx, "sound", lambda name: Path(name))
+    tl = Timeline([Slot(1, 0.0, 10.0, 10.0, "", 0), Slot(2, 10.0, 5.0, 5.0, "", 0)], [], 15.0)
+    # scene 1's parts weigh 2.5 and 2.0 over 10 s + the 1 s dissolve tail: the second cuts in at 6.1 s (no sound)
+    assert video.plan_sounds(long, tl, 1.0) == [(Path("thunder"), 0.0, 0.5), (Path("whoosh"), 10.0, 0.5)]
+
+
+@pytest.mark.parametrize("note, sound", [("soft rain on leaves", "rain"), ("rainfall", "rain"), ("a train passes", ""),
+                                         ("gusty wind", "wind"), ("light from the window", ""),
+                                         ("a river runs past", "water"), ("birdsong at dawn", "birds"),
+                                         ("thunder and rain", "thunder")])  # a hit on the cut wins over ambience
+def test_ambient_sound_notes(plan, note, sound):
+    assert plan_render.cut_sound(None, plan.shots[0].model_copy(update={"sound_design": [note]})) == sound
+
+
+def test_ambient_beds_are_made_quiet_and_short(tmp_path, monkeypatch):
+    import wave
+
+    import numpy as np
+
+    from crcontent import sfx
+
+    monkeypatch.setattr(sfx, "SFX_DIR", tmp_path)
+    for name in sfx.AMBIENT:
+        with wave.open(str(sfx.sound(name))) as w:
+            x = np.frombuffer(w.readframes(w.getnframes()), "<i2")
+            assert w.getnframes() == int(sfx.RATE * sfx.AMBIENT_SEC)
+        assert abs(x).max() <= sfx.AMBIENT_LEVEL * 32767 + 1 and abs(x[-50:]).max() < 200  # faded out at the end
+
+
+def test_bundled_sounds_are_used_without_numpy(tmp_path, monkeypatch):
+    from crcontent import sfx
+
+    monkeypatch.setattr(sfx, "SFX_DIR", tmp_path / "cache")
+    monkeypatch.setattr(sfx, "BUNDLED_DIR", tmp_path / "bundle")
+    sfx.make_all(tmp_path / "bundle")
+    monkeypatch.setattr(sfx, "SOUNDS", {n: None for n in sfx.SOUNDS})  # making one now would fail
+    assert all(sfx.sound(n) == tmp_path / "bundle" / f"{n}-v{sfx.VERSION}.wav" for n in sfx.SOUNDS)
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_slow_motion_only_from_a_clip_filmed_for_it(plan, monkeypatch, tmp_path):
+    from crcontent.longform import video
+
+    monkeypatch.setattr(plan_render, "ROOT", tmp_path)
+    fast, normal = tmp_path / "fast.mp4", tmp_path / "normal.mp4"
+    for path, fps in ((fast, 60), (normal, 25)):
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=s=320x240:r={fps}:d=1",
+                        str(path)], check=True)
+    slow = Camera(movement="slow_motion")
+    plan.shots[0] = plan.shots[0].model_copy(update={"camera": slow, "footage": Footage(source="own", kind="video",
+                                                                                       file=str(fast))})
+    plan.shots[3] = plan.shots[3].model_copy(update={"camera": slow, "footage": Footage(source="own", kind="video",
+                                                                                       file=str(normal))})
+    out, notes = plan_render.short_scenes(plan, [{"narration": n, "media": ""} for n in NARR])
+    assert out[0]["speed"] == plan_render.SLOW and out[0]["broll"][0]["speed"] == 1.0  # the photo cutaway: as is
+    assert out[1]["speed"] == 1.0 and any("shot-002-1" in n and "25 fps" in n for n in notes)
+    entries = [{"scene": i + 1, "kind": "species", "chosen": {"source": "pixabay", "file": "x"}} for i in range(2)]
+    long, _ = plan_render.long_entries(plan, entries, NARR)
+    assert long[0]["chosen"]["speeds"] == [plan_render.SLOW, 1.0]
+
+    calls = []
+    monkeypatch.setattr(video, "render_scene", lambda *a, **k: calls.append(k))
+    monkeypatch.setattr(video, "duration", lambda p: 10.0)
+    video.scene_clip(long[0]["chosen"], 4.0, tmp_path / "o.mp4", (1920, 1080))
+    assert calls[0]["speed"] == plan_render.SLOW and calls[0]["broll"][0][4] == 1.0

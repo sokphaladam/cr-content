@@ -199,11 +199,14 @@ def render_scene(footage: Path | None, voice: Path | None, length: float, out: P
     # cutaways: each one timed to start `at` seconds in and laid over the frame while it lasts
     current = "base"
     for k, (clip, at, seconds, *more) in enumerate(broll):
-        fade = min(float(more[0]), seconds / 2) if more and more[0] else 0.0  # (clip, at, seconds[, dissolve seconds])
+        # (clip, at, seconds[, dissolve seconds[, speed]])
+        fade = min(float(more[0]), seconds / 2) if more and more[0] else 0.0
+        pace = float(more[1]) if len(more) > 1 and more[1] else 1.0
+        slow = f"setpts=PTS/{pace:.4f}," if abs(pace - 1.0) > 0.01 and clip.suffix.lower() not in IMAGE_EXTS else ""
         dissolve = f",format=yuva420p,fade=t=in:st={at:.3f}:d={fade:.3f}:alpha=1" if fade > 0 else ""
         n_inputs = sum(1 for a in inputs if a == "-i")
         inputs += _media_input(clip, seconds, 0.0, size)
-        vf += (f";[{n_inputs}:v]{_cover(W, H)},trim=duration={seconds:.3f},setpts=PTS-STARTPTS+{at:.3f}/TB,{grade}{dissolve}[b{k}];"
+        vf += (f";[{n_inputs}:v]{slow}{_cover(W, H)},trim=duration={seconds:.3f},setpts=PTS-STARTPTS+{at:.3f}/TB,{grade}{dissolve}[b{k}];"
                f"[{current}][b{k}]overlay=enable='between(t,{at:.3f},{at + seconds:.3f})':eof_action=pass[o{k}]")
         current = f"o{k}"
     vf += f";[{current}]{_pace_filter(W, H, impacts, cuts)}[v]"

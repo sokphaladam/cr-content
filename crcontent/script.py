@@ -18,7 +18,8 @@ class BRoll(BaseModel):
     at: float = 0
     duration: float = 2
     fade: float = 0     # seconds it dissolves in over (0 = a hard cut)
-    sound: str = ""     # a sound effect on the cut (sfx.SOUNDS: whoosh, impact, thunder)
+    speed: float = 1    # playback speed of a video clip (0.5 = slow motion, from a Director Plan)
+    sound: str = ""     # a sound effect on the cut (sfx.SOUNDS: whoosh, impact, thunder, or rain/wind/water/birds ambience)
     # >0: `at` and `duration` were planned for a scene this many seconds long (a Director Plan's estimate); the render
     # stretches them to the recorded voice's real length. Moving the cutaway by hand sets it back to 0.
     basis: float = 0
@@ -67,6 +68,8 @@ class Scene(BaseModel):
     art_seed: int = 0
     motion: str = ""
     effects: list[str] = []
+    sound: str = ""  # a sound effect as the scene starts (sfx.SOUNDS), from a Director Plan's shot
+    speed: float = 1  # playback speed of the scene's video clip (0.5 = slow motion, from a Director Plan)
 
 
 class VideoScript(BaseModel):

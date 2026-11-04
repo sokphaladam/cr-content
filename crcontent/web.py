@@ -2260,8 +2260,10 @@ def _fail(job: dict, e: Exception) -> None:
             job.update(status="error", error=STOPPED, cancelled=True)
         return
     traceback.print_exc()
+    # a Gemini error as the API answers say it (its own text's last line can be just "Please retry in 19.5s.")
+    msg = _llm_error(e).detail if isinstance(e, llm.APIError) else str(e).strip().splitlines()[-1] if str(e).strip() else repr(e)
     with jobs_lock:
-        job.update(status="error", error=str(e).strip().splitlines()[-1] if str(e).strip() else repr(e))
+        job.update(status="error", error=msg)
 
 
 def _run_import(job_id: str, audio: Path, title: str, lyrics: str, lang: str, aspect: str) -> None:

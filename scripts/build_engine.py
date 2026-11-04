@@ -40,6 +40,10 @@ def main() -> int:
               "  .venv/bin/pip (Windows: .venv\\Scripts\\pip) install -r requirements.txt -r requirements-build.txt", file=sys.stderr)
         return 1
     build = ROOT / "build"
+    # the sound effects, made now: the engine has no numpy to make them with (crcontent/sfx.py BUNDLED_DIR)
+    shutil.rmtree(build / "sfx", ignore_errors=True)
+    subprocess.run([str(VENV_PYTHON), "-c", f"from pathlib import Path; from crcontent import sfx; "
+                    f"sfx.make_all(Path({str(build / 'sfx')!r}))"], cwd=ROOT, check=True)
     cmd = [
         str(VENV_PYTHON), "-m", "PyInstaller", str(ROOT / "app.py"),
         "--name", "engine", "--onedir", "--noconfirm", "--clean",
@@ -47,6 +51,7 @@ def main() -> int:
         "--workpath", str(build / "pyinstaller"),
         "--specpath", str(build),
         "--add-data", f"{ROOT / 'web'}{os.pathsep}web",
+        "--add-data", f"{build / 'sfx'}{os.pathsep}sfx",
         "--add-data", f"{ROOT / '.env.example'}{os.pathsep}.",  # app.py copies it to the data folder on first run
         "--collect-submodules", "crcontent",
         "--collect-submodules", "uvicorn",

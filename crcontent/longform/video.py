@@ -15,6 +15,7 @@ from pathlib import Path
 
 from ..captions import _esc, _ts
 from ..config import LANGS, SYSTEM_FONT_DIRS
+from .. import sfx
 from ..render import duration, finalize, nvenc_available, render_scene, run
 from ..visuals import IMAGE_EXTS
 from ..styles import font_path
@@ -228,6 +229,19 @@ def aspect(path: Path) -> float:
         return 16 / 9
 
 
+def plan_sounds(entries: list[dict], tl: Timeline, fade: float) -> list[tuple[Path, float, float]]:
+    """A Director Plan's sound effects (chosen["sounds"], one per part) at the second each part cuts in, timed the way
+    scene_clip cuts the parts."""
+    out, last = [], len(tl.slots) - 1
+    for k, (entry, slot) in enumerate(zip(entries, tl.slots)):
+        chosen = entry["chosen"]
+        weights = chosen.get("weights") or [1] * len(chosen.get("parts") or [])
+        unit = (slot.length + (fade if k < last else 0.0)) / (sum(weights) or 1)
+        out += [(sfx.sound(name), slot.start + unit * sum(weights[:i]), 0.5)
+                for i, name in enumerate(chosen.get("sounds") or []) if name in sfx.SOUNDS]
+    return out
+
+
 def scene_clip(chosen: dict, length: float, out: Path, size: tuple[int, int], look: str = "") -> None:
     """A scene's picture: its clip or photo cropped to the frame, or, for an old 4:3 film, a portrait or a painting
     that cropping would cut the head or the frame off, the whole of it over a blurred copy; a montage cuts through
@@ -243,9 +257,10 @@ def scene_clip(chosen: dict, length: float, out: Path, size: tuple[int, int], lo
         weights = chosen.get("weights") or [1] * (len(parts) + 1)
         unit = length / sum(weights)
         starts = [unit * sum(weights[:k + 1]) for k in range(len(parts))]
-        broll = [(p, at, (starts[k + 1] - at + 0.05) if k < len(parts) - 1 else length - at + 0.5)
+        speeds = chosen.get("speeds") or [1.0] * (len(parts) + 1)  # a Director Plan's slow-motion shots
+        broll = [(p, at, (starts[k + 1] - at + 0.05) if k < len(parts) - 1 else length - at + 0.5, 0, speeds[k + 1])
                  for k, (p, at) in enumerate(zip(parts, starts))]
-        render_scene(footage, None, length, out, start=start, size=size, look=look, broll=broll)
+        render_scene(footage, None, length, out, start=start, size=size, look=look, broll=broll, speed=speeds[0])
         return
     narrow = chosen["source"] not in ("own", "card") and aspect(footage) < (1.5 if footage.suffix.lower() not in
                                                                            IMAGE_EXTS else 1.2)
@@ -373,7 +388,11 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
     log(f"      encoding ({'NVENC' if enc == 'nvenc' else 'x264'}), -14 LUFS"
         + (", music ducked under the voice" if bed else "") + (", captions burned in" if burn else ""))
     final = job / "video.mp4"
-    kw = dict(music=bed, music_volume=float(cfg["music"]["volume"]), fade_out=1.0, progress=progress_reporter(log))
+    effects = plan_sounds(entries, tl, fade)
+    if effects:
+        log(f"      {len(effects)} planned sound effects")
+    kw = dict(music=bed, music_volume=float(cfg["music"]["volume"]), fade_out=1.0, progress=progress_reporter(log),
+              effects=effects)
     try:
         finalize(work, "picture.mkv", "text.ass", final, encoder=enc, **kw)
     except RuntimeError as e:

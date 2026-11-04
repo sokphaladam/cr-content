@@ -90,6 +90,46 @@ def test_full_check_probes_media(lib):
     assert by(full, "media.lowres") and by(full, "media.start")[0]["status"] == "fail"
 
 
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_full_check_samples_footage_quality(lib):
+    def clip(name, src):
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", f"{src}:s=1280x720:d=3", str(lib / "uploads" / name)],
+                       check=True)
+    clip("sharp.mp4", "testsrc2=r=25")
+    clip("dark.mp4", "color=c=0x080808:r=25")
+    scenes = [Scene(narration="x", visual_query="q", media="uploads/sharp.mp4"),
+              Scene(narration="y", visual_query="q", media="uploads/dark.mp4")]
+    quick = qp.inspect_short(script(*scenes), "en", "none", [2, 2], False)
+    assert by(quick, "visual.footage")[0]["status"] == "not_checked"
+    full = qp.inspect_short(script(*scenes), "en", "none", [2, 2], True)
+    dark = by(full, "visual.exposure")
+    assert len(dark) == 1 and dark[0]["scene"] == 1 and "dark" in dark[0]["title"]
+    assert not by(full, "visual.sharpness.0") and not by(full, "visual.colour")
+    assert not by(full, "later.visual")  # no longer listed as "not part of this inspector"
+
+
+def test_rights_flags_unknown_files_and_a_non_commercial_track(lib, monkeypatch):
+    from crcontent import music, rights
+
+    monkeypatch.setattr(rights, "ROOT", lib)
+    monkeypatch.setattr(music, "MUSIC_DIR", lib / "assets" / "music")
+    (lib / "assets" / "music").mkdir(parents=True)
+    (lib / "assets" / "music" / "song.mp3").write_bytes(b"x")
+    (lib / "assets" / "music" / "song.json").write_text(json.dumps({"license": "https://creativecommons.org/licenses/by-nc/3.0/"}))
+    (lib / "cache").mkdir()
+    for rel in ("cache/mystery.mp4", "cache/pexels-video-123.mp4", "uploads/mine.mp4"):
+        (lib / rel).write_bytes(b"x")
+    scenes = [Scene(narration="x", visual_query="q", media=m)
+              for m in ("cache/mystery.mp4", "cache/pexels-video-123.mp4", "uploads/mine.mp4")]
+    rep = qp.inspect_short(script(*scenes), "en", "song.mp3", [2, 2, 2], False)
+    unknown = by(rep, "rights.media")
+    assert [c["scene"] for c in unknown] == [0] and "mystery.mp4" in unknown[0]["title"]
+    assert by(rep, "rights.music")[0]["status"] == "warning" and by(rep, "rights.youtube")[0]["status"] == "not_checked"
+    ok = qp.inspect_short(script(*scenes[1:]), "en", "none", [2, 2], False)
+    assert by(ok, "rights.media")[0]["status"] == "pass" and not by(ok, "rights.music")
+
+
 # ---------- lyric ----------
 
 @pytest.fixture

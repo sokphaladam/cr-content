@@ -256,7 +256,24 @@ export function DirectorPlanPanel({
         {plan.warnings.length > 0 && (
           <ul className="m-0 grid gap-0.5 pl-4 text-sm text-ink">
             {plan.warnings.map((w, i) => (
-              <li key={i}>{w}</li>
+              <li key={i}>
+                {/* a shot id in the warning jumps to that shot, ready to edit */}
+                {w.split(/(shot-\d+-\d+)/).map((part, k) =>
+                  k % 2 ? (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => goToShot(part)}
+                      title="Go to this shot"
+                      className="cursor-pointer border-0 bg-transparent p-0 font-semibold text-cobalt hover:underline"
+                    >
+                      {part}
+                    </button>
+                  ) : (
+                    part
+                  ),
+                )}
+              </li>
             ))}
           </ul>
         )}
@@ -346,6 +363,7 @@ export function DirectorPlanPanel({
               </div>
               {shots.map((shot) => (
                 <ShotRow
+                  id={`plan-${shot.id}`}
                   // remount when the saved shot changes (a re-plan), so the inputs show it
                   key={`${shot.id}:${shot.visual_description}:${shot.duration_seconds}`}
                   shot={shot}
@@ -363,13 +381,23 @@ export function DirectorPlanPanel({
   );
 }
 
+/** Scroll to a shot and put the cursor in what it shows, so it can be changed right away. */
+function goToShot(id: string) {
+  const row = document.getElementById(`plan-${id}`);
+  if (!row) return;
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.querySelector("textarea")?.focus({ preventScroll: true });
+}
+
 function ShotRow({
+  id,
   shot,
   onEdit,
   onUnlock,
   onPick,
   onSearch,
 }: {
+  id: string;
   shot: PlanShot;
   onEdit: (p: Partial<PlanShot>) => void;
   onUnlock: () => void;
@@ -379,7 +407,7 @@ function ShotRow({
   const [desc, setDesc] = useState(shot.visual_description);
   const [secs, setSecs] = useState(String(shot.duration_seconds));
   return (
-    <div className="grid gap-1.5 rounded-md bg-ink/[0.03] p-2 text-sm">
+    <div id={id} className="grid scroll-mt-4 gap-1.5 rounded-md bg-ink/[0.03] p-2 text-sm">
       <div className="flex flex-wrap items-center gap-1.5">
         <Chip tone="ink">{words(shot.shot_type)}</Chip>
         <span className="text-xs text-ink-soft">

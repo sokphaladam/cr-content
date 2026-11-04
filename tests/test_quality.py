@@ -182,6 +182,12 @@ def test_sudden_loudness_jump_warns(tmp_path):
     assert issue["status"] == "warning" and "jump" in issue["title"] and 1 <= issue["start"] <= 2
 
 
+def test_pauses_and_the_ending_are_not_loudness_jumps(tmp_path):
+    # loud, a pause (very quiet), loud again at the same level, then the ending fades to near silence
+    a = "sine=f=440:d=7,volume='if(between(t,2,3),0.01,if(gt(t,5.5),0.005,0.5))':eval=frame"
+    assert status(quality.inspect_file(make(tmp_path / "pause.mp4", audio=a), "short", SHORT), "audio.jumps") == {"pass"}
+
+
 def test_stretches_and_repeats_helpers():
     assert quality.stretches([0, 0.5, 1.0, 3.0], 0.5, 1.0) == [(0, 1.5)]
     a, b = bytes(range(0, 256)), bytes(255 - x for x in range(256))

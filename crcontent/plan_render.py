@@ -8,6 +8,7 @@ A scene's shots become what each renderer already knows how to cut:
 Footage the user chose by hand in the editor or the storyboard is never replaced. Captions, voice and timing stay
 with the renderers, so they remain in sync with the narration.
 """
+import re
 from pathlib import Path
 
 from .config import ROOT
@@ -17,20 +18,59 @@ from .director_plan import DirectorPlan, Footage, Shot
 # warns about those)
 PHOTO_MOVES = {"static": "still", "slow_push_in": "push_in", "pull_out": "pull_out", "pan_left": "pan_left",
                "pan_right": "pan_right", "tilt_up": "tilt_up", "tilt_down": "tilt_down"}
+SLOW = 0.5  # a slow_motion shot plays at half speed...
+SLOW_MIN_FPS = 48  # ...only from a clip filmed for it: slowed, a 25-30 fps clip stutters
 TAIL = 0.5  # the last cutaway runs past the scene's estimated end, so no gap opens if the voice runs long
 DISSOLVE = 0.4  # seconds a cutaway planned with a cross dissolve fades in over
 # a shot's sound notes -> the sound effects the app can make (sfx.SOUNDS); only clear matches, nothing invented
 SOUND_WORDS = {"impact": ("impact", "hit", "thud", "slam", "boom", "crash", "strike"),
                "thunder": ("thunder", "storm", "rumble"),
-               "whoosh": ("whoosh", "swoosh", "swish", "rush")}
+               "whoosh": ("whoosh", "swoosh", "swish"),
+               # ambience under the shot (sfx.AMBIENT), when the notes ask for no hit
+               "rain": ("rain", "drizzle", "downpour"),
+               "wind": ("wind", "breeze", "gust"),
+               "water": ("water", "stream", "river", "creek", "waves", "surf", "waterfall"),
+               "birds": ("birdsong", "birds", "bird call", "chirp", "tweet")}
 
 
-def cut_sound(before: Shot, shot: Shot) -> str:
+def cut_sound(before: Shot | None, shot: Shot) -> str:
     """The sound on the cut into `shot`: a whip pan gets a whoosh; else what its sound notes clearly ask for."""
-    if before.transition_out == "whip":
+    if before and before.transition_out == "whip":
         return "whoosh"
     notes = " ".join(shot.sound_design).lower()
-    return next((name for name, words in SOUND_WORDS.items() if any(w in notes for w in words)), "")
+    # whole words, with a plain ending (rains, gusty, rainfall), so "train" isn't rain and "window" isn't wind
+    return next((name for name, words in SOUND_WORDS.items()
+                 if any(re.search(rf"\b{w}(?:s|es|ed|ing|y|fall)?\b", notes) for w in words)), "")
+
+
+def _sound_into(shots: list[Shot], shot: Shot) -> str:
+    """The sound on the cut into `shot` from the one before it in `shots` (by id: a carded scene's shots are copies).
+    With all the plan's shots, a scene's first shot follows the last shot of the scene before."""
+    k = next(i for i, s in enumerate(shots) if s.id == shot.id)
+    return cut_sound(shots[k - 1] if k else None, shot)
+
+
+def _fps(file: str) -> float:
+    from .quality import probe
+
+    try:
+        v = next(s for s in probe(Path(file)).get("streams", []) if s.get("codec_type") == "video")
+        n, _, d = str(v.get("avg_frame_rate") or v.get("r_frame_rate") or "0/1").partition("/")
+        return float(n) / float(d or 1)
+    except Exception:  # unreadable, no video stream, 0/0: treated as too slow to slow down
+        return 0.0
+
+
+def speed(shot: Shot, f: Footage, notes: list[str]) -> float:
+    """A shot's playback speed: SLOW when the plan asks for slow motion and the clip has the frames for it."""
+    if shot.camera.movement != "slow_motion" or f.kind != "video":
+        return 1.0
+    fps = _fps(f.file)
+    if fps >= SLOW_MIN_FPS:
+        return SLOW
+    notes.append(f"{shot.id}: planned in slow motion, but its clip is {fps:.0f} fps (slow motion needs "
+                 f"{SLOW_MIN_FPS}+), so it plays at normal speed.")
+    return 1.0
 
 
 def project_path(file: str) -> str:
@@ -103,6 +143,8 @@ def short_scenes(plan: DirectorPlan, scenes: list[dict]) -> tuple[list[dict], li
         scene["media"], scene["media_start"], scene["layout"] = project_path(footage.file), 0, "fill"
         scene["motion"] = PHOTO_MOVES.get(first.camera.movement, "push_in") if footage.kind == "photo" else ""
         scene["broll"] = []
+        scene["sound"] = _sound_into(plan.shots, first)
+        scene["speed"] = speed(first, footage, notes)
         planned = [s for s in plan.shots if s.scene_id == sid]
         basis = round(sum(s.duration_seconds for s in planned), 2)
         for k, (shot, f, at) in enumerate(cut[1:], 1):
@@ -110,7 +152,8 @@ def short_scenes(plan: DirectorPlan, scenes: list[dict]) -> tuple[list[dict], li
             before = planned[planned.index(shot) - 1]  # the shot just before it in the plan
             scene["broll"].append({"media": project_path(f.file), "at": round(at, 2), "duration": round(end - at, 2),
                                    "fade": DISSOLVE if before.transition_out == "cross_dissolve" else 0,
-                                   "sound": cut_sound(before, shot), "basis": basis})
+                                   "sound": cut_sound(before, shot), "speed": speed(shot, f, notes),
+                                   "basis": basis})
         filled += 1
     if filled:
         notes.insert(0, f"Put the plan's footage in {filled} scene{'s' if filled != 1 else ''}.")
@@ -126,7 +169,7 @@ def long_entries(plan: DirectorPlan, entries: list[dict], narrations: list[str])
     """A long video's footage.json entries with each scene cutting through its planned shots. Scenes showing your
     own file (scene-XX.*) or a drawn card keep it."""
     match = _match(plan, narrations)
-    out, filled = [], 0
+    out, notes, filled = [], [], 0
     for i, entry in enumerate(entries):
         entry = dict(entry)
         out.append(entry)
@@ -151,7 +194,10 @@ def long_entries(plan: DirectorPlan, entries: list[dict], narrations: list[str])
         first, f, _ = cut[0]
         lengths = [(cut[k + 1][2] if k + 1 < len(cut) else at + shot.duration_seconds) - at
                    for k, (shot, _f, at) in enumerate(cut)]
-        parts = {"plan": True, "parts": [c[1].file for c in cut], "weights": [max(x, 0.1) for x in lengths]}
+        parts = {"plan": True, "parts": [c[1].file for c in cut], "weights": [max(x, 0.1) for x in lengths],
+                 # the sound on the cut into each part (longform/video.py mixes them in)
+                 "sounds": [_sound_into(plan.shots, c[0]) for c in cut],
+                 "speeds": [speed(c[0], c[1], notes) for c in cut]}
         if carded:  # stays a card scene (text overlay, storyboard): every footage shot gets a credit line
             entry["chosen"] = {**chosen, "file": f.file, **parts}
             entry["credits"] = [_credit(c[1]) for c in cut if c[1].source != "card"]
@@ -165,4 +211,4 @@ def long_entries(plan: DirectorPlan, entries: list[dict], narrations: list[str])
         entry["flags"] = [w for c in cut for w in c[0].warnings]
         entry["transition"] = next(p.transition_out for p in plan.scenes if p.id == sid)  # into the next scene
         filled += 1
-    return out, [f"Put the plan's footage in {filled} scene{'s' if filled != 1 else ''}."] if filled else []
+    return out, ([f"Put the plan's footage in {filled} scene{'s' if filled != 1 else ''}."] if filled else []) + notes

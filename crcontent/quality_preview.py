@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from .config import ASSETS_DIR, LANGS, ROOT, frame_size
-from .quality import _check, _finish, _num, probe, rules_for
+from .quality import _check, _finish, _num, _read_samples, has_filter, probe, rules_for
 from .script import VideoScript
 
 router = APIRouter()
@@ -33,8 +34,9 @@ LYRIC_RULES = {"max_chars": 42, "min_line_sec": 0.7, "gap_sec": 12, "min_font_px
 TERMINAL = re.compile(r"[.!?。]['\"”’)]*$")
 CHAR_W = 0.55  # average glyph width as a share of the font size (latin bold), for the text-width estimate
 
-SHORT_NOT_YET = [("visual", "Footage quality (blur, exposure, colour)"), ("audio", "Mix levels: run the Quality check after rendering"),
-                 ("storytelling", "Whether the narration matches the footage"), ("rights", "Footage and music rights")]
+SHORT_NOT_YET = [("audio", "Mix levels: run the Quality check after rendering"),
+                 ("storytelling", "Whether the narration matches the footage")]
+LOOK_FRAMES = 3  # frames sampled from each media file, one a second from where the scene starts it
 LYRIC_NOT_YET = [("lyrics", "Word-level sync accuracy (only line start times are known)"), ("lyrics", "Lyric spelling"),
                  ("visual", "Picture quality and how distracting the motion is"), ("rights", "Song and picture rights")]
 
@@ -67,6 +69,102 @@ def _probe_media(f: Path) -> dict | None:
             "still": v.get("codec_name") in ("mjpeg", "png", "webp", "bmp", "gif") or not _num(info.get("format", {}).get("duration"))}
 
 
+def _media_look(f: Path, start: float, still: bool) -> dict | None:
+    """Median sharpness and brightness and the mean colour offset of a few frames of a media file (quality.py's
+    measurements), or None when FFmpeg can't decode it."""
+    blur = "blurdetect," if has_filter("blurdetect") else ""
+    with tempfile.TemporaryDirectory(prefix="crq-") as tmp:
+        cmd = ["ffmpeg", "-hide_banner", "-nostdin", *([] if still else ["-ss", f"{start:.2f}"]), "-i", str(f.resolve()),
+               "-vf", f"{'' if still else 'fps=1,'}scale=480:-2,signalstats,{blur}metadata=mode=print:file=frames.txt",
+               "-frames:v", str(1 if still else LOOK_FRAMES), "-f", "null", "-"]
+        try:  # run in the temp folder: the frame log is named relative to it (a Windows "C:" breaks the filter graph)
+            subprocess.run(cmd, cwd=tmp, stdin=subprocess.DEVNULL, capture_output=True, timeout=60, check=True)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        samples = _read_samples(Path(tmp) / "frames.txt")
+    if not samples:
+        return None
+    mid = lambda xs: sorted(xs)[len(xs) // 2] if xs else None  # noqa: E731
+    # blurdetect gives nan on a frame with no edges; flat frames (low contrast) have nothing to judge sharpness by
+    blurs = [x["blur"] for x in samples if x.get("blur") is not None and x["blur"] == x["blur"]
+             and x.get("yhigh", 0) - x.get("ylow", 0) > 30]
+    us = [x["uavg"] - 128 for x in samples if x.get("uavg") is not None]
+    vs = [x["vavg"] - 128 for x in samples if x.get("vavg") is not None]
+    return {"blur": mid(blurs), "yavg": mid([x["yavg"] for x in samples if x.get("yavg") is not None]),
+            "u": sum(us) / len(us) if us else 0.0, "v": sum(vs) / len(vs) if vs else 0.0}
+
+
+def look_checks(checks: list, looks: list[tuple[int, str, dict]]) -> None:
+    """Sharpness, exposure and colour cast of each scene's media (scene, label, _media_look()), with the final
+    inspector's thresholds. Warnings to review, never fails: footage can be soft, dark or graded on purpose."""
+    rules, flagged = rules_for("short"), False
+    for i, label, m in looks:
+        if m["blur"] is not None and m["blur"] > rules["blur"]:
+            flagged = _scene(_check(checks, f"visual.sharpness.{i}.{label}", "visual", "warning",
+                                    f"Scene {i + 1}: {label} looks soft or blurry",
+                                    f"Blur score {m['blur']:.0f} (sharp footage is about 4; threshold {rules['blur']:.0f}).",
+                                    "low", "Fine for a deliberate soft look; otherwise pick a sharper clip."), i)
+        if m["yavg"] is not None and not rules["dark"] <= m["yavg"] <= rules["bright"]:
+            dark = m["yavg"] < rules["dark"]
+            flagged = _scene(_check(checks, f"visual.exposure.{i}.{label}", "visual", "warning",
+                                    f"Scene {i + 1}: {label} is very {'dark' if dark else 'bright'}",
+                                    "Details may be lost on phone screens." if dark else "Highlights may be blown out.",
+                                    "low", "Fine for the intended look; otherwise pick another clip."), i)
+        if max(abs(m["u"]), abs(m["v"])) > rules["cast"]:
+            u, v = m["u"], m["v"]
+            tint = ("blue" if u > 0 else "yellow") if abs(u) >= abs(v) else ("red/magenta" if v > 0 else "green")
+            flagged = _scene(_check(checks, f"visual.colour.{i}.{label}", "visual", "warning",
+                                    f"Scene {i + 1}: {label} has a {tint} colour cast",
+                                    f"Average chroma offset U {u:+.0f}, V {v:+.0f}. A deliberate grade can look like this.",
+                                    "low", "Ignore it if it's the intended look."), i)
+    if looks and not flagged:
+        _check(checks, "visual.footage", "visual", "pass", "Footage looks sharp and well exposed",
+               f"{len(looks)} media files, up to {LOOK_FRAMES} frames each: no strong blur, exposure or colour problem.")
+
+
+def rights_checks(checks: list, script: VideoScript, music: str) -> None:
+    """What the app knows about each file's licence (rights.py) and the music's, before rendering. Your own record:
+    YouTube's copyright checks only run after upload."""
+    from . import rights
+    from .music import track_use
+
+    seen, unknown, own = set(), [], 0
+    for n, sc in enumerate(script.scenes, 1):
+        for rel in [sc.media, sc.media2 if sc.layout == "split" else "", *(b.media for b in sc.broll)]:
+            if not rel or rel in seen or not (f := _library_file(rel)) or not f.is_file():
+                continue
+            seen.add(rel)
+            a = rights._media_asset(rel, n)
+            if a.source == "Your upload":
+                own += 1
+            elif not (a.source and a.license):
+                unknown.append(n)
+                _scene(_check(checks, f"rights.media.{rel}", "rights", "warning", f"Scene {n}: no licence on record for {Path(rel).name}",
+                              "The app doesn't know where this file came from.", "medium",
+                              "Use footage from the app's search or your uploads, or note its source in the rights checklist after rendering."), n - 1)
+    if seen and not unknown:
+        stock = len(seen) - own
+        _check(checks, "rights.media", "rights", "pass", "Every media file's source is known",
+               ", ".join(x for x in (f"{stock} with a licence on record" if stock else "",
+                                     f"{own} your own upload{'s' if own != 1 else ''}" if own else "") if x) + ".")
+    if script.art_style:
+        _check(checks, "rights.art", "rights", "warning", "AI scene pictures", "Drawn on this computer with Stable Diffusion XL.",
+               "low", "Check the model licence's terms for commercial use.")
+    if music and music != "none":
+        use = track_use(music)
+        if use in ("nc", "nd"):
+            _check(checks, "rights.music", "rights", "warning",
+                   "Music licence is non-commercial" if use == "nc" else "Music licence forbids adaptations",
+                   "Not for a monetized video." if use == "nc" else "Creative Commons counts putting music to video as an adaptation.",
+                   "high", "Pick another track.")
+        else:
+            _check(checks, "rights.music", "rights", "pass" if use == "ok" else "not_checked",
+                   "Music licence allows this use" if use == "ok" else "Music licence unknown",
+                   "" if use == "ok" else "No licence saved with the track: check where it came from.")
+    _check(checks, "rights.youtube", "rights", "not_checked", "Copyright (Content ID) and ad suitability",
+           "Only YouTube Studio can check these: upload privately or unlisted and wait for its checks.")
+
+
 # ---------- Shorts ----------
 
 def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[float], full: bool) -> dict:
@@ -75,7 +173,7 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
     W, H = frame_size("9:16")
     result = {"stage": "preview", "profile": "short", "profile_label": "Shorts", "mode": "full" if full else "quick",
               "created": datetime.now().isoformat(timespec="seconds"), "checks": checks, "cancelled": False,
-              "sampled": "project data" + (" and a probe of every media file" if full else " only (no media decoded)")}
+              "sampled": "project data" + (" and a probe and a few frames of every media file" if full else " only (no media decoded)")}
     profile = LANGS.get(lang, LANGS["en"])
     scenes = script.scenes
     lengths = [*lengths, *[0.0] * len(scenes)][: len(scenes)]
@@ -109,6 +207,8 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
     # --- media references ---
     seen: dict[str, int] = {}
     probes: dict[Path, dict | None] = {}
+    looks: list[tuple[int, str, dict]] = []
+    looked: set[Path] = set()
     for i, sc in enumerate(scenes):
         refs = [("media", sc.media), ("second clip", sc.media2 if sc.layout == "split" else "")]
         refs += [(f"cutaway {k + 1}", b.media) for k, b in enumerate(sc.broll)]
@@ -143,10 +243,21 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
                 _scene(_check(checks, f"media.start.{i}", "technical", "fail",
                               f"Scene {i + 1}: footage starts at {sc.media_start:.1f} s, past the clip's end ({p['dur']:.1f} s)",
                               "", "high", "Move the start point back in the timeline."), i)
+            elif f not in looked:  # each file once: from where this scene starts it
+                looked.add(f)
+                start = max(sc.media_start, 0.0) if label == "media" else 0.0
+                if m := _media_look(f, start, p["still"]):
+                    looks.append((i, label, m))
     auto = [i + 1 for i, sc in enumerate(scenes) if not sc.media and not script.art_style]
     _check(checks, "media.refs", "technical", "pass" if not any(c["detector"].startswith("media.missing") for c in checks) else "fail",
            "Media references", f"Footage picked automatically at render for scenes {', '.join(map(str, auto))}." if auto
            else "Every scene has its media chosen.", "info")
+
+    if full:
+        look_checks(checks, looks)
+    else:
+        _check(checks, "visual.footage", "visual", "not_checked", "Footage quality (blur, exposure, colour)",
+               "Run a Full check: it samples frames from every media file.")
 
     # --- overlays: timing and safe area (estimated from the font size) ---
     sx, sy = rules["safe_x"], rules["safe_y"]
@@ -227,6 +338,7 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
             _check(checks, f"publish.{field}", "rights", "warning", f"{label} is empty", "", sev, f"Write a {label.lower()} in the Post tab.")
     if not script.hashtags:
         _check(checks, "publish.hashtags", "rights", "warning", "No hashtags", "", "info")
+    rights_checks(checks, script, music)
     result["fingerprint"] = _fp([script.model_dump(), lang, music, lengths, full])
     return _finish(result, SHORT_NOT_YET)
 

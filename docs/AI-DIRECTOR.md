@@ -976,7 +976,7 @@ Implement in the following order.
 - [x] Translate Director Plan to existing render pipelines.
 - [x] Integrate shot-level sequences.
 - [x] Improve pacing and transitions.
-- [ ] Add planned audio cues. (partial: Short cutaways get impact/thunder/whoosh only)
+- [x] Add planned audio cues. (every planned cut, in Shorts and long videos: impact, thunder or whoosh, or a rain, wind, water or birds ambience bed, all synthesized in sfx.py)
 - [x] Improve shot variation and visual composition.
 - [x] Keep captions synchronized.
 - [x] Support preview and user corrections.
@@ -990,7 +990,7 @@ Implement in the following order.
 - [x] Final render inspection.
 - [x] Error handling.
 - [x] Regression tests.
-- [ ] Packaging verification. (Tauri build not run yet)
+- [x] Packaging verification. (macOS build 2026-11-04: app and DMG built; the packaged engine renders a Short on an empty library)
 - [x] Documentation updates.
 
 **Deliverable:** A reliable production workflow that generates, previews, renders, and inspects videos.
@@ -1011,14 +1011,19 @@ Done and checked:
 
 Remaining, in the suggested order:
 
-- [ ] Sudden volume jumps: the inspector flags them in every render.
-- [ ] Slow motion from the plan (9.4, 10): render.py supports `speed`; plan_render.py doesn't pass it yet.
-- [ ] Planned sound effects (10, Audio): long videos, and the plan's other sound notes.
+- [x] Sudden volume jumps: every render was flagged for its ending (the voice stopping, the fade-out). Drops into quiet (pauses, the ending) no longer count, and a sound coming back after a pause is compared with how loud it was before the pause; real bursts are still flagged.
+- [x] Slow motion from the plan (9.4, 10): a slow_motion shot plays at half speed in Shorts (scene clip and cutaways) and long videos, only from a clip of 48+ fps; a slower clip plays at normal speed with a note.
+- [x] Planned sound effects on long videos and on a Short's scene openers.
+- [x] The plan's ambient sound notes (rain, wind, water, birds): synthesized beds, no licensed files needed.
+- [x] Pre-render check, Visual: Full check samples a few frames of every media file for blur, exposure and colour cast.
+- [x] Pre-render check, Rights: flags files with no licence on record and a non-commercial or no-derivatives music track.
+- [ ] Pre-render check, Audio: mix levels can only be measured on the rendered file (the Quality check after rendering).
+- [ ] Pre-render check, Storytelling: whether the narration matches the footage (only the text-only Gemini story review today).
 - [ ] Create Video form (12, Step 1): voice, music and target-length fields; advanced options folded away.
 - [ ] Analytics feeding the AI Director (8.3).
 - [ ] Simpler main navigation (3).
 - [ ] Test C: a video made from the user's own footage.
-- [ ] Test F: build the desktop app (Tauri); check the packaged engine includes the new modules.
+- [x] Test F: macOS app built; the packaged engine imports every new module and renders a Short with planned sounds on a fresh library. Fixed along the way: the engine has no numpy without the AI add-on, so the sound effects are now made at build time and bundled, and the cover's subject check no longer imports numpy before checking for the add-on. Windows installer not built yet.
 
 Test leftovers that can be deleted:
 
