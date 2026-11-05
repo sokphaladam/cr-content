@@ -213,3 +213,37 @@ def test_no_channel_numbers_no_block():
     client = FakeClient(ANSWER)
     plan = ai_director.direct(seeded(), client=client)
     assert "channel's past Shorts" not in client.calls[0]["messages"][0]["content"] and plan.evidence == ""
+
+
+def test_story_beats_and_loops_reach_the_plan():
+    beats = {**ANSWER, "story": {**ANSWER["story"], "loops": [{"id": "q1", "question": "How?", "left_open": False}, {"bad": 1}]},
+             "scenes": [{**ANSWER["scenes"][0], "phase": "setup", "beat_role": "curiosity_gap", "viewer_question": "How?",
+                         "opens": ["q1"], "resolves": [], "tension": 140},
+                        {**ANSWER["scenes"][1], "phase": "payoff", "beat_role": "made_up", "viewer_question": "",
+                         "opens": [], "resolves": ["q1"], "tension": 30}]}
+    plan = ai_director.direct(seeded(), client=FakeClient(beats))
+    first, last = plan.scenes
+    assert (first.phase, first.beat_role, first.opens, first.tension) == ("setup", "curiosity_gap", ["q1"], 100)
+    assert last.beat_role == "" and last.resolves == ["q1"]
+    assert [l.id for l in plan.story.loops] == ["q1"]  # a malformed loop is dropped, not fatal
+    assert plan.story_warnings == []
+    # re-planning the payoff scene so it no longer answers q1 is reported, not hidden
+    redo = {**beats, "scenes": [{**beats["scenes"][1], "resolves": []}]}
+    again = ai_director.direct(plan, ["scene-002"], client=FakeClient(redo))
+    assert any("never answered" in w for w in again.story_warnings)
+    assert again.story == plan.story
+
+
+def test_an_old_answer_without_beats_still_plans():
+    plan = ai_director.direct(seeded(), client=FakeClient(ANSWER))
+    assert plan.scenes[0].phase == "" and plan.story_warnings[0].startswith("No story phases")
+
+
+def test_a_locked_scene_keeps_its_shots_but_gets_its_story_beat():
+    plan = ai_director.direct(seeded(), client=FakeClient(ANSWER))
+    plan.shots[0].visual_description, plan.shots[0].locked = "mine", True
+    beats = {**ANSWER, "scenes": [{**ANSWER["scenes"][0], "phase": "setup", "beat_role": "curiosity_gap", "opens": [],
+                                   "resolves": [], "viewer_question": "How?", "tension": 40}, ANSWER["scenes"][1]]}
+    again = ai_director.direct(plan, note="y", client=FakeClient(beats))
+    assert again.scenes[0].phase == "setup" and again.scenes[0].viewer_question == "How?"
+    assert again.shots[0].visual_description == "mine" and again.shots[0].locked

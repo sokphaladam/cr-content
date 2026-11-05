@@ -73,5 +73,7 @@ export function usePaneWidth(name: string, initial: number, min: number, max: nu
     [key, clamp],
   );
   const reset = useCallback(() => write(key, String(initial)), [key, initial]);
-  return { width: dragging ?? clamp(saved), setWidth, reset };
+  const collapsed = usePref(`${key}.collapsed`, "0") === "1"; // folded to a slim rail, also remembered
+  const setCollapsed = useCallback((c: boolean) => write(`${key}.collapsed`, c ? "1" : "0"), [key]);
+  return { width: dragging ?? clamp(saved), setWidth, reset, collapsed, setCollapsed };
 }

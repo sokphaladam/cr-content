@@ -221,3 +221,45 @@ def test_make_storyboard_saves_the_choice_and_voices_with_it(tmp_path, monkeypat
     with pytest.raises(Stop):
         longform.make_storyboard(md, log=logged.append, job=job, choice={"voice": "km-KH-PisethNeural"})
     assert "en-US-AvaNeural" not in seen["edge"].values() and any("doesn't speak" in m for m in logged)
+
+
+def _beats(*rows, loops=()):
+    plan = director_plan.from_scenes("t", "short", "en", "educational",
+                                     [{"narration": n} for n, *_ in rows])
+    plan.planned_by = "ai"
+    plan.story.loops = [director_plan.Loop(id=i, question=q, left_open=o) for i, q, o in loops]
+    for scene, (_, phase, role, opens, resolves) in zip(plan.scenes, rows):
+        scene.phase, scene.beat_role, scene.opens, scene.resolves = phase, role, opens, resolves
+        scene.viewer_question = "why?" if opens else ""
+    return plan
+
+
+def test_story_check_passes_a_clean_story():
+    plan = _beats(("Ravens bend wire into hooks.", "setup", "curiosity_gap", ["q1"], []),
+                  ("Scientists hid food inside a narrow tube.", "tension", "stakes", [], []),
+                  ("The raven pulls the food free with its hook.", "payoff", "final_payoff", [], ["q1"]),
+                  loops=[("q1", "How do they get the food?", False)])
+    assert director_plan.story_check(plan) == []
+    assert director_plan.story_check(director_plan.from_scenes("t", "short", "en", "educational", SCENES)) == []
+
+
+def test_story_check_finds_the_usual_problems():
+    plan = _beats(("Ravens bend wire into hooks today.", "tension", "escalation", ["q1"], []),
+                  ("Ravens bend wire into hooks today again.", "tension", "contrast", [], ["q9"]),
+                  ("Then they fly away from the tube.", "setup", "context", [], []),
+                  loops=[("q1", "How?", False), ("q2", "Why?", True)])
+    found = " | ".join(director_plan.story_check(plan))
+    for bit in ("opens in its tension", "goes back to setup", "No payoff", "unknown question 'q9'",
+                "'How?' (scene-001) is never answered", "'Why?' is never raised", "repeats what scene-001"):
+        assert bit in found, bit
+
+
+def test_v1_plan_loads_with_empty_story_beats():
+    v1 = director_plan.from_scenes("t", "short", "en", "educational", SCENES).model_dump()
+    for s in v1["scenes"]:
+        for k in ("phase", "beat_role", "viewer_question", "opens", "resolves", "tension"):
+            s.pop(k)
+    v1["story"].pop("loops"); v1.pop("story_warnings"); v1["version"] = 1
+    plan = director_plan.load(v1)
+    assert plan.version == 2 and plan.scenes[0].phase == "" and plan.story.loops == []
+    assert [s.narration for s in plan.scenes] == [s["narration"] for s in SCENES]

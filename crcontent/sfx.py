@@ -1,11 +1,13 @@
 """Sound effects, synthesized (no downloads, no licences): a hit with a low boom and a sharp crack, a whoosh that
 swells into it, thunder, and short ambience beds (rain, wind, water, birds) for a planned shot's sound notes. Made once
 into the cache, then mixed under the voice by finalize()."""
+import json
 import math
+import re
 import wave
 from pathlib import Path
 
-from .config import CACHE_DIR, CODE_DIR
+from .config import ASSETS_DIR, CACHE_DIR, CODE_DIR
 
 RATE = 44100
 SFX_DIR = CACHE_DIR / "sfx"
@@ -165,25 +167,169 @@ def _birds():
     return _bed(out + (_lowpass(noise, 3000) - _lowpass(noise, 600)) * 0.04)  # a faint outdoor air under them
 
 
+def _riser():
+    """A build into a moment: noise and a tone that rise for 2 s, then stop."""
+    import numpy as np
+
+    rng = np.random.default_rng(5)
+    n = int(RATE * 2.0)
+    t = np.arange(n) / RATE
+    p = t / t[-1]
+    tone = np.sin(2 * math.pi * np.cumsum(180 + 900 * p ** 2) / RATE) * 0.35
+    air = _lowpass(rng.standard_normal(n), 400 + 5000 * p ** 2) * 0.8
+    return (tone + air) * p ** 2.5 * np.clip((t[-1] - t) / 0.03, 0, 1)
+
+
+def _drone():
+    """Suspense under a scene: a low, slowly beating chord, faded in and out (4 s)."""
+    import numpy as np
+
+    n = int(RATE * 4.0)
+    t = np.arange(n) / RATE
+    chord = sum(np.sin(2 * math.pi * f * t) * a for f, a in ((55, 1.0), (55.6, 0.8), (82.4, 0.5), (110.3, 0.25)))
+    swell = 0.75 + 0.25 * np.sin(2 * math.pi * 0.35 * t)
+    return chord * swell * np.clip(t / 0.8, 0, 1) * np.clip((t[-1] - t) / 1.2, 0, 1)
+
+
+def _pulse():
+    """A heartbeat-like pulse: three low double thumps (2.4 s)."""
+    import numpy as np
+
+    n = int(RATE * 2.4)
+    t = np.arange(n) / RATE
+    out = np.zeros(n)
+    for beat in (0.0, 0.8, 1.6):
+        for k, at in enumerate((beat, beat + 0.24)):
+            d = np.clip(t - at, 0, None)
+            out += np.where(t >= at, np.sin(2 * math.pi * (52 + 30 * np.exp(-d * 30)) * d) * np.exp(-d * 18)
+                            * np.clip(d / 0.004, 0, 1), 0) * (1 if k == 0 else 0.7)  # a 4 ms attack: no click
+    return out
+
+
+def _chime():
+    """A reveal: a soft bell (1.6 s), bright partials that ring out."""
+    import numpy as np
+
+    n = int(RATE * 1.6)
+    t = np.arange(n) / RATE
+    bell = sum(np.sin(2 * math.pi * f * t) * a * np.exp(-t * d) for f, a, d in
+               ((880, 1.0, 2.6), (1318.5, 0.55, 3.4), (2217, 0.3, 5.0), (3520, 0.12, 7.0)))
+    return bell * np.clip(t / 0.004, 0, 1)
+
+
+def _flap():
+    """Wings: four soft, airy flaps (1.2 s), for a bird or bat taking off on screen."""
+    import numpy as np
+
+    rng = np.random.default_rng(13)
+    n = int(RATE * 1.2)
+    t = np.arange(n) / RATE
+    env = np.zeros(n)
+    for k, at in enumerate((0.05, 0.31, 0.56, 0.8)):
+        d = t - at
+        env += np.where(d >= 0, np.sin(np.clip(d / 0.16, 0, 1) * math.pi) ** 2, 0) * (1 - 0.15 * k)
+    return _lowpass(rng.standard_normal(n), 1400) * env
+
+
 SOUNDS = {"impact": _impact, "whoosh": _whoosh, "thunder": _thunder,
-          "rain": _rain, "wind": _wind, "water": _water, "birds": _birds}
+          "rain": _rain, "wind": _wind, "water": _water, "birds": _birds,
+          "riser": _riser, "drone": _drone, "pulse": _pulse, "chime": _chime, "flap": _flap}
 AMBIENT = {"rain", "wind", "water", "birds"}
+QUIET = {"drone": 0.4}  # peak of a bed that sits under the voice (ambience: AMBIENT_LEVEL)
+
+# the sound library (roadmap 12.1): what each sound is for, so the editor and the AI pick by purpose
+CATEGORIES = ("impact", "transition", "suspense", "ambience", "action", "reveal")
+INFO = {
+    "impact": ("impact", "A low boom with a sharp crack: an important reveal or visual hit."),
+    "thunder": ("impact", "A double strike and a long rolling rumble."),
+    "whoosh": ("transition", "Rushing air that lands on a cut or a hit."),
+    "riser": ("transition", "A 2 s build that stops dead: into a reveal or a cut."),
+    "drone": ("suspense", "A low, slowly beating chord under a tense scene."),
+    "pulse": ("suspense", "Three heartbeat-like thumps: anticipation."),
+    "rain": ("ambience", "Rain on leaves and ground."),
+    "wind": ("ambience", "Wind gusting through an open place."),
+    "water": ("ambience", "A stream or gentle surf."),
+    "birds": ("ambience", "Birdsong over quiet outdoor air."),
+    "flap": ("action", "Wings flapping: only when a bird or bat is seen taking off."),
+    "chime": ("reveal", "A soft bell for a payoff or discovery."),
+}
+SYNTH_LICENCE = "Synthesized by the app (no licence needed)"
 
 
 def sound(name: str) -> Path:
-    """The cached .wav of a sound effect (made on first use)."""
+    """The file of a sound effect: a synthesized one (cached .wav, made on first use) or an imported "user:<id>".
+    Raises KeyError for one that doesn't exist (an imported sound deleted from the library)."""
+    if name.startswith("user:"):
+        return _user_file(name[5:])
     path = SFX_DIR / f"{name}-v{VERSION}.wav"
     if not path.exists():
         if (BUNDLED_DIR / path.name).is_file():
             return BUNDLED_DIR / path.name
-        _write(path, SOUNDS[name](), AMBIENT_LEVEL if name in AMBIENT else 0.89)
+        _write(path, SOUNDS[name](), AMBIENT_LEVEL if name in AMBIENT else QUIET.get(name, 0.89))
     return path
+
+
+def exists(name: str) -> bool:
+    try:
+        return sound(name).is_file()
+    except KeyError:
+        return False
+
+
+# ---------- imported sounds: <data folder>/assets/sfx/<id>.<ext> with <id>.json (category, licence, credit) ----------
+
+USER_DIR = ASSETS_DIR / "sfx"
+AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
+LICENCES = ("CC0 / public domain", "CC BY", "CC BY-SA", "Royalty-free (bought or subscribed)", "My own recording")
+NEEDS_CREDIT = {"CC BY", "CC BY-SA"}
+
+
+def _user_file(sid: str) -> Path:
+    if not re.fullmatch(r"[a-z0-9-]{1,40}", sid):
+        raise KeyError(sid)
+    found = [f for f in USER_DIR.glob(f"{sid}.*") if f.suffix.lower() in AUDIO_EXTS]
+    if not found:
+        raise KeyError(sid)
+    return found[0]
+
+
+def user_info(sid: str) -> dict | None:
+    try:
+        return json.loads((USER_DIR / f"{sid}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def catalog(duration) -> list[dict]:
+    """Every sound the timeline can use: the synthesized ones, then the imported ones with their licence and credit.
+    `duration(path)`: seconds of a file (render.duration)."""
+    out = [{"name": n, "label": n, "category": INFO[n][0], "description": INFO[n][1], "ambient": n in AMBIENT,
+            "duration": round(duration(sound(n)), 2), "source": "synthesized", "licence": SYNTH_LICENCE, "credit": ""}
+           for n in SOUNDS]
+    for meta in sorted(USER_DIR.glob("*.json")) if USER_DIR.is_dir() else []:
+        info = user_info(meta.stem)
+        if info and exists(f"user:{meta.stem}"):
+            out.append({"name": f"user:{meta.stem}", "label": info.get("label") or meta.stem, "category": info.get("category", "action"),
+                        "description": info.get("description", ""), "ambient": info.get("category") == "ambience",
+                        "duration": info.get("duration", 0), "source": info.get("source", ""), "licence": info.get("licence", ""),
+                        "credit": info.get("credit", "")})
+    return out
+
+
+def credits(names) -> list[str]:
+    """The description lines imported sounds' licences ask for (one per sound, in order of first use)."""
+    out = []
+    for name in dict.fromkeys(names):
+        info = user_info(name[5:]) if name.startswith("user:") else None
+        if info and info.get("licence") in NEEDS_CREDIT and info.get("credit"):
+            out.append(f"Sound: {info['credit']} ({info['licence']}){' ' + info['source'] if info.get('source') else ''}")
+    return out
 
 
 def make_all(folder: Path) -> None:
     """Every sound into `folder` (scripts/build_engine.py bundles them)."""
     for name in SOUNDS:
-        _write(folder / f"{name}-v{VERSION}.wav", SOUNDS[name](), AMBIENT_LEVEL if name in AMBIENT else 0.89)
+        _write(folder / f"{name}-v{VERSION}.wav", SOUNDS[name](), AMBIENT_LEVEL if name in AMBIENT else QUIET.get(name, 0.89))
 
 
 def impact_track(times: list[float]) -> list[tuple[Path, float, float]]:

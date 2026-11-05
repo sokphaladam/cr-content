@@ -201,6 +201,8 @@ export function useDraftTimeline(scenes: DraftScene[] | null, voice: string, rat
       else setPlayWhenReady((p) => !p);
     },
     stop: () => player.stop(),
+    /** The voice lane's preview level, 0-1. */
+    setVoiceVolume: useCallback((v: number) => player.setVolume(v), [player]),
     /** Jump to `t` seconds into scene `i`'s voiceover (keeps playing if it was). */
     seek: (i: number, t: number) => player.seek(i, t),
     /** Jump to `sec` seconds into the video. */

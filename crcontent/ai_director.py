@@ -59,16 +59,26 @@ SCENE = {
         "viewer_objective": _str,
         "emotion": _str,
         "transition_out": {"type": "string", "enum": list(dp.TRANSITIONS)},
+        "phase": {"type": "string", "enum": list(dp.PHASES)},
+        "beat_role": {"type": "string", "enum": list(dp.BEAT_ROLES)},
+        "viewer_question": _str,
+        "opens": _strs,
+        "resolves": _strs,
+        "tension": {"type": "number"},
         "shots": {"type": "array", "items": SHOT},
     },
-    "required": ["scene_id", "purpose", "viewer_objective", "emotion", "transition_out", "shots"],
+    "required": ["scene_id", "purpose", "viewer_objective", "emotion", "transition_out", "phase", "beat_role",
+                 "viewer_question", "opens", "resolves", "tension", "shots"],
 }
 SCHEMA = {
     "type": "object",
     "properties": {
         "story": {"type": "object", "properties": {
             "hook": _str, "central_idea": _str, "emotional_arc": _strs, "payoff": _str, "audience": _str,
-            "key_facts": _strs}, "required": ["hook", "central_idea", "emotional_arc", "payoff", "audience", "key_facts"]},
+            "key_facts": _strs,
+            "loops": {"type": "array", "items": {"type": "object", "properties": {
+                "id": _str, "question": _str, "left_open": {"type": "boolean"}}, "required": ["id", "question", "left_open"]}}},
+            "required": ["hook", "central_idea", "emotional_arc", "payoff", "audience", "key_facts", "loops"]},
         "continuity": {"type": "object", "properties": {"subjects": _strs, "locations": _strs, "lighting": _strs},
                        "required": ["subjects", "locations", "lighting"]},
         "edit_plan": {"type": "object", "properties": {
@@ -110,6 +120,23 @@ explanatory graphic). Never invent facts that are not in the script.
 
 Continuity: name the recurring subjects, locations and light so footage stays consistent (same species, same time
 of day, direction of movement); don't plan unrelated footage just because it shares a keyword.
+
+Story structure: Setup -> Tension -> Payoff, as narrative functions, not fixed time slots. Give every scene its
+phase and its beat role: setup (pattern_interrupt, curiosity_gap, context), tension (stakes, evidence, escalation,
+complication, contrast, relief, mini_payoff, delayed_reveal) or payoff (final_payoff, explanation, callback). The
+viewer_question is the question active in the viewer's mind during that beat. List the video's open loops in
+story.loops (short ids like "q1" and the exact question or promise); each scene names the loop ids it opens and
+resolves. Every loop the video opens must be answered later, or marked left_open when a deliberate loop back to the
+start needs it. Tension (0-100) is the relative anticipation of the beat; it need not rise every scene (quiet beats
+and relief are fine). Use only the techniques the subject supports: a plain fact needs a crisp question and answer,
+not invented danger or fake suspense. Each escalation must add new information or evidence. If the script doesn't
+fit this structure, say why in suggestions instead of forcing it.
+
+Edit by story intent (a phase is not an effect preset; fit the subject): curiosity, a strong opening image and
+clean framing; investigation, detail and evidence shots with controlled movement; rising tension, tighter framing and
+more purposeful shot changes; a key action, show the actual action clearly (slow motion only when the clip was filmed
+for it); an explanation, a stable composition the viewer can read; the payoff, hold the reveal long enough to
+understand it; a callback, reuse the opening's subject or framing. An exact action outranks a pretty shot.
 
 Never rewrite the narration. If the script could be stronger (slow opening, missing payoff), say so briefly in
 suggestions; leave it empty otherwise. Return every scene id you were given, in order, unless told otherwise."""
@@ -244,6 +271,7 @@ def _apply(plan: DirectorPlan, data: dict, only: set[str] | None, locked: set[st
     out = plan.model_copy(deep=True)
     if not only:  # the project-level analysis comes from a whole-script pass only
         story, cont, edit = data.get("story") or {}, data.get("continuity") or {}, data.get("edit_plan") or {}
+        story = {**story, "loops": [l for l in story.get("loops") or [] if isinstance(l, dict) and str(l.get("id", "")).strip()]}
         out.story = dp.Story(**{k: story[k] for k in dp.Story.model_fields if k in story})
         out.continuity = dp.Continuity(**{k: cont[k] for k in ("subjects", "locations", "lighting") if k in cont},
                                        visual_style=plan.project.visual_style)
@@ -262,7 +290,17 @@ def _apply(plan: DirectorPlan, data: dict, only: set[str] | None, locked: set[st
     directed = 0
     for scene in out.scenes:
         r = planned.get(scene.id)
-        if r is None or scene.id in locked or (only and scene.id not in only):
+        if r is None or (only and scene.id not in only):
+            continue
+        # story beats are notes about the narration, not footage: a scene with a locked shot gets them too
+        scene.phase = _pick(r.get("phase"), dp.PHASES, "")
+        scene.beat_role = _pick(r.get("beat_role"), dp.BEAT_ROLES, "")
+        scene.viewer_question = str(r.get("viewer_question", "")).strip()
+        scene.opens, scene.resolves = ([str(x).strip() for x in r.get(k) or [] if str(x).strip()] for k in ("opens", "resolves"))
+        t = r.get("tension")
+        scene.tension = max(0, min(100, round(t))) if isinstance(t, (int, float)) and not isinstance(t, bool) else None
+        directed += 1
+        if scene.id in locked:
             continue
         shots = _shots(scene, r.get("shots") or [])
         if not shots:
@@ -270,10 +308,11 @@ def _apply(plan: DirectorPlan, data: dict, only: set[str] | None, locked: set[st
         scene.purpose, scene.viewer_objective, scene.emotion = (str(r.get(k, "")).strip() for k in ("purpose", "viewer_objective", "emotion"))
         scene.transition_out = _pick(r.get("transition_out"), dp.TRANSITIONS, "hard_cut")
         shots_by_scene[scene.id] = shots
-        directed += 1
     if not directed:
         raise RuntimeError("Gemini's plan didn't match any scene of the script. Try again.")
     out.shots = [shot for scene in out.scenes for shot in shots_by_scene.get(scene.id, [])]
     out.planned_by = "ai"
-    return DirectorPlan.model_validate(out.model_dump())  # the same checks as a plan loaded from disk
+    out = DirectorPlan.model_validate(out.model_dump())  # the same checks as a plan loaded from disk
+    out.story_warnings = dp.story_check(out)  # a scene re-plan that breaks a loop or the payoff shows up here
+    return out
 

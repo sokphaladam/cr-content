@@ -4,7 +4,8 @@ Run from the project root (npm run build does this):  python scripts/build_remot
 What goes in, so the installed app needs nothing on the user's PC (crcontent/shorts/motion.py):
   node(.exe)     Node from nodejs.org, the same version as the one building, checked against its SHASUMS256.txt
   bundle/        remotion/src prebuilt (no bundler at run time)
-  render.mjs     the renderer script
+  render.mjs     the renderer script (transparent clips)
+  still.mjs      the editor's preview frames of graphics (transparent PNGs)
   node_modules/  @remotion/renderer only (production), with the headless Chrome it renders in
 Already downloaded Node is reused; --force downloads it again.
 """
@@ -65,7 +66,8 @@ def main() -> int:
     subprocess.run([NPM, "install", "--no-audit", "--no-fund"], cwd=SRC, check=True)
     shutil.rmtree(DEST / "bundle", ignore_errors=True)
     subprocess.run(["node", "bundle.mjs", str(DEST / "bundle")], cwd=SRC, check=True)
-    shutil.copy(SRC / "render.mjs", DEST / "render.mjs")
+    for script in ("render.mjs", "still.mjs"):  # the clips, and the editor's preview frames (M5)
+        shutil.copy(SRC / script, DEST / script)
     # the renderer alone, at the version the source was built and tested with
     version = json.loads((SRC / "node_modules" / "@remotion" / "renderer" / "package.json").read_text())["version"]
     (DEST / "package.json").write_text(json.dumps({"name": "crcontent-motion-runtime", "private": True, "type": "module",

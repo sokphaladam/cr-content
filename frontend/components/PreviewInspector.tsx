@@ -24,8 +24,10 @@ function Header({ children }: { children: React.ReactNode }) {
  *  A full report isn't replaced by quick ones: it's marked outdated when the project changes. */
 const DISMISS = [{ value: "dismissed" as const, label: "Dismiss" }];
 
-export function ShortsPreviewCheck({ script, lang, music, lengths, total, onIssue, onApply }: {
+export function ShortsPreviewCheck({ script, draftId, planStamp = "", lang, music, lengths, total, onIssue, onApply }: {
   script: VideoScript;
+  draftId?: string; // its Director Plan feeds the story-beat checks
+  planStamp?: string; // changes when that plan changes, so the report is re-made or marked outdated
   lang: Lang;
   music: string;
   lengths: number[];
@@ -39,12 +41,13 @@ export function ShortsPreviewCheck({ script, lang, music, lengths, total, onIssu
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const [madeFrom, setMadeFrom] = useState("");
   const [busy, setBusy] = useState(false);
-  const key = JSON.stringify({ script, lang, music, lengths });
+  const body = JSON.stringify({ script, lang, music, lengths, draft: draftId ?? "" });
+  const key = `${body}\n${planStamp}`; // JSON never holds a raw newline: the body is everything before it
 
   async function run(full: boolean, from: string) {
     if (full) setBusy(true);
     try {
-      const r = await api.previewShort({ ...JSON.parse(from), full });
+      const r = await api.previewShort({ ...JSON.parse(from.split("\n")[0]), full });
       setReport(r);
       setMadeFrom(from);
     } catch (e) {

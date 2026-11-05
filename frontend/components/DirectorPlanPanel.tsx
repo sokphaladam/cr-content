@@ -36,16 +36,25 @@ export function DirectorPlanPanel({
   kind,
   refId,
   onAssemble,
+  onPlan,
 }: {
   kind: PlanKind;
   refId: string;
   onAssemble?: () => Promise<string[]>; // a Short: the editor loads the plan's footage into its scenes
+  onPlan?: (plan: DirectorPlan) => void; // every plan it loads or saves (the pre-render check follows it)
 }) {
   const assembleRef = useRef(onAssemble);
   useEffect(() => {
     assembleRef.current = onAssemble; // the latest one (it reads the editor's current scenes)
   });
   const [plan, setPlan] = useState<DirectorPlan | null>(null);
+  const onPlanRef = useRef(onPlan);
+  useEffect(() => {
+    onPlanRef.current = onPlan;
+  });
+  useEffect(() => {
+    if (plan) onPlanRef.current?.(plan);
+  }, [plan]);
   const [msg, setMsg] = useState<{ text: string; error?: boolean }>({
     text: "",
   });
@@ -314,6 +323,22 @@ export function DirectorPlanPanel({
               {story.key_facts.join("; ")}
             </p>
           )}
+          {(story.loops ?? []).length > 0 && (
+            <p className="m-0">
+              <b>Open questions:</b>{" "}
+              {(story.loops ?? []).map((l) => `${l.question}${l.left_open ? " (left open)" : ""}`).join("; ")}
+            </p>
+          )}
+          {(plan.story_warnings ?? []).length > 0 && (
+            <div className="mt-1 rounded-lg border border-line p-2">
+              <b>Story checks</b> (rule-based; your narration isn&apos;t changed)
+              <ul className="m-0 pl-4">
+                {(plan.story_warnings ?? []).map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {plan.evidence && <p className="m-0 text-xs text-ink-soft">{plan.evidence}</p>}
           {plan.suggestions.length > 0 && (
             <div className="mt-1 rounded-lg border border-line p-2">
@@ -346,6 +371,14 @@ export function DirectorPlanPanel({
                     {scene.purpose && ` · ${scene.purpose}`}
                     {scene.emotion && ` · ${scene.emotion}`}
                   </span>
+                  {scene.phase && (
+                    <span className="text-xs text-ink-soft">
+                      <b className="capitalize">{scene.phase}</b>
+                      {scene.beat_role && ` · ${scene.beat_role.replace(/_/g, " ")}`}
+                      {scene.tension != null && ` · tension ${scene.tension}`}
+                      {scene.viewer_question && ` · “${scene.viewer_question}”`}
+                    </span>
+                  )}
                   <span
                     lang={plan.project.language}
                     className="text-sm text-ink"

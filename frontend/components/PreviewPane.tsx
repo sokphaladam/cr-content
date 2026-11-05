@@ -943,7 +943,7 @@ export function PreviewPane({
         </div>
         <div className="mx-auto w-full max-w-[560px] shrink-0 px-4 pt-3 pb-3">
           {!showProgress && !showVideo && scene && live ? (
-            <LiveControls timeline={live.timeline} music={live.music} />
+            <LiveControls timeline={live.timeline} music={live.music} edit={live.edit} />
           ) : (
             showVideo && <p className="m-0 text-center text-sm text-ink-soft">The rendered video. Switch to Edit to keep changing the draft, then render again.</p>
           )}
@@ -967,7 +967,7 @@ export function PreviewPane({
       >
         <Phone landscape={landscape}>{screen}</Phone>
 
-        {!showProgress && !showVideo && scene && live && <LiveControls timeline={live.timeline} music={live.music} />}
+        {!showProgress && !showVideo && scene && live && <LiveControls timeline={live.timeline} music={live.music} edit={live.edit} />}
         {!showProgress && !showVideo && scene && live?.options && (
           <CaptionPanel style={live.edit.captions} onChange={live.edit.setCaptions} options={live.options} lang={lang} />
         )}

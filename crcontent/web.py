@@ -19,7 +19,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import addons, art, campaigns, director_plan, drafts, locations, lyricvideo, music, packaging, publish, quality, quality_preview, rights, schedule, sheet, voiceover
 from .config import ASSETS_DIR, CACHE_DIR, CODE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT, SCENE_PAD_SEC, frame_size
@@ -568,6 +568,158 @@ def voiceover_peaks(key: str):
     if not re.fullmatch(r"[0-9a-f]{20}", key) or not path.exists():
         raise HTTPException(404, "That voiceover is gone.")
     return voiceover.peaks(path)
+
+
+@app.get("/api/timeline/catalog")
+def timeline_catalog():
+    """What the timeline's graphics and sound-effect clips can use: the synthesized sounds (with their length) and
+    the Remotion templates with the props a new graphic starts from."""
+    from . import graphic_templates, sfx
+
+    return {"sounds": sfx.catalog(duration), "templates": graphic_templates.TEMPLATES,
+            "categories": sfx.CATEGORIES, "licences": sfx.LICENCES, "needs_credit": sorted(sfx.NEEDS_CREDIT)}
+
+
+class StillsRequest(BaseModel):
+    lang: str = "en"
+    items: list[dict] = Field(default_factory=list, max_length=20)  # {template, props, seconds, version}
+
+
+@app.post("/api/graphics/stills")
+def graphic_stills(req: StillsRequest):
+    """Preview frames of graphics (Remotion, transparent PNGs, cached by template, version, props and length). Each
+    item answers {key, url} when made, or {errors} (invalid props) / {failed} (couldn't render), never silently."""
+    from . import graphic_templates as gt
+    from .shorts import motion
+    from .styles import font_path
+
+    out, jobs = [], []
+    for it in req.items:
+        props, errors = gt.validate(str(it.get("template", "")), it.get("props") or {}, int(it.get("version") or 0))
+        seconds = min(max(float(it.get("seconds") or 2), 0.4), 30)
+        if errors:
+            out.append({"errors": errors})
+            continue
+        job = {"template": it["template"], "props": props, "seconds": seconds}
+        jobs.append(job)
+        out.append(job)
+    profile = LANGS.get(req.lang, LANGS["en"])
+    made = gt.render_stills(jobs, motion.font_url(font_path(profile.font_file))) if jobs else {}
+    for k, item in enumerate(out):
+        if "errors" in item:
+            continue
+        key = gt.still_key(item["template"], item["props"], item["seconds"])
+        out[k] = {"key": key, "url": f"/api/graphics/stills/{key}.png"} if not made.get(key) else {"failed": made[key]}
+    return {"items": out}
+
+
+@app.get("/api/graphics/stills/{key}.png")
+def graphic_still(key: str):
+    from . import graphic_templates as gt
+
+    path = gt.STILLS / f"{key}.png"
+    if not re.fullmatch(r"[0-9a-f]{20}", key) or not path.is_file():
+        raise HTTPException(404, "That preview frame is gone.")
+    return FileResponse(path, media_type="image/png")
+
+
+def _sfx_file(name: str) -> Path:
+    from . import sfx
+
+    try:
+        return sfx.sound(name)
+    except KeyError:
+        raise HTTPException(404, "Unknown sound effect.")
+
+
+@app.get("/api/sfx/{name}.wav")
+def sfx_audio(name: str):
+    return FileResponse(_sfx_file(name), media_type="audio/wav")
+
+
+@app.get("/api/sfx/{name}/peaks")
+def sfx_peaks(name: str):
+    """A sound effect's loudness for its waveform on the timeline (voiceover.peaks)."""
+    return voiceover.peaks(_sfx_file(name))
+
+
+class SoundSuggestRequest(BaseModel):
+    script: VideoScript
+    lengths: list[float] = []
+    draft: str = ""      # its Director Plan's beats and shot notes guide the suggestions
+    ai: bool = True      # ask Gemini (when a key is set); false: the rules only
+
+
+@app.post("/api/sounds/suggest")
+def sounds_suggest(req: SoundSuggestRequest):
+    """A few sound events for the timeline, tied to the story beats and shots (sound_director.py). Nothing is added
+    here: the editor shows them and adds the ones the creator ticks."""
+    from . import sound_director
+
+    plan = None
+    if req.draft:
+        try:
+            plan = drafts.load(req.draft).plan
+        except (KeyError, ValueError, OSError):
+            pass
+    existing = [c.start for c in req.script.clips if c.track == "sfx"]
+    return sound_director.suggest(req.script, plan, req.lengths, existing, use_ai=req.ai and bool(os.getenv("GEMINI_API_KEY")))
+
+
+@app.post("/api/edit/direct")
+def edit_direct(req: SoundSuggestRequest):
+    """The Edit Director's proposals for this draft (edit_director.py): calm scenes, graphics, sounds, each with its
+    reason, and the footage gaps it won't cover up. Nothing is applied here: the editor applies the ticked ones."""
+    from . import edit_director
+
+    plan = None
+    if req.draft:
+        try:
+            plan = drafts.load(req.draft).plan
+        except (KeyError, ValueError, OSError):
+            pass
+    return edit_director.propose(req.script, plan, req.lengths, use_ai=req.ai and bool(os.getenv("GEMINI_API_KEY")))
+
+
+MAX_SFX_SEC = 120
+
+
+@app.post("/api/sfx/import")
+def sfx_import(file: UploadFile = File(...), label: str = Form(...), category: str = Form(...),
+               licence: str = Form(...), credit: str = Form(""), source: str = Form("")):
+    """Add a sound to the library (assets/sfx), with the licence it comes under and the credit it asks for: the
+    render puts that credit into the description. A sound with no known licence isn't taken."""
+    from . import sfx
+
+    ext = Path(file.filename or "").suffix.lower()
+    label, credit, source = label.strip()[:60], credit.strip()[:200], source.strip()[:300]
+    if ext not in sfx.AUDIO_EXTS:
+        raise HTTPException(400, f"Use an audio file ({', '.join(sorted(sfx.AUDIO_EXTS))}).")
+    if not label:
+        raise HTTPException(400, "Give the sound a name.")
+    if category not in sfx.CATEGORIES:
+        raise HTTPException(400, f"Pick a category: {', '.join(sfx.CATEGORIES)}.")
+    if licence not in sfx.LICENCES:
+        raise HTTPException(400, "Pick the licence it comes under. A sound with no known licence can't be used.")
+    if licence in sfx.NEEDS_CREDIT and not credit:
+        raise HTTPException(400, f"{licence} asks for a credit: write who made it (as the source asks).")
+    if source and not re.match(r"https?://", source):
+        raise HTTPException(400, "The source should be a web address (https://...), or left empty.")
+    sid = (re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:28] or "sound") + "-" + uuid.uuid4().hex[:6]
+    sfx.USER_DIR.mkdir(parents=True, exist_ok=True)
+    dest = sfx.USER_DIR / f"{sid}{ext}"
+    _save_upload(file, dest)
+    try:
+        seconds = duration(dest)
+    except Exception:  # noqa: BLE001 - not audio ffmpeg can read
+        seconds = 0
+    if not 0.05 <= seconds <= MAX_SFX_SEC:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, f"That isn't a sound file the app can read, or it's longer than {MAX_SFX_SEC} s.")
+    info = {"label": label, "category": category, "licence": licence, "credit": credit, "source": source,
+            "duration": round(seconds, 2), "file": dest.name, "imported": datetime.now().isoformat(timespec="seconds")}
+    (sfx.USER_DIR / f"{sid}.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"name": f"user:{sid}", **info}
 
 
 FILMSTRIP_CACHE = CACHE_DIR / "filmstrip"
@@ -1641,6 +1793,7 @@ def plan_update(kind: str, ref: str, plan: director_plan.DirectorPlan):
     from . import shot_footage
 
     plan.warnings = shot_footage.plan_warnings(plan)
+    plan.story_warnings = director_plan.story_check(plan)
     _plan_put(kind, ref, plan)
     return plan.model_dump()
 

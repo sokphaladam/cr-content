@@ -521,7 +521,66 @@ def inspect_file(path: Path, profile: str, expect: dict, cancel: threading.Event
         else:
             _check(checks, "audio.peak", "audio", "pass", f"True peak {peak:.1f} dBTP")
         audio_checks(checks, found, rules, issue)
-    return _finish(result)
+    covered = edit_checks(checks, path.parent) if profile == "short" else set()
+    return _finish(result, [n for n in NOT_YET if n[0] not in covered])
+
+
+def edit_checks(checks: list, folder: Path) -> set[str]:
+    """For a Short rendered from the editor: is every timeline clip of its script.json in the video, or left out for
+    a recorded reason (meta.json "timeline", written by the render)? And the story checks of the draft's Director
+    Plan. Returns the categories now covered (so they aren't listed as not checked)."""
+    from .script import VideoScript
+
+    covered: set[str] = set()
+    try:
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+        script = VideoScript.model_validate_json((folder / "script.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return covered
+    record = meta.get("timeline")
+    if script.clips and record is None:
+        _check(checks, "edit.timeline", "technical", "not_checked", "Timeline graphics and sounds",
+               "Rendered before the app recorded them: render again to check they're all in the video.")
+    elif record is not None:
+        drawn, mixed, left = record.get("graphics", {}), set(record.get("sounds", [])), record.get("left_out", {})
+        lost = []
+        for c in script.clips:
+            if c.id in left:
+                _check(checks, f"edit.left_out.{c.id}", "technical", "warning",
+                       f"{'Graphic' if c.track == 'graphics' else 'Sound'} {c.id} isn't in the video",
+                       f"Left out at render: {left[c.id]}.", "medium", "Fix it in the editor and render again, or delete the clip.",
+                       c.start, c.start + c.duration)
+            elif c.track == "graphics" and c.id in drawn:
+                at, seconds = drawn[c.id]
+                if abs(at - c.start) > 0.05 or abs(seconds - min(c.duration, record["length"] - c.start)) > 0.05:
+                    lost.append(f"{c.id} drawn at {at:.2f} s for {seconds:.2f} s, placed at {c.start:.2f} s for {c.duration:.2f} s")
+            elif not (c.track == "sfx" and c.id in mixed):
+                lost.append(f"{c.id} isn't in the video and no reason was recorded")
+        if lost:
+            _check(checks, "edit.timeline", "technical", "fail", "The video doesn't match the timeline", "; ".join(lost), "high",
+                   "Render again; if it persists, report it with the render log.")
+        elif script.clips:
+            n = len(script.clips) - len(left)
+            _check(checks, "edit.timeline", "technical", "pass", f"{n} timeline clip{'s' if n != 1 else ''} in the video as placed",
+                   "Graphics at their times and lengths, sounds mixed in (from the render's record).")
+    if draft := meta.get("draft"):
+        from . import drafts
+        from .director_plan import story_findings
+
+        try:
+            plan = drafts.load(draft).plan
+        except (KeyError, ValueError, OSError):
+            plan = None
+        if plan and any(s.phase for s in plan.scenes):
+            covered.add("storytelling")
+            found = [f for f in story_findings(plan) if f["key"] != "repeat"]
+            for n, f in enumerate(found):
+                _check(checks, f"story.{f['key']}.{n}", "storytelling", "warning", f["title"],
+                       "From the draft's Director Plan story beats (the narration itself isn't judged here).", "low", f["fix"])
+            if not found:
+                _check(checks, "story.plan", "storytelling", "pass", "The story raises its questions and pays them off",
+                       f"{len(plan.scenes)} beats checked in the draft's Director Plan.")
+    return covered
 
 
 def visual_checks(checks: list, found: dict, rules: dict, total: float, issue) -> None:

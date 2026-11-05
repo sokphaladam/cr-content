@@ -15,8 +15,13 @@ import {
   GalleryHorizontal,
   ImageIcon,
   Languages,
+  Film,
   ListVideo,
   Music2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Paintbrush,
   Palette,
   Pause,
@@ -32,7 +37,7 @@ import {
   Wand2,
 } from "lucide-react";
 import { useCallback, useState, useSyncExternalStore, type ReactNode } from "react";
-import { api, DEFAULT_CAPTIONS, fileUrl, pinnedComment, type ArtStyle, type CaptionStyle, type DraftData, type Lang, type Options, type VideoScript } from "@/lib/api";
+import { api, DEFAULT_CAPTIONS, fileUrl, pinnedComment, type ArtStyle, type CaptionStyle, type Clip, type DraftData, type Lang, type Options, type TrackName, type TrackState, type VideoScript } from "@/lib/api";
 import { usePaneWidth } from "@/lib/appearance";
 import { isImagePath } from "@/lib/format";
 import type { DraftTimeline } from "@/lib/useDraftTimeline";
@@ -43,10 +48,16 @@ import { PictureReview } from "./PictureReview";
 import { ShortsPreviewCheck } from "./PreviewInspector";
 import { applyFix } from "@/lib/qualityFix";
 import { MusicFinder } from "./MusicFinder";
-import { CaptionPanel } from "./LivePreview";
+import { CaptionPanel, type ItemRef } from "./LivePreview";
 import { SceneCard, type DraftScene } from "./SceneCard";
 import { Timeline } from "./Timeline";
 import { DirectorPlanPanel } from "./DirectorPlanPanel";
+import { ClipInspector, GraphicsBin, useCatalog } from "./ClipInspector";
+import { SoundPanel } from "./SoundPanel";
+import { EditDirectorPanel } from "./EditDirectorPanel";
+import { applyEdits } from "@/lib/editDirector";
+import { duplicateIn, makeClip, splitAt, touched, trackOf } from "@/lib/clips";
+import { templateDefaults } from "@/lib/templates";
 import { Transcript, clock } from "./Transcript";
 import { Button, Chip, Field, IconButton, ResizeHandle, Segmented, Spinner, useToast } from "./ui";
 
@@ -72,6 +83,8 @@ export interface Draft {
   art_bible: string; // the director's notes that keep every picture in one style
   art_subject: string; // the real subject the pictures must get right (checked in each)
   art_avoid: string; // what the image model must not draw instead
+  clips: Clip[]; // the timeline's graphics and sound effects (seconds from the video's start)
+  tracks: Partial<Record<TrackName, TrackState>>; // the timeline lanes' mute / solo / volume / lock / hide
 }
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
@@ -111,6 +124,8 @@ export function toDraft(
     art_bible: script.art_bible ?? "",
     art_subject: script.art_subject ?? "",
     art_avoid: script.art_avoid ?? "",
+    clips: script.clips ?? [],
+    tracks: script.tracks ?? {},
   };
 }
 
@@ -120,7 +135,8 @@ function planFields(
   scenes: DraftScene[],
 ): Pick<
   VideoScript,
-  "mood" | "key_visual" | "key_scene" | "captions" | "facts" | "sources" | "pinned_comment" | "art_style" | "art_bible" | "art_subject" | "art_avoid"
+  | "mood" | "key_visual" | "key_scene" | "captions" | "facts" | "sources" | "pinned_comment" | "art_style" | "art_bible" | "art_subject" | "art_avoid"
+  | "clips" | "tracks"
 > {
   return {
     mood: d.mood,
@@ -134,6 +150,8 @@ function planFields(
     art_bible: d.art_bible,
     art_subject: d.art_subject,
     art_avoid: d.art_avoid,
+    clips: d.clips,
+    tracks: d.tracks,
   };
 }
 
@@ -179,6 +197,8 @@ function toScript(d: Draft): VideoScript {
       art_seed: s.art_seed,
       motion: s.motion,
       effects: s.effects,
+      calm: s.calm, // the render paces calm scenes; the Edit Director leaves "on"/"off" alone
+      calm_note: s.calm_note,
     })),
     caption: d.caption.trim(),
     hashtags: d.hashtags.split(/[\s,]+/).map((h) => h.replace(/^#/, "")).filter(Boolean),
@@ -305,7 +325,11 @@ export function Storyboard({
   rendering,
   saveState,
   activeUid,
+  activeItem = null,
   onActive,
+  onSelectItem,
+  activeClip = null,
+  onSelectClip,
   onBack,
   onNewDraft,
   onDeleteDraft,
@@ -323,7 +347,11 @@ export function Storyboard({
   rendering: boolean;
   saveState: SaveState;
   activeUid: string | null;
+  activeItem?: ItemRef | null; // a B-roll / text clip of a scene, selected in the timeline or the preview
   onActive: (uid: string, seek?: boolean) => void; // seek: also move the preview's playhead to the scene
+  onSelectItem?: (item: ItemRef) => void; // select a clip (the playhead moves to it)
+  activeClip?: string | null; // a graphic / sound clip on the timeline
+  onSelectClip?: (id: string, seek: boolean) => void;
   onBack: () => void;
   onNewDraft: (draft: Draft, notice: string) => void;
   onDeleteDraft: () => void;
@@ -343,6 +371,7 @@ export function Storyboard({
   const [translating, setTranslating] = useState(false);
   const [leftTab, setLeftTab] = useState<LeftTab>("scenes");
   const [rightTab, setRightTab] = useState<RightTab>("scene");
+  const [planStamp, setPlanStamp] = useState(""); // the Director Plan's story, so the pre-render check follows it
   const [narrowTab, setNarrowTab] = useState<LeftTab | RightTab>("scene");
   const wide = useMinWidth(1024);
   // the side panels can be dragged wider or narrower; the widths are remembered
@@ -391,9 +420,36 @@ export function Storyboard({
   /** Select a scene: the preview jumps to it and the inspector shows it. */
   const activate = (uid: string) => {
     onActive(uid);
+    showInspector();
+  };
+  /** Select a scene's B-roll / text clip: the same, with that clip highlighted in the inspector. */
+  const selectItem = (item: ItemRef) => {
+    onSelectItem?.(item);
+    showInspector();
+  };
+  const selectClip = (id: string, seek: boolean) => {
+    onSelectClip?.(id, seek);
+    showInspector();
+  };
+  const clip = draft.clips.find((c) => c.id === activeClip) ?? null;
+  const cat = useCatalog();
+  /** A new graphic of `template` at the playhead (its default look and length), selected in the inspector. */
+  const addGraphic = (template: string) => {
+    if (trackOf(draft.tracks, "graphics").locked) return toast("The graphics lane is locked: unlock it on the timeline first.", "error");
+    const def = cat?.templates[template];
+    const c = makeClip(draft.clips, "graphics", timeline.now, {
+      template, template_version: def?.version ?? 0, duration: def?.seconds ?? 3, props: templateDefaults(def),
+    });
+    setDraft((d) => ({ ...d, clips: [...d.clips, c] }));
+    selectClip(c.id, false);
+  };
+  const patchClip = (id: string, patch: Partial<Clip>) =>
+    setDraft((d) => ({ ...d, clips: d.clips.map((c) => (c.id === id ? touched({ ...c, ...patch }) : c)) }));
+  function showInspector() {
     setRightTab("scene");
     if (!wide) setNarrowTab("scene");
-  };
+    if (rightPane.collapsed) rightPane.setCollapsed(false); // a selection is never hidden behind a folded panel
+  }
   const removeScene = (i: number) => setDraft((d) => (d.scenes.length > 1 ? { ...d, scenes: d.scenes.filter((_, j) => j !== i) } : d));
   const addScene = () => {
     const s = emptyScene();
@@ -532,6 +588,18 @@ export function Storyboard({
   const activeIndex = Math.max(0, draft.scenes.findIndex((s) => s.uid === activeUid));
   const activeScene = draft.scenes[activeIndex];
 
+  // the scenes the render keeps, with their length on the timeline: what sound suggestions are timed against
+  const soundLengths = draft.scenes
+    .filter((s) => s.narration.trim() || s.seconds)
+    .map((s) => timeline.segments.find((g) => g.scene.uid === s.uid)?.length ?? 0);
+  /** Sound clips added in one edit (one undo step): each at its own start, or at the playhead. */
+  const addSounds = (list: Partial<Clip>[]) =>
+    setDraft((d) => {
+      let clips = d.clips;
+      for (const over of list) clips = [...clips, makeClip(clips, "sfx", over.start ?? timeline.now, over)];
+      return { ...d, clips };
+    });
+
   const audioPanel = (
     <div className="grid gap-4 p-3">
       <div className="grid gap-1">
@@ -632,6 +700,14 @@ export function Storyboard({
           }}
         />
       )}
+      <SoundPanel
+        script={toScript(draft)}
+        lengths={soundLengths}
+        draftId={draft.id ?? ""}
+        musicDuck={trackOf(draft.tracks, "music").duck ?? 1}
+        onMusicDuck={(v) => setDraft((d) => ({ ...d, tracks: { ...d.tracks, music: { ...trackOf(d.tracks, "music"), duck: v } } }))}
+        onAdd={addSounds}
+      />
     </div>
   );
 
@@ -753,6 +829,13 @@ export function Storyboard({
 
   const keptScenes = draft.scenes.filter((s) => s.narration.trim() || s.seconds); // the scenes toScript() renders
   const panels: Record<LeftTab | RightTab, ReactNode> = {
+    media: (
+      <>
+        <MediaBin scenes={draft.scenes} activeUid={activeUid} activeItem={activeItem} onActive={activate} onSelectItem={selectItem} />
+        <h3 className="m-0 border-t border-line px-3 pt-3 text-xs font-semibold tracking-wide text-ink-soft uppercase">Graphics: click to add at the playhead</h3>
+        <GraphicsBin lang={draft.lang} onAdd={addGraphic} />
+      </>
+    ),
     scenes: (
       <SceneBin
         scenes={draft.scenes}
@@ -772,10 +855,12 @@ export function Storyboard({
       </div>
     ),
     director: draft.id ? (
+      <>
       <DirectorPlanPanel
         key={draft.id}
         kind="draft"
         refId={draft.id}
+        onPlan={(p) => setPlanStamp(JSON.stringify([p.planned_by, p.story, p.scenes]))}
         onAssemble={async () => {
           const r = await api.assemblePlan("draft", draft.id!, draft.scenes.map(({ uid: _, ...s }) => s)); // eslint-disable-line @typescript-eslint/no-unused-vars
           // an ordinary edit: it can be undone, and autosave keeps it
@@ -787,13 +872,43 @@ export function Storyboard({
           return r.notes;
         }}
       />
+      <EditDirectorPanel
+        script={toScript(draft)}
+        lengths={soundLengths}
+        draftId={draft.id}
+        hasDirectorEdits={draft.clips.some((c) => c.origin === "director") || draft.scenes.some((sc) => sc.calm === "auto")}
+        onApply={(plan, picked) => {
+          const kept = draft.scenes.filter((sc) => sc.narration.trim() || sc.seconds).map((sc) => sc.uid);
+          setDraft((d) => applyEdits(d, plan, picked, kept).draft); // one edit: Ctrl+Z undoes it all
+          return applyEdits(draft, plan, picked, kept).skipped; // (the updater runs later; the count doesn't depend on it)
+        }}
+        onScene={(k) => {
+          const sc = draft.scenes.filter((x) => x.narration.trim() || x.seconds)[k];
+          if (sc) activate(sc.uid);
+        }}
+      />
+      </>
     ) : (
       <p className="m-0 p-3 text-sm text-ink-soft">The Director Plan shows once the draft is saved.</p>
     ),
     visuals: visualsPanel,
     audio: audioPanel,
     post: postPanel,
-    scene: activeScene ? (
+    scene: clip ? (
+      <ClipInspector
+        key={clip.id}
+        clip={clip}
+        locked={trackOf(draft.tracks, clip.track).locked}
+        onChange={(patch) => patchClip(clip.id, patch)}
+        onSplit={() => setDraft((d) => ({ ...d, clips: splitAt(d.clips, clip.id, timeline.now) }))}
+        onDuplicate={() => {
+          const next = duplicateIn(draft.clips, clip.id);
+          setDraft((d) => ({ ...d, clips: next }));
+          selectClip(next[next.length - 1].id, false);
+        }}
+        onDelete={() => setDraft((d) => ({ ...d, clips: d.clips.filter((c) => c.id !== clip.id) }))}
+      />
+    ) : activeScene ? (
       <ul className="m-0 list-none p-3">
         <SceneCard
           key={activeScene.uid}
@@ -812,6 +927,7 @@ export function Storyboard({
           artStatus={art.status}
           artSubject={{ subject: draft.art_subject, avoid: draft.art_avoid }}
           usedMedia={draft.scenes.filter((o) => o.uid !== activeScene.uid && o.media).map((o) => o.media)}
+          activeItem={activeItem?.uid === activeScene.uid ? activeItem : null}
         />
       </ul>
     ) : null,
@@ -824,6 +940,8 @@ export function Storyboard({
       <div className="p-3">
         <ShortsPreviewCheck
           script={toScript(draft)}
+          draftId={draft.id ?? undefined}
+          planStamp={planStamp}
           lang={draft.lang}
           music={music}
           lengths={keptScenes.map((s) => timeline.segments.find((g) => g.scene.uid === s.uid)?.length ?? 0)}
@@ -927,27 +1045,44 @@ export function Storyboard({
       {wide ? (
         <div className="flex min-h-0 flex-1">
           {/* Project: scenes, script, visuals, audio, post */}
-          <aside aria-label="Project" className="relative flex min-h-0 shrink-0 flex-col border-r border-line bg-paper" style={{ width: leftPane.width }}>
-            <PanelTabs label="Project" value={leftTab} onChange={setLeftTab} items={LEFT_TABS} />
-            <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto">
-              {panels[leftTab]}
-            </div>
-            <ResizeHandle edge="right" label="Resize project panel" width={leftPane.width} min={240} max={560} onResize={leftPane.setWidth} onReset={leftPane.reset} />
-          </aside>
+          {leftPane.collapsed ? (
+            <PanelRail side="left" label="Project" items={LEFT_TABS} onOpen={(t) => { setLeftTab(t); leftPane.setCollapsed(false); }} />
+          ) : (
+            <aside aria-label="Project" className="relative flex min-h-0 shrink-0 flex-col border-r border-line bg-paper" style={{ width: leftPane.width }}>
+              <PanelTabs label="Project" value={leftTab} onChange={setLeftTab} items={LEFT_TABS} />
+              <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto">
+                {panels[leftTab]}
+              </div>
+              <ResizeHandle edge="right" label="Resize project panel" width={leftPane.width} min={240} max={560} onResize={leftPane.setWidth} onReset={leftPane.reset} />
+            </aside>
+          )}
 
           {/* Stage */}
-          <section aria-label="Preview" className="min-w-0 flex-1 bg-sunken">
+          <section aria-label="Preview" className="relative min-w-0 flex-1 bg-sunken">
             {stage}
+            {/* fold the side panels away for a bigger preview (remembered); a selection opens the inspector again */}
+            <div className="absolute top-1 right-2 flex gap-0.5">
+              <IconButton label={leftPane.collapsed ? "Show the project panel" : "Hide the project panel"} aria-pressed={!leftPane.collapsed} onClick={() => leftPane.setCollapsed(!leftPane.collapsed)}>
+                {leftPane.collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+              </IconButton>
+              <IconButton label={rightPane.collapsed ? "Show the inspector" : "Hide the inspector"} aria-pressed={!rightPane.collapsed} onClick={() => rightPane.setCollapsed(!rightPane.collapsed)}>
+                {rightPane.collapsed ? <PanelRightOpen className="size-4" /> : <PanelRightClose className="size-4" />}
+              </IconButton>
+            </div>
           </section>
 
           {/* Inspector: the selected scene, the caption look, the finished video */}
-          <aside aria-label="Inspector" className="relative flex min-h-0 shrink-0 flex-col border-l border-line bg-paper" style={{ width: rightPane.width }}>
-            <PanelTabs label="Inspector" value={inspectorTab} onChange={setRightTab} items={rightTabs} />
-            <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto">
-              {panels[inspectorTab]}
-            </div>
-            <ResizeHandle edge="left" label="Resize inspector" width={rightPane.width} min={300} max={560} onResize={rightPane.setWidth} onReset={rightPane.reset} />
-          </aside>
+          {rightPane.collapsed ? (
+            <PanelRail side="right" label="Inspector" items={rightTabs} onOpen={(t) => { setRightTab(t); rightPane.setCollapsed(false); }} />
+          ) : (
+            <aside aria-label="Inspector" className="relative flex min-h-0 shrink-0 flex-col border-l border-line bg-paper" style={{ width: rightPane.width }}>
+              <PanelTabs label="Inspector" value={inspectorTab} onChange={setRightTab} items={rightTabs} />
+              <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto">
+                {panels[inspectorTab]}
+              </div>
+              <ResizeHandle edge="left" label="Resize inspector" width={rightPane.width} min={300} max={560} onResize={rightPane.setWidth} onReset={rightPane.reset} />
+            </aside>
+          )}
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -961,16 +1096,17 @@ export function Storyboard({
         </div>
       )}
 
-      <Timeline draft={draft} setDraft={setDraft} timeline={timeline} onActive={activate} activeUid={activeUid} />
+      <Timeline draft={draft} setDraft={setDraft} timeline={timeline} onActive={activate} activeUid={activeUid} activeItem={activeItem} onSelectItem={selectItem} activeClip={activeClip} onSelectClip={selectClip} />
     </div>
   );
 }
 
-type LeftTab = "scenes" | "script" | "director" | "visuals" | "audio" | "post";
+type LeftTab = "scenes" | "media" | "script" | "director" | "visuals" | "audio" | "post";
 type RightTab = "scene" | "captions" | "check" | "export";
 
 const LEFT_TABS: { value: LeftTab; label: string; icon: ReactNode }[] = [
   { value: "scenes", label: "Scenes", icon: <ListVideo className="size-4" /> },
+  { value: "media", label: "Media", icon: <Film className="size-4" /> },
   { value: "script", label: "Script", icon: <ScrollText className="size-4" /> },
   { value: "director", label: "Director", icon: <Clapperboard className="size-4" /> },
   { value: "visuals", label: "Visuals", icon: <Palette className="size-4" /> },
@@ -1007,7 +1143,7 @@ function PanelTabs<T extends string>({
             role="tab"
             aria-selected={active}
             onClick={() => onChange(it.value)}
-            className={`-mb-px flex min-w-[56px] flex-1 cursor-pointer flex-col items-center gap-0.5 border-b-2 bg-transparent px-1 pt-2 pb-1.5 text-2xs font-semibold transition-colors ${
+            className={`-mb-px flex min-w-[40px] flex-1 cursor-pointer flex-col items-center gap-0.5 border-b-2 bg-transparent px-1 pt-2 pb-1.5 text-2xs font-semibold transition-colors ${
               active ? "border-cobalt text-ink" : "border-transparent text-ink-soft hover:text-ink"
             }`}
           >
@@ -1148,5 +1284,98 @@ function SceneBin({
         Add scene
       </Button>
     </div>
+  );
+}
+
+/** A side panel folded to a slim rail: its tabs as icons (each opens the panel on that tab), and a button to open it. */
+function PanelRail<T extends string>({
+  side,
+  label,
+  items,
+  onOpen,
+}: {
+  side: "left" | "right";
+  label: string;
+  items: { value: T; label: string; icon: ReactNode }[];
+  onOpen: (tab: T) => void;
+}) {
+  return (
+    <nav aria-label={`${label} (hidden)`} className={`flex w-11 shrink-0 flex-col items-center gap-1 bg-panel py-1 ${side === "left" ? "border-r" : "border-l"} border-line`}>
+      <IconButton label={`Show the ${label.toLowerCase()} panel`} onClick={() => onOpen(items[0].value)}>
+        {side === "left" ? <PanelLeftOpen className="size-4" /> : <PanelRightOpen className="size-4" />}
+      </IconButton>
+      {items.map((it) => (
+        <IconButton key={it.value} label={it.label} onClick={() => onOpen(it.value)}>
+          {it.icon}
+        </IconButton>
+      ))}
+    </nav>
+  );
+}
+
+/** Every footage file the draft uses (main clips, bottom clips of split scenes, B-roll), each with where it's used:
+ *  click a use to select that scene or clip. */
+function MediaBin({
+  scenes,
+  activeUid,
+  activeItem,
+  onActive,
+  onSelectItem,
+}: {
+  scenes: DraftScene[];
+  activeUid: string | null;
+  activeItem: ItemRef | null;
+  onActive: (uid: string) => void;
+  onSelectItem: (item: ItemRef) => void;
+}) {
+  type Use = { label: string; uid: string; item?: ItemRef };
+  const files = new Map<string, Use[]>();
+  const add = (media: string | undefined, use: Use) => media && files.set(media, [...(files.get(media) ?? []), use]);
+  scenes.forEach((s, i) => {
+    add(s.media, { label: `Scene ${i + 1}`, uid: s.uid });
+    if (s.layout === "split") add(s.media2, { label: `Scene ${i + 1} · bottom`, uid: s.uid });
+    (s.broll ?? []).forEach((b, k) => add(b.media, { label: `Scene ${i + 1} · B-roll ${k + 1}`, uid: s.uid, item: { uid: s.uid, list: "broll", k } }));
+  });
+  if (!files.size)
+    return (
+      <p className="m-0 p-3 text-sm text-ink-soft">
+        No footage picked yet. Pick it for a scene in the Scene inspector, or let the Director tab find footage for the whole video.
+      </p>
+    );
+  return (
+    <ul aria-label="Footage in this video" className="m-0 grid list-none gap-1 p-2">
+      {[...files].map(([media, uses]) => (
+        <li key={media} className="flex items-start gap-2.5 rounded-lg p-1.5">
+          <span className="relative aspect-[9/16] w-10 shrink-0 overflow-hidden rounded bg-media">
+            <SceneThumb media={media} />
+          </span>
+          <span className="grid min-w-0 flex-1 gap-1">
+            <span className="truncate text-sm font-semibold text-ink" title={media}>
+              {media.split(/[\/]/).pop()}
+            </span>
+            <span className="flex flex-wrap gap-1">
+              {uses.map((u) => {
+                const on = u.item
+                  ? activeItem?.uid === u.uid && activeItem.list === u.item.list && activeItem.k === u.item.k
+                  : u.uid === activeUid && !activeItem;
+                return (
+                  <button
+                    key={u.label}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => (u.item ? onSelectItem(u.item) : onActive(u.uid))}
+                    className={`cursor-pointer rounded border px-1.5 py-0.5 text-2xs font-semibold ${
+                      on ? "border-cobalt bg-cobalt/10 text-ink" : "border-line bg-transparent text-ink-soft hover:text-ink"
+                    }`}
+                  >
+                    {u.label}
+                  </button>
+                );
+              })}
+            </span>
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }

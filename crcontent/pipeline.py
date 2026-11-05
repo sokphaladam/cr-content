@@ -2163,14 +2163,15 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
         still = picked[i] is not None and picked[i].suffix.lower() in IMAGE_EXTS
         # pacing: a hit on the punchy words (and always one in the hook, within its first 2 s), and cuts to new
         # framings so a picture never sits unchanged for more than ~2 s (moving footage needs fewer)
-        impacts = pacing.impacts(words, scene.impacts, length, hook=i == 0)
-        cuts = pacing.cuts(length, impacts, pacing.CUT_EVERY if still else 2.6) if not broll else []
+        calm = scene.calm in ("auto", "on")  # an explanation or a held reveal: only marked hits, slower re-framing
+        impacts = pacing.impacts(words, scene.impacts, length, hook=i == 0, auto=not calm)
+        cuts = pacing.cuts(length, impacts, (pacing.CUT_EVERY if still else 2.6) * (1.8 if calm else 1)) if not broll else []
         hits += [scene_at + t for t in impacts]
         scene_at += length
         if still and scene.layout == "fill" and not broll and fx.available():
             # pictures get a real camera move (3D parallax where planned) and effects instead of a flat zoom
             # no vignette on the opening shot: it should look bright in the feed
-            effects = [*(e for e in base_fx if not (i == 0 and e == "vignette")), *scene.effects]
+            effects = [*(e for e in base_fx if not (i == 0 and e == "vignette")), *(e for e in scene.effects if not (calm and e == "flash"))]
             if art_style and picked[i].parent.name != "gen":
                 # a real photo (in place of a drawing that got the subject wrong): the drawing's anime effects
                 # (sparkles, speed lines, glow) look fake on it; keep only the flash (no film grain: it muddies the
@@ -2180,7 +2181,7 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
                            effects=effects,
                            voice=mp3, seed=i, impacts=impacts, cuts=cuts, focus=subject_focus(picked[i]),
                            # flash = a hard cut into the scene; never on the opening frame (it's what the feed shows)
-                           beats=[0.0] if "flash" in scene.effects and i > 0 else [])
+                           beats=[0.0] if "flash" in scene.effects and i > 0 and not calm else [])
         else:
             render_scene(picked[i], mp3, length, clip, start=max(scene.media_start, 0.0), layout=scene.layout,
                          footage2=second.get(i), broll=broll, bright=i == 0, impacts=impacts, cuts=cuts,
@@ -2203,13 +2204,44 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
     _install_font(profile, work / "fonts")
     if style.font:
         _install_font(profile, work / "fonts", style.font_file(lang))
+    # the timeline's graphics clips (M4), laid over the picture at the times the editor shows them
+    from . import timeline
+    from .shorts import motion
+    from .styles import font_path
+
+    picture = "joined.mp4"
+    left_out: dict[str, str] = {}  # clip id -> why it isn't in the video (recorded for the final inspector)
+
+    def frame_at(sec: float) -> str:  # a freeze-frame spotlight holds the picture as it is there
+        still = work / f"freeze_{sec:.2f}.jpg"
+        try:
+            run(["ffmpeg", "-y", "-v", "error", "-ss", f"{sec:.3f}", "-i", str(work / "joined.mp4"), "-frames:v", "1",
+                        "-q:v", "2", str(still)])
+            return motion._data_url(still, "image/jpeg")
+        except (RuntimeError, OSError):
+            log(f"      ! couldn't take the frame at {sec:.1f} s for a spotlight; it spotlights the moving picture")
+            return ""
+
+    todo = timeline.graphic_clips(script, t, motion.font_url(font_path(style.font_file(lang) if style.font else profile.font_file)),
+                                  log, frame_at, left_out)
+    if todo:
+        drawn = motion.overlay(work, picture, todo, log)
+        if drawn:
+            picture = drawn
+        else:
+            log(f"      ! {len(todo)} timeline graphic(s) couldn't be drawn and are NOT in this video: "
+                f"{', '.join(c['clip'] for c in todo)}")
+            left_out.update({c["clip"]: "Remotion couldn't draw it (see the render log)" for c in todo})
+            todo = []
 
     # 5. Final render + post metadata
     log("[5/5] Final render")
     final = job / "video.mp4"
     track = pick_music(music, script.mood)
-    finalize(work, "joined.mp4", "captions.ass", final, track,
-             effects=sfx.impact_track(pacing.sound_times(hits)) + cut_sounds,
+    lanes = timeline.mix(script)
+    finalize(work, picture, "captions.ass", final, track if lanes["music_on"] else None,
+             music_volume=lanes["music_volume"], voice_gain=lanes["voice_gain"], music_duck=lanes["music_duck"],
+             effects=sfx.impact_track(pacing.sound_times(hits)) + cut_sounds + timeline.sound_events(script, t, log, left_out),
              animation=bool(art_style))  # drawn scenes: x264 tuned for flat colour and line art
     try:
         if 1 <= script.key_scene <= len(clips):  # the cover shows the key visual
@@ -2238,13 +2270,20 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
 
     meta = _meta(job)
     meta["music"] = track.name if track else ""  # its credit goes into the description (music.credit)
+    used = timeline.sounds_used(script, t)  # imported sounds keep their licence and credit with the video
+    # what of the editor's timeline is in this video, for the final inspector's draft-to-render check
+    meta["timeline"] = {"length": round(t, 3), "graphics": {c["clip"]: [c["at"], c["props"]["seconds"]] for c in todo},
+                        "sounds": [c.id for c in script.clips if c.track == "sfx" and c.id not in left_out],
+                        "left_out": left_out}
+    meta["sounds"] = [{"name": n, **(sfx.user_info(n[5:]) or {})} if n.startswith("user:") else {"name": n, "licence": sfx.SYNTH_LICENCE}
+                      for n in dict.fromkeys(used)]
     _save_meta(job, meta)
     tags = " ".join(f"#{h}" for h in script.hashtags)
     from .commons import credit as photo_credit
 
     shown = [*picked, *second.values(), *(_existing(b.media) for s in script.scenes for b in s.broll)]
     photos = [photo_credit(p) for p in shown if p]  # downloaded photos and clips whose licence asks for a credit
-    (job / "post.txt").write_text(post_body(script.title, script.caption, tags, track, script.sources, photos),
-                                  encoding="utf-8")
+    (job / "post.txt").write_text(post_body(script.title, script.caption, tags, track, script.sources,
+                                            photos + sfx.credits(used)), encoding="utf-8")
     log(f"Done: {final}  ({t:.1f}s)")
     return final

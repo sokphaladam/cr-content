@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowDown, ArrowUp, Clapperboard, Film, ImageIcon, Palette, Pause, Play, Search, Sparkles, Trash2, Type, Upload, X } from "lucide-react";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api, fileUrl, type ArtStatus, type ArtStyle, type ArtSubject, type BRoll, type Lang, type Scene, type StockResult, type TextOverlay } from "@/lib/api";
 import { isImagePath } from "@/lib/format";
 import { ScenePicture } from "./ArtControls";
@@ -263,7 +263,7 @@ const PICK_TITLE: Record<PickTarget, string> = { media: "this scene", media2: "t
 const NEW_TEXT: TextOverlay = { text: "", at: 0, duration: 2, x: 0.5, y: 0.4, size: "m", color: "#FFFFFF", box: false };
 
 /** Seconds field for an overlay's start or length. */
-function SecondsInput({ label, value, onChange, min = 0 }: { label: string; value: number; onChange: (v: number) => void; min?: number }) {
+export function SecondsInput({ label, value, onChange, min = 0 }: { label: string; value: number; onChange: (v: number) => void; min?: number }) {
   return (
     <label className="flex items-center gap-1 text-sm text-ink-soft">
       {label}
@@ -296,6 +296,7 @@ export function SceneCard({
   artStatus = null,
   artSubject,
   usedMedia,
+  activeItem = null,
 }: {
   scene: DraftScene;
   index: number;
@@ -311,6 +312,7 @@ export function SceneCard({
   artStyle?: ArtStyle | ""; // the draft draws its scenes in this look ("" = stock footage)
   artSubject?: ArtSubject; // the video's real subject, checked in every picture that shows it
   usedMedia?: string[]; // what the other scenes show
+  activeItem?: { list: "broll" | "texts"; k: number } | null; // the clip selected in the timeline or preview
   artStatus?: ArtStatus | null;
 }) {
   const [pickFor, setPickFor] = useState<PickTarget | null>(null);
@@ -318,6 +320,12 @@ export function SceneCard({
   const setStatus = (text: string, error = false) => setStatusState({ text, error });
   const finder = useFinder(setStatus);
   const hook = index === 0;
+  const itemId = (list: "broll" | "texts", k: number) => `item-${scene.uid}-${list}-${k}`;
+  const isActive = (list: "broll" | "texts", k: number) => activeItem?.list === list && activeItem.k === k;
+  useEffect(() => {
+    if (activeItem) document.getElementById(itemId(activeItem.list, activeItem.k))?.scrollIntoView({ block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- itemId only reads scene.uid
+  }, [activeItem?.list, activeItem?.k, scene.uid]);
   const layout = scene.layout ?? "fill";
   const broll = scene.broll ?? [];
   const texts = scene.texts ?? [];
@@ -454,6 +462,17 @@ export function SceneCard({
           <ScenePicture scene={scene} style={artStyle} status={artStatus} subject={artSubject} used={usedMedia} onChange={onChange} />
         )}
 
+        <label className="flex flex-wrap items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="size-4 accent-cobalt"
+            checked={scene.calm === "auto" || scene.calm === "on"}
+            onChange={(e) => onChange({ calm: e.target.checked ? "on" : "off", calm_note: "" })}
+          />
+          Calm scene <span className="text-xs text-ink-soft">no automatic hits or flash, slower re-framing (in the render)</span>
+          {scene.calm === "auto" && scene.calm_note && <span className="basis-full text-xs text-ink-soft">Edit Director: {scene.calm_note}</span>}
+        </label>
+
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <span className="field-label">Layout</span>
           <Segmented
@@ -515,7 +534,7 @@ export function SceneCard({
         {broll.length > 0 && (
           <ul aria-label="B-roll" className="m-0 grid list-none gap-1.5 p-0">
             {broll.map((b, k) => (
-              <li key={k} className="flex flex-wrap items-center gap-2 rounded-lg bg-sunken px-2 py-1.5">
+              <li key={k} id={itemId("broll", k)} aria-current={isActive("broll", k) || undefined} className={`flex flex-wrap items-center gap-2 rounded-lg bg-sunken px-2 py-1.5 ${isActive("broll", k) ? "ring-2 ring-cobalt" : ""}`}>
                 <span className="h-9 w-6 shrink-0 overflow-hidden rounded bg-media">
                   {isImagePath(b.media) ? (
                     // eslint-disable-next-line @next/next/no-img-element -- local engine file
@@ -524,7 +543,7 @@ export function SceneCard({
                     <video src={`${fileUrl(b.media)}#t=0.5`} muted preload="metadata" className="h-full w-full object-cover" />
                   )}
                 </span>
-                <span className="text-sm font-semibold">B-roll</span>
+                <span className="text-sm font-semibold">B-roll {k + 1}</span>
                 <SecondsInput label="at" value={b.at} onChange={(v) => setBroll(k, { at: v })} />
                 <SecondsInput label="for" value={b.duration} min={0.2} onChange={(v) => setBroll(k, { duration: v })} />
                 <IconButton label="Remove this B-roll" tone="danger" onClick={() => onChange({ broll: broll.filter((_, j) => j !== k) })}>
@@ -538,7 +557,7 @@ export function SceneCard({
         {texts.length > 0 && (
           <ul aria-label="Text on screen" className="m-0 grid list-none gap-1.5 p-0">
             {texts.map((t, k) => (
-              <li key={k} className="grid gap-1.5 rounded-lg bg-sunken px-2 py-1.5">
+              <li key={k} id={itemId("texts", k)} aria-current={isActive("texts", k) || undefined} className={`grid gap-1.5 rounded-lg bg-sunken px-2 py-1.5 ${isActive("texts", k) ? "ring-2 ring-cobalt" : ""}`}>
                 <div className="flex items-center gap-2">
                   <input
                     lang={lang}

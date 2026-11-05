@@ -277,43 +277,72 @@ def _gain(measured: float, target: float, most: float = 24.0) -> float:
 
 
 def _mix_audio(workdir: Path, video_name: str, music: Path | None, music_volume: float,
-               soundtrack: Path | None, effects: list[tuple[Path, float, float]]) -> str:
+               soundtrack: Path | None, effects: list[tuple], voice_gain: float = 1.0, music_duck: float = 1.0) -> str:
     """Mix the voice (the video's own audio), ducked music and sound effects, or a music video's song, into a WAV
     at TARGET_LUFS. Returns its name in workdir."""
     raw, final = "mix_raw.wav", "mix.wav"
     stereo = "aresample=44100,aformat=channel_layouts=stereo"
     cmd = ["ffmpeg", "-y", "-hide_banner"]
+    clips: list[int] = []
     if soundtrack:
         cmd += ["-i", str(soundtrack.resolve()), "-filter_complex", f"[0:a]{stereo}[a]"]
     else:
-        voice_db = _gain(loudness(workdir / video_name), VOICE_LUFS)
-        parts = [f"[0:a]{stereo},volume={voice_db:.2f}dB[voice]"]
+        voice_db = _gain(loudness(workdir / video_name), VOICE_LUFS) + (20 * math.log10(voice_gain) if voice_gain > 0 else -120)
         cmd += ["-i", video_name]
+        clips = [k for k, e in enumerate(effects) if len(e) > 3 and e[3]]  # timeline clips (timeline.sound_events)
+        duckers = [k for k in clips if effects[k][3].get("duck")]       # ...that dip the music while they play
+        duck_music = music is not None and music_duck > 0
+        # the voice, and copies of it as the key that ducks the music and keeps timeline sounds under the voice
+        keys = (["[mkey]"] if duck_music else []) + (["[vkey]"] if clips else [])
+        split = f",asplit={1 + len(keys)}[voice]{''.join(keys)}" if keys else "[voice]"
+        parts = [f"[0:a]{stereo},volume={voice_db:.2f}dB{split}"]
         mixed = ["[voice]"]
         if music:
             # music_volume (0.25 by default, as before) nudges the level around MUSIC_BELOW
             music_db = _gain(loudness(music), VOICE_LUFS - MUSIC_BELOW) + 20 * math.log10(max(music_volume, 0.01) / 0.25)
             cmd += ["-stream_loop", "-1", "-i", str(music.resolve())]
-            parts[0] = f"[0:a]{stereo},volume={voice_db:.2f}dB,asplit=2[voice][key]"
-            parts += [f"[1:a]{stereo},volume={music_db:.2f}dB[bg]",
-                      "[bg][key]sidechaincompress=threshold=0.03:ratio=6:attack=15:release=350[duck]"]
-            mixed.append("[duck]")
-        for k, (path, at, vol) in enumerate(effects):
+            parts.append(f"[1:a]{stereo},volume={music_db:.2f}dB[bg]")
+            mixed.append("[duck]" if duck_music else "[bg]")
+        for k, (path, at, vol, *rest) in enumerate(effects):
             idx = (2 if music else 1) + k  # inputs: 0 the video, 1 the music (if any), then the effects
             cmd += ["-i", str(path.resolve())]
             ms = max(round(at * 1000), 0)
+            cut = ""
+            if rest and (o := rest[0]):
+                # a timeline clip: its trimmed part of the sound, faded in and out; never less than 5 ms each way, so a
+                # sound cut mid-wave starts and stops without a click
+                fi, fo = max(o["fade_in"], 0.005), max(o["fade_out"], 0.005)
+                cut = (f"atrim=start={o['in']:.3f}:duration={o['dur']:.3f},asetpts=PTS-STARTPTS,"
+                       f"afade=t=in:d={fi:.3f},afade=t=out:st={max(o['dur'] - fo, 0):.3f}:d={fo:.3f},")
             # effects sit at voice level, a little under it (vol 1 = the hook's hit)
-            parts.append(f"[{idx}:a]{stereo},adelay={ms}|{ms},volume={vol * 0.55:.3f}[fx{k}]")
-            mixed.append(f"[fx{k}]")
+            out = f"[fx{k}][dk{k}]" if k in duckers and duck_music else f"[fx{k}]"
+            parts.append(f"[{idx}:a]{stereo},{cut}adelay={ms}|{ms},volume={vol * 0.55:.3f}" + (f",asplit=2{out}" if "dk" in out else out))
+            if k not in clips:
+                mixed.append(f"[fx{k}]")
+        if clips:
+            # the voice comes first: timeline sounds dip a little (at most ~6 dB) while it speaks
+            bus = "".join(f"[fx{k}]" for k in clips)
+            parts.append(f"{bus}amix=inputs={len(clips)}:normalize=0[clipbus]" if len(clips) > 1 else f"{bus}anull[clipbus]")
+            parts.append("[clipbus][vkey]sidechaincompress=threshold=0.05:ratio=3:attack=10:release=250[clipduck]")
+            mixed.append("[clipduck]")
+        if duck_music:
+            # the music dips under the voice (and under timeline sounds marked to duck it); music_duck 1 = ratio 6
+            key = "[mkey]" + "".join(f"[dk{k}]" for k in duckers)
+            if duckers:
+                parts.append(f"{key}amix=inputs={1 + len(duckers)}:normalize=0[mkeys]")
+                key = "[mkeys]"
+            parts.append(f"[bg]{key}sidechaincompress=threshold=0.03:ratio={1 + 5 * music_duck:.2f}:attack=15:release=350[duck]")
         if len(mixed) > 1:
             parts.append(f"{''.join(mixed)}amix=inputs={len(mixed)}:duration=first:normalize=0[a]")
         else:
-            parts[-1] = parts[-1].rsplit("[", 1)[0] + "[a]"
+            parts[0] = parts[0].replace("[voice]", "[a]")
         cmd += ["-filter_complex", ";".join(parts)]
     run([*cmd, "-map", "[a]", "-c:a", "pcm_s16le", raw], cwd=workdir)
     # the finished mix to TARGET_LUFS, its peaks limited (the gain is measured, so it's exact rather than pumping)
     gain = _gain(loudness(workdir / raw), TARGET_LUFS)
-    limit = 10 ** (TRUE_PEAK / 20)
+    # timeline sounds' sharp attacks overshoot between samples once AAC-encoded (measured -0.9 dBTP against the
+    # limit's -1.0): 0.5 dB more headroom for those mixes only; other Shorts and music videos are limited as before
+    limit = 10 ** ((TRUE_PEAK - (0.5 if clips else 0)) / 20)
     run(["ffmpeg", "-y", "-hide_banner", "-i", raw, "-af",
          f"volume={gain:.2f}dB,alimiter=limit={limit:.4f}:attack=5:release=60:level=false",
          "-c:a", "pcm_s16le", final], cwd=workdir)
@@ -344,13 +373,17 @@ def _size(path: Path) -> tuple[int, int]:
 
 def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
              music: Path | None, music_volume: float = 0.25, soundtrack: Path | None = None,
-             fade_out: float = 0.0, effects: list[tuple[Path, float, float]] = (), progress=None,
-             animation: bool = False, out_size: tuple[int, int] | None = None, encoder: str = "x264") -> None:
+             fade_out: float = 0.0, effects: list[tuple] = (), progress=None,
+             animation: bool = False, out_size: tuple[int, int] | None = None, encoder: str = "x264",
+             voice_gain: float = 1.0, music_duck: float = 1.0) -> None:
     """Burn captions, mix the audio (voice, ducked music, sound effects) at -14 LUFS, and write a web-optimized mp4.
 
     soundtrack replaces the video's own audio entirely (a music video's song); music is then ignored.
     fade_out: seconds the picture fades to black at the end (a music video's outro).
-    effects: (sound file, start second, volume) sound effects (sfx.impact_track).
+    effects: (sound file, start second, volume) sound effects (sfx.impact_track), optionally with a 4th item
+    {in, dur, fade_in, fade_out} for a timeline clip (timeline.sound_events).
+    voice_gain: the voice lane's volume (0 = muted) before the mix is brought to TARGET_LUFS.
+    music_duck: how far the music dips under the voice, 0 (not at all) to 1 (the default, ratio 6).
     progress: called with 0..1 during the final encode (minutes for a full song).
     animation: tune the encoder for drawn pictures (flat colour, hard lines: anime, cartoons).
     out_size: (width, height) to upload at, when it differs from the video's: the picture is scaled first (Lanczos)
@@ -368,7 +401,7 @@ def finalize(workdir: Path, video_name: str, ass_name: str, out: Path,
         vf += f",fade=t=out:st={max(length - fade_out, 0):.3f}:d={fade_out:.3f}"
     # tag the frames BT.709 (the encoder's -colorspace options alone don't reach frames that went through filters)
     vf += ",setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv"
-    mix = _mix_audio(workdir, video_name, music, music_volume, soundtrack, list(effects))
+    mix = _mix_audio(workdir, video_name, music, music_volume, soundtrack, list(effects), voice_gain, music_duck)
     cmd = ["ffmpeg", "-y", "-hide_banner", "-i", video_name, "-i", mix,
            "-filter_complex", f"[0:v]{vf}[v]", "-map", "[v]", "-map", "1:a"]
     # the one encode that matters (the shots are near-lossless intermediates): quality-based at crf 16, slow preset,

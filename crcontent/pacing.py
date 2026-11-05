@@ -23,19 +23,21 @@ def _clean(word: str) -> str:
     return re.sub(r"[^\w']", "", word).lower()
 
 
-def impacts(words: list, marked: list[str] | None = None, length: float = 0.0, hook: bool = False) -> list[float]:
+def impacts(words: list, marked: list[str] | None = None, length: float = 0.0, hook: bool = False,
+            auto: bool = True) -> list[float]:
     """Seconds (from the scene's start) to hit: the punchy words (IMPACT_WORDS, plus `marked`, the words the script
-    marked), at most MAX_IMPACTS, IMPACT_GAP apart. The hook scene always gets one within HOOK_BY seconds."""
+    marked), at most MAX_IMPACTS, IMPACT_GAP apart. The hook scene always gets one within HOOK_BY seconds.
+    auto=False (a calm scene): only the marked words, no punchy-word or hook hits."""
     marked_set = {_clean(w) for w in marked or [] if w.strip()}
     hits: list[float] = []
     for w in words:
         word = _clean(w.text)
-        if word and (word in marked_set or IMPACT_WORDS.match(word)):
+        if word and (word in marked_set or (auto and IMPACT_WORDS.match(word))):
             t = round(max(w.start, 0.0), 2)
             if not hits or t - hits[-1] >= IMPACT_GAP:
                 hits.append(t)
     hits = hits[:MAX_IMPACTS]
-    if hook and not any(t <= HOOK_BY for t in hits):
+    if hook and auto and not any(t <= HOOK_BY for t in hits):
         early = HOOK_FALLBACK if length <= 0 else min(HOOK_FALLBACK, length / 3)
         hits = [early] + [t for t in hits if t - early >= IMPACT_GAP][:MAX_IMPACTS - 1]
     return [t for t in hits if length <= 0 or t < length - 0.15]

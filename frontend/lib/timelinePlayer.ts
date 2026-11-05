@@ -15,6 +15,7 @@ export class TimelinePlayer {
   private segs: PlayerSegment[] = [];
   private pad = 0.25;
   private audio: HTMLAudioElement | null = null;
+  private volume = 1; // the voice lane's level (0 = muted / not soloed)
   private mode: "stopped" | "audio" | "silent" | "pad" = "stopped";
   private i = 0;
   private since = 0;
@@ -50,6 +51,11 @@ export class TimelinePlayer {
     else this.onPos(i, t);
   }
 
+  setVolume(v: number) {
+    this.volume = Math.min(Math.max(v, 0), 1);
+    if (this.audio) this.audio.volume = this.volume;
+  }
+
   stop() {
     cancelAnimationFrame(this.frame);
     this.mode = "stopped";
@@ -74,6 +80,7 @@ export class TimelinePlayer {
     this.onPos(i, t);
     if (seg.key) {
       this.audio ??= new Audio();
+      this.audio.volume = this.volume;
       const src = this.url(seg.key);
       if (this.audio.src !== src) this.audio.src = src;
       this.audio.currentTime = t;

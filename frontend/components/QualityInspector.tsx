@@ -13,6 +13,13 @@ const STATUS = {
   not_checked: { label: "Not checked", icon: CircleDashed, tone: "text-ink-soft" },
 } as const;
 const ORDER = { fail: 0, warning: 1, not_checked: 2, pass: 3 };
+const METHODS = {
+  measured: "measured from the project or its media",
+  heuristic: "a rule of thumb: advice, it may be deliberate",
+  inferred: "rules over the story beats the AI Director labelled",
+  ai: "AI-assisted: a suggestion to weigh, not a verified fact",
+  not_checked: "not checked",
+} as const;
 const VERDICT = {
   render: {
     fail: "Blocking problems found: fix and render again before uploading.",
@@ -115,6 +122,9 @@ export function QualityReportView({ report, total, onSelect, onReview, onApply, 
             <img src={`${API_BASE}${report.base}/${pick.evidence}?r=${encodeURIComponent(report.created)}`} alt={`Frame at ${clock(pick.start ?? 0)}`} className="max-h-48 w-fit rounded bg-media" />
           )}
           {pick.description && <p className="m-0 text-sm whitespace-pre-wrap text-ink-soft">{pick.description}</p>}
+          {pick.method && pick.method !== "not_checked" && (
+            <p className="m-0 text-2xs text-ink-soft">How it was checked: {METHODS[pick.method]}</p>
+          )}
           {pick.reopened && <p className="m-0 text-sm font-semibold text-warn">You marked this fixed, but the latest check still finds it.</p>}
           {onReview && !report.archived && (pick.status === "warning" || pick.status === "fail") && (
             <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Mark this issue">

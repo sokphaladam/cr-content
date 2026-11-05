@@ -32,6 +32,7 @@ import {
   settingsOf,
   type PreviewView,
 } from "@/components/PreviewPane";
+import type { ItemRef } from "@/components/LivePreview";
 import { LyricsTiming } from "@/components/LyricsTiming";
 import { NavRail, type AppView } from "@/components/NavRail";
 import { Settings } from "@/components/Settings";
@@ -84,6 +85,10 @@ function Studio() {
   const [draft, setDraftState] = useState<Draft | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [activeUid, setActiveUid] = useState<string | null>(null);
+  // a B-roll / text clip of a scene, selected in the timeline or the preview (null: the scene itself)
+  const [activeItem, setActiveItem] = useState<ItemRef | null>(null);
+  // a graphic / sound clip on the timeline (M4); selecting a scene or a scene's clip clears it
+  const [activeClip, setActiveClip] = useState<string | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
   const [detail, setDetail] = useState<VideoDetail | null>(null);
   const [previewView, setPreviewView] = useState<PreviewView>("scene");
@@ -138,6 +143,26 @@ function Studio() {
   useEffect(() => {
     if (playheadUid) setActiveUid(playheadUid);
   }, [playheadUid]);
+  /** Select a scene's B-roll / text clip: its scene becomes the active one and the inspector shows it; `seek` also
+   *  moves the playhead to where the clip starts (not when it was picked on the preview, where it already shows). */
+  function selectItem(item: ItemRef, seek: boolean) {
+    setActiveUid(item.uid);
+    setActiveItem(item);
+    setActiveClip(null);
+    setPreviewView("scene");
+    const seg = timeline.segments.find((g) => g.scene.uid === item.uid);
+    const clip = draft?.scenes.find((s) => s.uid === item.uid)?.[item.list]?.[item.k];
+    if (seek && seg && clip) timeline.seekTime(seg.start + Math.min(clip.at + 0.05, Math.max(seg.length - 0.05, 0)));
+  }
+
+  /** Select a graphic / sound clip; `seek` also moves the playhead to where it starts. */
+  function selectClip(id: string, seek: boolean) {
+    setActiveClip(id);
+    setActiveItem(null);
+    setPreviewView("scene");
+    const clip = draft?.clips.find((c) => c.id === id);
+    if (seek && clip) timeline.seekTime(clip.start + 0.01);
+  }
 
   // Autosave bookkeeping. Saves run one after another so a burst of edits can't create duplicate drafts.
   const draftId = useRef<string | null>(null);
@@ -193,10 +218,17 @@ function Studio() {
     window.addEventListener("keydown", onKey);
     // a drag (caption, text, timeline) is one step however many edits it made
     const seal = () => history.seal();
+    // a shortcut (split, duplicate, delete, nudge) is a step of its own; typing in a field still groups
+    const sealKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (!el || !(el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) history.seal();
+    };
     window.addEventListener("pointerup", seal);
+    window.addEventListener("keyup", sealKey);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerup", seal);
+      window.removeEventListener("keyup", sealKey);
     };
   }, [step, history]);
 
@@ -639,6 +671,12 @@ function Studio() {
                       s.uid === uid ? { ...s, ...patch(s) } : s,
                     ),
                   })),
+                selected: activeItem,
+                onSelect: (item) => selectItem(item, false),
+                clips: draft.clips,
+                tracks: draft.tracks,
+                selectedClip: activeClip,
+                onSelectClip: (id) => selectClip(id, false),
               },
             }
           : null
@@ -977,6 +1015,10 @@ function Studio() {
                 rendering={rendering}
                 saveState={saveState}
                 activeUid={activeUid}
+                activeItem={activeItem}
+                onSelectItem={(item) => selectItem(item, true)}
+                activeClip={activeClip}
+                onSelectClip={selectClip}
                 timeline={timeline}
                 onMusicAdded={reloadOptions}
                 stage={renderPreview("stage")}
@@ -1011,6 +1053,8 @@ function Studio() {
                 }}
                 onActive={(uid, seek = true) => {
                   setActiveUid(uid);
+                  setActiveItem(null);
+                  setActiveClip(null);
                   setPreviewView("scene");
                   if (seek) timeline.seekScene(uid);
                 }}

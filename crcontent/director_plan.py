@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-VERSION = 1
+VERSION = 2  # 2: story phases, beat roles and open loops (attention roadmap M1); v1 plans load with them empty
 ASPECTS = {"short": "9:16", "long": "16:9"}
 STYLES = ("cinematic_documentary", "cinematic_wildlife", "educational", "storytelling")
 KHMER = re.compile(r"[ក-៿]")
@@ -24,6 +24,10 @@ FRAMINGS = ("tight", "medium", "loose")
 TRANSITIONS = ("hard_cut", "match_cut", "cross_dissolve", "dip_to_black", "whip", "j_cut", "l_cut")
 # how closely footage must match the narration (milestone 3 searches and scores by it)
 EVIDENCE = ("exact_action", "subject", "supporting", "illustrative")
+# Setup -> Tension -> Payoff, and what a beat does inside its phase (roadmap section 4); "" = not planned yet
+PHASES = ("setup", "tension", "payoff")
+BEAT_ROLES = ("pattern_interrupt", "curiosity_gap", "context", "stakes", "evidence", "escalation", "complication",
+              "contrast", "relief", "mini_payoff", "delayed_reveal", "final_payoff", "explanation", "callback")
 
 
 class Camera(BaseModel):
@@ -91,6 +95,19 @@ class Scene(BaseModel):
     viewer_objective: str = ""
     emotion: str = ""
     transition_out: str = "hard_cut"
+    phase: Literal["", "setup", "tension", "payoff"] = ""
+    beat_role: str = ""          # one of BEAT_ROLES ("" = none)
+    viewer_question: str = ""    # the question in the viewer's mind during this beat
+    opens: list[str] = []        # loop ids (Story.loops) this beat raises
+    resolves: list[str] = []     # loop ids this beat answers
+    tension: int | None = Field(default=None, ge=0, le=100)  # relative anticipation; editorial guidance, not a measurement
+
+
+class Loop(BaseModel):
+    """A question or promise the video raises and must answer (or deliberately leave open)."""
+    id: str
+    question: str = ""
+    left_open: bool = False      # intentionally unresolved (a natural loop or cliffhanger the creator wants)
 
 
 class Project(BaseModel):
@@ -114,6 +131,7 @@ class Story(BaseModel):
     payoff: str = ""
     audience: str = ""
     key_facts: list[str] = []  # claims in the narration the footage must not misrepresent
+    loops: list[Loop] = []     # open loops, opened and resolved by Scene.opens / Scene.resolves
 
 
 class Continuity(BaseModel):
@@ -141,6 +159,7 @@ class DirectorPlan(BaseModel):
     edit_plan: EditPlan = Field(default_factory=EditPlan)
     suggestions: list[str] = []  # optional script improvements; the narration itself is never changed
     warnings: list[str] = []     # whole-video footage problems (repeated shot sizes, too many photos)
+    story_warnings: list[str] = []  # story-structure problems (story_check), recomputed on every direct/save
     evidence: str = ""           # the channel analytics the AI Director was given ("" = none)
 
     @model_validator(mode="before")
@@ -163,11 +182,92 @@ class DirectorPlan(BaseModel):
 
 
 def migrate(data: dict) -> dict:
-    """Bring a stored plan up to VERSION. Version 1 is the first, so there is nothing to convert yet."""
+    """Bring a stored plan up to VERSION. v1 -> v2 only adds story fields, which default to empty."""
     version = int(data.get("version", VERSION))
     if version > VERSION:
         raise ValueError(f"This plan was made by a newer version of the app (plan v{version}). Update the app to open it.")
     return {**data, "version": VERSION}
+
+
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"\w{4,}", text.lower()))
+
+
+def story_findings(plan: DirectorPlan) -> list[dict]:
+    """Deterministic Setup/Tension/Payoff checks on an AI-directed plan (roadmap 5.2, M1-M2). Each finding:
+    {key, scene (plan scene id or ""), title (with its evidence), fix}. Nothing is changed. A script-seeded plan has
+    no beats to check yet."""
+    if plan.planned_by != "ai" or not plan.scenes:
+        return []
+    out, scenes = [], plan.scenes
+
+    def add(key, scene, title, fix):
+        out.append({"key": key, "scene": scene, "title": title, "fix": fix})
+
+    unplanned = [s.id for s in scenes if not s.phase]
+    if len(unplanned) == len(scenes):
+        add("unplanned", "", "No story phases planned yet: re-plan the whole video to get Setup / Tension / Payoff beats.",
+            "Run the AI Director on the whole video.")
+        return out
+    if unplanned:
+        add("unplanned", unplanned[0], f"{len(unplanned)} scene(s) have no story phase (first: {unplanned[0]}).",
+            "Re-plan those scenes so every beat has a job.")
+    first = scenes[0]
+    if first.phase and first.phase != "setup":
+        add("opening", first.id, f"The video opens in its {first.phase} ({first.id}): the viewer gets no reason to watch first.",
+            "Open on the most surprising image or claim, and raise the question the video answers.")
+    elif first.phase == "setup" and not first.viewer_question and not first.opens:
+        add("opening", first.id, f"The opening ({first.id}) raises no question or promise: give the viewer a reason to stay.",
+            "Start with a specific question or promise the video pays off, e.g. the result before the how.")
+    order = {p: i for i, p in enumerate(PHASES)}
+    for a, b in zip(scenes, scenes[1:]):
+        if a.phase and b.phase and order[b.phase] < order[a.phase] and not (a.phase == "payoff" and b.beat_role == "callback"):
+            add("order", b.id, f"{b.id} goes back to {b.phase} after the {a.phase} ({a.id}): check the story order.",
+                f"Move this beat before {a.id}, or make it a callback that closes the story.")
+    if not any(s.phase == "payoff" for s in scenes):
+        add("payoff", scenes[-1].id, "No payoff beat: the video never delivers what its opening promises.",
+            "End on the answer or result the opening set up.")
+    loops = {l.id: l for l in plan.story.loops}
+    opened, resolved = {}, {}
+    for s in scenes:
+        for lid in s.opens:
+            if lid not in loops:
+                add("loop", s.id, f"{s.id} opens an unknown question '{lid}'.", "Re-plan this scene.")
+            opened.setdefault(lid, s.id)
+        for lid in s.resolves:
+            if lid not in loops:
+                add("loop", s.id, f"{s.id} answers an unknown question '{lid}'.", "Re-plan this scene.")
+            elif lid not in opened:
+                add("loop", s.id, f"{s.id} answers '{loops[lid].question or lid}' before any scene asks it.",
+                    "Raise the question earlier, or move this answer later.")
+            resolved.setdefault(lid, s.id)
+    for lid, loop in loops.items():
+        if lid not in opened:
+            add("loop", "", f"The question '{loop.question or lid}' is never raised by a scene.",
+                "Re-plan the whole video so the question is asked where it belongs.")
+        elif lid not in resolved and not loop.left_open:
+            add("unresolved", opened[lid], f"The question '{loop.question or lid}' ({opened[lid]}) is never answered.",
+                "Answer it before the end, or cut the line that raises it, so the viewer isn't left hanging.")
+    payoff = [s for s in scenes if s.phase == "payoff"]
+    if loops and payoff and not any(s.resolves for s in payoff):
+        add("payoff_mismatch", payoff[0].id,
+            f"The payoff ({payoff[0].id}) answers none of the video's questions: it may feel unearned.",
+            "Make the ending answer the opening question directly.")
+    tension = [s for s in scenes if s.phase == "tension"]
+    if tension and not any(s.beat_role in ("stakes", "escalation", "complication", "evidence") for s in tension):
+        add("stakes", tension[0].id, "The tension beats add no stakes, evidence or escalation: say why the question matters.",
+            "Add what's at stake or a new piece of evidence before the payoff.")
+    for a, b in zip(scenes, scenes[1:]):  # shortcut: word overlap, not meaning; the AI story review catches paraphrases
+        wa, wb = _words(a.narration), _words(b.narration)
+        if len(wa) >= 4 and len(wb) >= 4 and len(wa & wb) / len(wa | wb) > 0.6:
+            add("repeat", b.id, f"{b.id} repeats what {a.id} already said: cut it or add something new.",
+                "Cut the repeat, or use the line for a new detail that moves the story on.")
+    return out
+
+
+def story_check(plan: DirectorPlan) -> list[str]:
+    """The story findings as plain-words warnings (plan.story_warnings)."""
+    return [f["title"] for f in story_findings(plan)]
 
 
 def load(data: dict) -> DirectorPlan:

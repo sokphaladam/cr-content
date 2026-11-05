@@ -303,8 +303,67 @@ def retention_checks(checks: list, scenes: list, lengths: list[float], starts: l
                           "A headline earns its place with what the voice doesn't say: a number, a twist, a question."), i)
 
 
-def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[float], full: bool) -> dict:
-    """lengths: each scene's length in seconds as the editor's timeline has it (0 = not voiced yet)."""
+def plan_story_checks(checks: list, plan, scenes: list, starts: list[float], lengths: list[float]) -> None:
+    """The Director Plan's Setup / Tension / Payoff findings (director_plan.story_findings), tied to the editor's
+    scenes by their narration. Rules over the beats the AI Director labelled, so they're marked "inferred"."""
+    from .director_plan import story_findings
+
+    label = "Story beats (Setup / Tension / Payoff, open questions)"
+    if plan is None:
+        _check(checks, "plan.story", "storytelling", "not_checked", label, "This draft has no Director Plan.")
+        return
+    if plan.planned_by != "ai" or not any(s.phase for s in plan.scenes):  # unplanned, or planned before story beats
+        _check(checks, "plan.story", "storytelling", "not_checked", label,
+               "Plan the whole video with the AI Director to get story beats to check.")
+        return
+    where = {sc.narration.strip(): i for i, sc in reversed(list(enumerate(scenes)))}
+    index = {s.id: where.get(s.narration.strip()) for s in plan.scenes}
+    found = [f for f in story_findings(plan) if f["key"] != "repeat"]  # retention_checks already finds repeats
+    for n, f in enumerate(found):
+        i = index.get(f["scene"])
+        span = (starts[i], starts[i] + lengths[i]) if i is not None and lengths[i] else ()
+        item = _check(checks, f"plan.story.{f['key']}.{n}", "storytelling", "warning", f["title"],
+                      "Found in the Director Plan's story beats (phases, questions and answers the AI Director "
+                      "labelled); the narration itself isn't judged here.", "low", f["fix"], *span)
+        if i is not None:
+            _scene(item, i)
+    if not found:
+        _check(checks, "plan.story", "storytelling", "pass", "Every question the video raises is answered, and it reaches its payoff",
+               f"{len(plan.scenes)} beats checked in the Director Plan.")
+
+
+def timeline_checks(checks: list, script: VideoScript, total: float) -> None:
+    """The timeline's graphics and sound clips (M4): the ones the render would leave out, said before it renders."""
+    from . import timeline
+    from .shorts import motion
+
+    for n, w in enumerate(timeline.check(script.clips)):
+        _check(checks, f"timeline.clip.{n}", "technical", "warning", w, "It won't be in the render.", "medium",
+               "Pick one in the inspector, or delete the clip.")
+    late = [c.id for c in script.clips if total and c.start >= total]
+    if late:
+        _check(checks, "timeline.late", "technical", "warning", f"{len(late)} clip(s) start after the video ends",
+               ", ".join(late), "medium", "Move them earlier on the timeline; they won't play.")
+    drawn = [c for c in script.clips if c.track == "graphics"] and not script.track("graphics").hidden
+    if drawn and not ((motion.PROJECT / "node_modules").is_dir() and motion.node()):
+        _check(checks, "timeline.remotion", "technical", "warning", "Graphics can't be drawn on this computer",
+               f"Remotion (Node and its packages in {motion.PROJECT}) isn't available, so the timeline's graphics "
+               "would be left out of the render.", "high", "Run `npm install` at the project root, or remove the graphics.")
+
+
+def label_methods(checks: list) -> None:
+    """How each finding was reached, for the UI: measured from the project or media, a heuristic rule of thumb,
+    inferred from the AI Director's labels, AI-assisted, or not checked."""
+    rules = ("story.", "pacing.", "visual.stills", "captions.echo", "captions.speed", "audio.music_level")
+    for c in checks:
+        d = c["detector"]
+        c["method"] = ("not_checked" if c["status"] == "not_checked" else "ai" if d.startswith("ai.")
+                       else "inferred" if d.startswith("plan.") else "heuristic" if d.startswith(rules) else "measured")
+
+
+def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[float], full: bool, plan=None) -> dict:
+    """lengths: each scene's length in seconds as the editor's timeline has it (0 = not voiced yet).
+    plan: the draft's Director Plan (None: the story-beat checks say not checked)."""
     rules, checks = rules_for("short_preview"), []
     W, H = frame_size("9:16")
     result = {"stage": "preview", "profile": "short", "profile_label": "Shorts", "mode": "full" if full else "quick",
@@ -462,6 +521,8 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
         music_level_checks(checks, ASSETS_DIR / "music" / Path(music).name if music else None, full)
 
     retention_checks(checks, scenes, lengths, starts, cs, rules)
+    timeline_checks(checks, script, sum(lengths) if not unvoiced else 0)
+    plan_story_checks(checks, plan, scenes, starts, lengths)
 
     # --- storytelling (advice, never a verdict) ---
     first = scenes[0].narration.strip()
@@ -488,8 +549,10 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
     if not script.hashtags:
         _check(checks, "publish.hashtags", "rights", "warning", "No hashtags", "", "info")
     rights_checks(checks, script, music)
-    result["fingerprint"] = _fp([script.model_dump(), lang, music, lengths, full])
-    return _finish(result, SHORT_NOT_YET)
+    result["fingerprint"] = _fp([script.model_dump(), lang, music, lengths, full, plan.model_dump() if plan else None])
+    _finish(result, SHORT_NOT_YET)
+    label_methods(checks)
+    return result
 
 
 # ---------- Lyric Studio ----------
@@ -687,6 +750,7 @@ class ShortPreviewRequest(BaseModel):
     music: str = ""
     lengths: list[float] = []
     full: bool = False
+    draft: str = ""  # its Director Plan feeds the story-beat checks
 
 
 STORY_ASPECTS = ("hook", "promise", "early_payoff", "purpose", "narration_footage", "structure", "ending")
@@ -761,7 +825,9 @@ def story_review(req: StoryRequest):
     for a in STORY_ASPECTS:
         if a not in seen:
             _check(checks, f"ai.story.{a}", "storytelling", "not_checked", a.replace("_", " ").capitalize(), "The AI gave no answer.")
-    return _finish(result, [])
+    _finish(result, [])
+    label_methods(checks)
+    return result
 
 
 FOOTAGE_PASS = 7  # shorts.match.PASS: footage that shows what's said
@@ -851,12 +917,22 @@ def footage_review(req: FootageRequest):
                           f"Shows: {v['seen']}. {v['problem']}\n(AI-assisted: review it yourself.)", "low",
                           "Pick footage that shows what's said, or reword the line.",
                           *((sum(lengths[:i]), sum(lengths[:i + 1])) if lengths[i] else ())), i)
-    return _finish(result, [])
+    _finish(result, [])
+    label_methods(checks)
+    return result
 
 
 @router.post("/api/inspect/preview/short")
 def preview_short(req: ShortPreviewRequest):
-    return inspect_short(req.script, req.lang, req.music, req.lengths, req.full)
+    from . import drafts
+
+    plan = None
+    if req.draft:
+        try:
+            plan = drafts.load(req.draft).plan
+        except (KeyError, ValueError, OSError):
+            pass  # a deleted or unreadable draft: the story-beat checks say not checked
+    return inspect_short(req.script, req.lang, req.music, req.lengths, req.full, plan)
 
 
 def _song_report(folder: Path) -> Path:

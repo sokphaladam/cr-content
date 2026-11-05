@@ -140,5 +140,8 @@ def peaks(mp3: Path) -> dict:
     values = [max((abs(v) for v in samples[i:i + step]), default=0) for i in range(0, len(samples), step)]
     top = max(values, default=0) or 1
     out = {"rate": PEAKS_PER_SEC, "peaks": [round(v / top, 3) for v in values]}
-    cached.write_text(json.dumps(out), encoding="utf-8")
+    try:
+        cached.write_text(json.dumps(out), encoding="utf-8")
+    except OSError:
+        pass  # a read-only folder (the desktop app's bundled sounds): measured again next time
     return out

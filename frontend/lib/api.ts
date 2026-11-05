@@ -73,18 +73,31 @@ export interface PlanScene {
   viewer_objective: string;
   emotion: string;
   transition_out: string;
+  // story beats (plan v2); empty on a script-seeded or older plan
+  phase?: "" | "setup" | "tension" | "payoff";
+  beat_role?: string;
+  viewer_question?: string;
+  opens?: string[];
+  resolves?: string[];
+  tension?: number | null;
+}
+export interface PlanLoop {
+  id: string;
+  question: string;
+  left_open: boolean;
 }
 export interface DirectorPlan {
   version: number;
   planned_by: "script" | "ai";
   project: { title: string; format: "short" | "long"; aspect_ratio: string; language: string; visual_style: string; target_seconds?: number };
-  story: { hook: string; central_idea: string; emotional_arc: string[]; payoff: string; audience: string; key_facts: string[] };
+  story: { hook: string; central_idea: string; emotional_arc: string[]; payoff: string; audience: string; key_facts: string[]; loops?: PlanLoop[] };
   continuity: { subjects: string[]; locations: string[]; lighting: string[]; visual_style: string };
   scenes: PlanScene[];
   shots: PlanShot[];
   edit_plan: { music_mood: string; sound_effects: string[]; colour_grade: string; pacing: string };
   suggestions: string[];
   warnings: string[];
+  story_warnings?: string[]; // Setup / Tension / Payoff problems (missing on an older engine)
   evidence?: string; // the channel analytics the AI Director was given ("" = none; missing on an older engine)
   footage_job?: string | null; // a footage search running for it (GET and re-plan answers only)
   media_folder?: string; // where your own clips for its shots go (GET only)
@@ -113,6 +126,25 @@ export interface Scene {
   effects?: Effect[];
   sound?: string; // a sound effect as the scene starts (from a Director Plan)
   speed?: number; // playback speed of the scene's clip (0.5 = slow motion, from a Director Plan)
+  // calm: no automatic hits or flash, slower re-framing ("auto" = the Edit Director's, "on"/"off" = yours)
+  calm?: "" | "auto" | "on" | "off";
+  calm_note?: string;
+}
+
+/** One of the Edit Director's proposals (crcontent/edit_director.py): nothing changes until it's applied. */
+export interface EditDecision {
+  id: string;
+  kind: "calm" | "graphic" | "sound";
+  scene: number;
+  reason: string;
+  essential: boolean;
+  clip?: Partial<Clip>;
+}
+export interface EditPlan {
+  decisions: EditDecision[];
+  gaps: { scene: number; shot: string; text: string }[];
+  notes: string[];
+  sound_source: string;
 }
 
 /** Looks the local AI scene art can draw in (crcontent/imagegen.py STYLES). */
@@ -253,7 +285,96 @@ export interface VideoScript {
   art_bible?: string; // the director's notes (characters, world, palette) that keep the pictures consistent
   art_subject?: string; // the real subject every picture must get right ("name: visible features"), checked by Gemini
   art_avoid?: string; // what the image model must not draw instead (look-alikes)
+  // the timeline's global clips and lane controls (crcontent/script.py Clip, TrackState); missing on older drafts
+  timeline_version?: number;
+  clips?: Clip[];
+  tracks?: Partial<Record<TrackName, TrackState>>;
 }
+
+export type TrackName = "voice" | "music" | "graphics" | "sfx";
+/** A graphic or sound effect on the timeline, in seconds from the video's start (not tied to a scene). */
+export interface Clip {
+  id: string;
+  track: "graphics" | "sfx";
+  start: number;
+  duration: number;
+  source_in: number; // sfx: seconds into the sound it starts from
+  sound: string; // sfx: a catalog sound ("user:<id>" = imported)
+  template: string; // graphics: a Remotion template (crcontent/graphic_templates.py)
+  template_version?: number; // the template version its props were made for (0 = current)
+  props: Record<string, string | number>;
+  gain: number; // 0-2
+  fade_in: number;
+  fade_out: number;
+  layer: number;
+  duck?: boolean; // sfx: the music dips while it plays
+  essential?: boolean; // sfx: false = a nice-to-have (a suggestion marked optional)
+  note?: string; // why it's there (a suggestion's reason)
+  origin?: "" | "director" | "edited"; // the Edit Director's (replaced when it re-plans), or one of its you changed
+}
+export interface TrackState {
+  mute: boolean;
+  solo: boolean; // the preview plays only soloed lanes; the render ignores it
+  volume: number; // 0-2
+  locked: boolean;
+  hidden: boolean;
+  duck?: number; // music: how far it dips under the voice, 0-1 (1 = the default)
+}
+/** A graphics template's field: what the inspector shows and the props are checked against. */
+export interface TemplateField {
+  key: string;
+  type: "text" | "number" | "choice" | "color";
+  label: string;
+  default: string | number;
+  group: "content" | "style" | "position" | "motion";
+  min?: number;
+  max?: number;
+  step?: number | null;
+  max_len?: number;
+  required?: boolean;
+  options?: string[];
+}
+export interface TemplateDef {
+  version: number;
+  label: string;
+  description: string;
+  seconds: number; // a new graphic's length
+  fields: TemplateField[];
+}
+export type SoundCategory = "impact" | "transition" | "suspense" | "ambience" | "action" | "reveal";
+/** A sound the timeline can use: synthesized by the app, or imported with its licence and credit. */
+export interface SoundInfo {
+  name: string;
+  label: string;
+  category: SoundCategory;
+  description: string;
+  ambient: boolean;
+  duration: number;
+  source: string; // "synthesized", or where an imported one came from
+  licence: string;
+  credit: string;
+}
+export interface TimelineCatalog {
+  sounds: SoundInfo[];
+  templates: Record<string, TemplateDef>;
+  categories: SoundCategory[];
+  licences: string[];
+  needs_credit: string[]; // licences that ask for a credit in the description
+}
+/** A suggested sound event (crcontent/sound_director.py): nothing is added until the creator picks it. */
+export interface SoundSuggestion {
+  start: number;
+  sound: string;
+  duration: number;
+  gain: number;
+  fade_in: number;
+  fade_out: number;
+  duck: boolean;
+  essential: boolean;
+  scene: number;
+  reason: string;
+}
+export type GraphicStill = { key: string; url: string } | { errors: string[] } | { failed: string };
 
 /** A video's real subject, for drawing its pictures (each one showing it is checked and redrawn when wrong). */
 export interface ArtSubject {
@@ -1150,6 +1271,9 @@ export interface QualityCheck {
   end?: number;
   evidence?: string; // relative to the report's base
   detector: string;
+  // preview: how it was reached (measured from the project/media, a rule of thumb, inferred from the AI Director's
+  // story beats, AI-assisted, or not checked)
+  method?: "measured" | "heuristic" | "inferred" | "ai" | "not_checked";
   scene?: number; // preview (Shorts): the scene to open in the editor, 0-based
   // preview (Shorts): a safe one-click change, applied as one undoable edit: caption-style fields, or fields of the
   // scene's `text`-th non-empty overlay
@@ -1367,7 +1491,7 @@ export const api = {
   cancelJob: (id: string) => request<{ id: string; status: Job["status"] }>(`/api/jobs/${id}/cancel`, { method: "POST" }),
   inspection: (t: InspectTarget) => request<{ report: QualityReport | null; job: string | null }>(inspectPath(t)),
   inspect: (t: InspectTarget) => request<{ id: string }>(inspectPath(t), { method: "POST" }),
-  previewShort: (body: { script: VideoScript; lang: Lang; music: string; lengths: number[]; full: boolean }) =>
+  previewShort: (body: { script: VideoScript; lang: Lang; music: string; lengths: number[]; full: boolean; draft?: string }) =>
     request<QualityReport>("/api/inspect/preview/short", { method: "POST", json: body }),
   storyReview: (body: { script: VideoScript; lang: Lang }) =>
     request<QualityReport>("/api/inspect/preview/short/story", { method: "POST", json: body, timeout: 0 }),
@@ -1576,6 +1700,23 @@ export const api = {
   voiceover: (scenes: string[], voice: string, rate: string) =>
     request<{ pad: number; scenes: (SceneVoice | null)[] }>("/api/voiceover", { method: "POST", json: { scenes, voice, rate }, timeout: 120_000 }),
   voiceoverUrl: (key: string) => `${API_BASE}/api/voiceover/${key}.mp3`,
+  timelineCatalog: () => request<TimelineCatalog>("/api/timeline/catalog"),
+  /** Preview frames of graphics (Remotion stills, cached by the engine); one answer per item, in order. */
+  graphicStills: (items: { template: string; props: Record<string, string | number>; seconds: number; version?: number }[], lang: Lang) =>
+    request<{ items: GraphicStill[] }>("/api/graphics/stills", { method: "POST", json: { items, lang }, timeout: 0 }),
+  sfxUrl: (name: string) => `${API_BASE}/api/sfx/${encodeURIComponent(name)}.wav`,
+  /** Add a sound to the library with the licence it comes under (and the credit it asks for). */
+  importSound: (file: File, info: { label: string; category: string; licence: string; credit: string; source: string }) => {
+    const form = new FormData();
+    form.append("file", file);
+    for (const [k, v] of Object.entries(info)) form.append(k, v);
+    return request<SoundInfo & { name: string }>("/api/sfx/import", { method: "POST", body: form, timeout: 0 });
+  },
+  editDirect: (body: { script: VideoScript; lengths: number[]; draft: string; ai: boolean }) =>
+    request<EditPlan>("/api/edit/direct", { method: "POST", json: body, timeout: 0 }),
+  suggestSounds: (body: { script: VideoScript; lengths: number[]; draft: string; ai: boolean }) =>
+    request<{ source: "ai" | "rules"; note: string; events: SoundSuggestion[] }>("/api/sounds/suggest", { method: "POST", json: body, timeout: 0 }),
+  sfxPeaks: (name: string) => request<{ rate: number; peaks: number[] }>(`/api/sfx/${encodeURIComponent(name)}/peaks`),
   /** The voiceover's loudness: `rate` values per second, 0-1. */
   voiceoverPeaks: (key: string) => request<{ rate: number; peaks: number[] }>(`/api/voiceover/${key}/peaks`),
   /** A strip of `frames` frames across a clip (project path of one image) and the clip's length (0 for a photo). */

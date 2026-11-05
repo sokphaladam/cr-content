@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 
 from . import llm
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 from .config import LLM_MODEL, LANGS
 from .styles import CaptionStyle
@@ -70,6 +72,49 @@ class Scene(BaseModel):
     effects: list[str] = []
     sound: str = ""  # a sound effect as the scene starts (sfx.SOUNDS), from a Director Plan's shot
     speed: float = 1  # playback speed of the scene's video clip (0.5 = slow motion, from a Director Plan)
+    # a calm scene (an explanation, a serious moment, a held reveal): no automatic hits or flash, slower re-framing;
+    # the words the script marks still hit. "auto" = set by the Edit Director (it may change it again), "on"/"off" =
+    # the creator's choice (it never does), "" = not calm
+    calm: Literal["", "auto", "on", "off"] = ""
+    calm_note: str = ""  # why (the Edit Director's reason)
+
+
+TIMELINE_VERSION = 1
+TRACKS = ("voice", "music", "graphics", "sfx")  # the editor's timeline lanes with their own controls
+
+
+class Clip(BaseModel):
+    """A timeline-global item (attention roadmap M4): a motion graphic or a sound effect, placed in seconds from the
+    video's start (B-roll and texts stay scene-relative, on their scenes). Edited on the timeline; the render
+    (timeline.py) mixes the sounds with the voice and lays the graphics over the picture, at the same times."""
+    id: str
+    track: Literal["graphics", "sfx"]
+    start: float = Field(default=0, ge=0)
+    duration: float = Field(default=1, gt=0)
+    source_in: float = Field(default=0, ge=0)  # sfx: seconds into the sound it starts from (trimmed head)
+    sound: str = ""                            # sfx: an sfx.SOUNDS name, or "user:<id>" (an imported sound)
+    template: str = ""                         # graphics: a Remotion composition (graphic_templates.TEMPLATES)
+    template_version: int = 0                  # graphics: the template version its props were made for (0 = current)
+    props: dict = {}                           # graphics: its props (seconds and font are filled in at render)
+    gain: float = Field(default=1, ge=0, le=2)
+    fade_in: float = Field(default=0, ge=0)
+    fade_out: float = Field(default=0, ge=0)
+    layer: int = 0                             # graphics: higher draws on top
+    duck: bool = False                         # sfx: the music dips while it plays
+    essential: bool = True                     # sfx: False for a nice-to-have (an AI or rule suggestion marked optional)
+    note: str = ""                             # why it's there (a suggestion's reason), shown in the inspector
+    # who made it: "" the creator, "director" the Edit Director (replaced when it re-plans), "edited" one of its clips
+    # the creator changed (kept from then on, like their own)
+    origin: Literal["", "director", "edited"] = ""
+
+
+class TrackState(BaseModel):
+    mute: bool = False
+    solo: bool = False    # monitoring only: the preview plays just the soloed tracks; the render ignores it
+    volume: float = Field(default=1, ge=0, le=2)
+    locked: bool = False  # its clips can't be moved, trimmed or deleted
+    hidden: bool = False  # graphics: left out of the preview and the render
+    duck: float = Field(default=1, ge=0, le=1)  # music: how far it dips under the voice (0 = not at all)
 
 
 class VideoScript(BaseModel):
@@ -96,6 +141,28 @@ class VideoScript(BaseModel):
     # checked by Gemini on every picture that shows it; and what the image model must not draw instead
     art_subject: str = ""
     art_avoid: str = ""
+    # the timeline's global clips and lane controls (M4); older scripts have none
+    timeline_version: int = TIMELINE_VERSION
+    clips: list[Clip] = []
+    tracks: dict[str, TrackState] = {}
+
+    @field_validator("clips")
+    @classmethod
+    def _unique_clips(cls, clips: list[Clip]) -> list[Clip]:
+        ids = [c.id for c in clips]
+        if len(set(ids)) != len(ids):
+            raise ValueError("timeline clip ids must be unique")
+        return clips
+
+    @field_validator("tracks")
+    @classmethod
+    def _known_tracks(cls, tracks: dict) -> dict:
+        if unknown := set(tracks) - set(TRACKS):
+            raise ValueError(f"unknown timeline tracks: {', '.join(sorted(unknown))}")
+        return tracks
+
+    def track(self, name: str) -> TrackState:
+        return self.tracks.get(name) or TrackState()
 
     @property
     def narration(self) -> str:

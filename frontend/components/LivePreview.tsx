@@ -2,7 +2,9 @@
 
 import { Pause, Play, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { DEFAULT_CAPTIONS, fileUrl, keyword, type CaptionStyle, type Lang, type Options, type Scene, type TextOverlay } from "@/lib/api";
+import { API_BASE, api, DEFAULT_CAPTIONS, fileUrl, keyword, type CaptionStyle, type Clip, type Lang, type Options, type Scene, type TextOverlay, type TrackName, type TrackState } from "@/lib/api";
+import { audible, trackOf } from "@/lib/clips";
+import type { GraphicStill } from "@/lib/api";
 import { isImagePath } from "@/lib/format";
 import { cutBefore, type DraftTimeline, type Segment } from "@/lib/useDraftTimeline";
 import { clock } from "./Transcript";
@@ -148,6 +150,8 @@ function Draggable({
   style,
   label,
   children,
+  selected = false,
+  onSelect,
 }: {
   frame: React.RefObject<HTMLDivElement | null>;
   onMove?: (x: number, y: number) => void;
@@ -155,6 +159,8 @@ function Draggable({
   style: CSSProperties;
   label: string;
   children: React.ReactNode;
+  selected?: boolean;
+  onSelect?: () => void; // pressing it also selects it (timeline and inspector follow)
 }) {
   const drag = useDrag(frame, onMove ?? (() => {}));
   if (!onMove)
@@ -166,8 +172,9 @@ function Draggable({
   return (
     <div
       {...drag.handlers}
+      onPointerDownCapture={(e) => e.button === 0 && onSelect?.()}
       title={label}
-      className={`${className} cursor-grab touch-none rounded outline-offset-2 hover:outline hover:outline-2 hover:outline-dashed hover:outline-white/70 ${drag.dragging ? "cursor-grabbing outline outline-2 outline-dashed outline-white" : ""}`}
+      className={`${className} cursor-grab touch-none rounded outline-offset-2 hover:outline hover:outline-2 hover:outline-dashed hover:outline-white/70 ${drag.dragging ? "cursor-grabbing outline outline-2 outline-dashed outline-white" : selected ? "outline outline-2 outline-cobalt" : ""}`}
       style={style}
     >
       {children}
@@ -175,15 +182,27 @@ function Draggable({
   );
 }
 
+/** A clip inside a scene: its k-th B-roll or text. With the active scene, it's the editor's one selection, shared
+ *  by the timeline, the preview and the inspector. */
+export type ItemRef = { uid: string; list: "broll" | "texts"; k: number };
+
 export interface FrameEdits {
   captions: CaptionStyle;
   setCaptions: (patch: Partial<CaptionStyle>) => void;
   patchScene: (uid: string, patch: (s: Scene) => Partial<Scene>) => void;
+  selected?: ItemRef | null;
+  onSelect?: (item: ItemRef) => void;
+  // the timeline's global clips (M4): graphics shown where they'll be drawn, sounds played in time
+  clips?: Clip[];
+  tracks?: Partial<Record<TrackName, TrackState>>;
+  selectedClip?: string | null;
+  onSelectClip?: (id: string) => void;
 }
 
 /** The frame at the playhead, drawn like the render. With `edit`, captions, headline and text can be dragged. */
 export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; lang: Lang; edit?: FrameEdits }) {
   const frame = useRef<HTMLDivElement>(null);
+  const stills = useGraphicStills(edit?.clips ?? [], lang);
   const { segments, pos, playing } = timeline;
   const seg = segments[pos.i] ?? segments[0];
   const style = { ...DEFAULT_CAPTIONS, ...edit?.captions };
@@ -196,7 +215,9 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
   const caption = captionAt(seg, pos.t, style.words || LANG_CAPTION[lang].words, !playing);
   const keys = new Set(scene.keywords ?? []);
   const counted = segments.filter((s) => s.length > 0);
-  const broll = (scene.broll ?? []).find((b) => offset >= b.at && offset < b.at + b.duration);
+  const brollK = (scene.broll ?? []).findIndex((b) => offset >= b.at && offset < b.at + b.duration);
+  const broll = brollK >= 0 ? scene.broll![brollK] : undefined;
+  const sel = edit?.selected?.uid === scene.uid ? edit.selected : null;
   const texts = (scene.texts ?? []).map((t, k) => ({ t, k })).filter(({ t }) => t.text.trim() && offset >= t.at && offset < t.at + t.duration);
   const moveText = (k: number) => (x: number, y: number) =>
     edit?.patchScene(scene.uid, (s) => ({ texts: (s.texts ?? []).map((t, j) => (j === k ? { ...t, x, y } : t)) }));
@@ -215,8 +236,52 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
       {broll && (
         <div className="absolute inset-0 overflow-hidden">
           <Media src={broll.media} time={offset - broll.at} playing={playing} className="object-cover brightness-[0.94] saturate-[1.1]" />
+          {sel?.list === "broll" && sel.k === brollK && (
+            <span className="pointer-events-none absolute inset-0 border-4 border-cobalt">
+              <span className="absolute top-2 left-2 rounded bg-cobalt px-1.5 text-[3cqw] font-semibold text-white">B-roll {brollK + 1}</span>
+            </span>
+          )}
         </div>
       )}
+      {/* graphics sit on the picture, under the headline, texts and captions: the render burns those in after */}
+      {!trackOf(edit?.tracks, "graphics").hidden &&
+        (edit?.clips ?? [])
+          .filter((c) => c.track === "graphics" && timeline.now >= c.start && timeline.now < c.start + c.duration)
+          .sort((a, b) => a.layer - b.layer)
+          .map((c) => {
+            // Remotion's own still of it (the render's drawing, settled, before it goes out); its motion plays in the render
+            const still = stills[stillKey(c)];
+            const selected = c.id === edit?.selectedClip;
+            const status = !still
+              ? "Drawing the preview…"
+              : "errors" in still
+                ? `Won't render: ${still.errors.join(" ")}`
+                : "failed" in still
+                  ? `No preview: ${still.failed}`
+                  : "Preview frame (motion plays in the render)";
+            return (
+              <div key={c.id} className="absolute inset-0">
+                {still && "url" in still && (
+                  // eslint-disable-next-line @next/next/no-img-element -- the engine's cached PNG
+                  <img src={`${API_BASE}${still.url}`} alt="" className="pointer-events-none absolute inset-0 h-full w-full" />
+                )}
+                {selected && <span className="pointer-events-none absolute inset-0 border-4 border-cobalt" />}
+                <button
+                  type="button"
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    edit?.onSelectClip?.(c.id);
+                  }}
+                  title={status}
+                  className={`absolute top-[1.5cqw] left-[1.5cqw] max-w-[80%] cursor-pointer truncate rounded px-[1.4cqw] py-[0.4cqw] text-[2.6cqw] font-semibold text-white ${
+                    still && ("errors" in still || "failed" in still) ? "bg-danger" : selected ? "bg-cobalt" : "bg-black/60"
+                  }`}
+                >
+                  {c.template} · {status}
+                </button>
+              </div>
+            );
+          })}
       {headline && (
         <Draggable
           frame={frame}
@@ -242,7 +307,16 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
         </Draggable>
       )}
       {texts.map(({ t, k }) => (
-        <TextItem key={k} t={t} lang={lang} font={font} frame={frame} onMove={edit && moveText(k)} />
+        <TextItem
+          key={k}
+          t={t}
+          lang={lang}
+          font={font}
+          frame={frame}
+          onMove={edit && moveText(k)}
+          selected={sel?.list === "texts" && sel.k === k}
+          onSelect={edit?.onSelect && (() => edit.onSelect!({ uid: scene.uid, list: "texts", k }))}
+        />
       ))}
       {caption && (
         <Draggable
@@ -284,12 +358,16 @@ function TextItem({
   font,
   frame,
   onMove,
+  selected,
+  onSelect,
 }: {
   t: TextOverlay;
   lang: Lang;
   font: string;
   frame: React.RefObject<HTMLDivElement | null>;
   onMove?: (x: number, y: number) => void;
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
   const px = LANG_CAPTION[lang].size * OVERLAY_SIZE[t.size];
   const look: CSSProperties = t.box
@@ -300,6 +378,8 @@ function TextItem({
       frame={frame}
       label="Drag to move this text"
       onMove={onMove}
+      selected={selected}
+      onSelect={onSelect}
       className="absolute w-max max-w-[90%] -translate-x-1/2 -translate-y-1/2"
       style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%` }}
     >
@@ -311,7 +391,78 @@ function TextItem({
 }
 
 /** Background music the way the render mixes it in (looped, at a quarter volume; the render also ducks it under the voice). */
-function useMusic(file: string, timeline: DraftTimeline) {
+const stillKey = (c: Clip) => JSON.stringify([c.template, c.template_version ?? 0, c.props, Math.round(c.duration * 100) / 100]);
+const stillCache = new Map<string, GraphicStill>(); // kept across drafts: the engine caches the PNGs too
+
+/** Preview frames of every graphic clip, fetched in one batch (shortly after edits stop) and kept by everything that
+ *  changes them, so an edit shows a new frame and an unchanged graphic isn't drawn again. */
+function useGraphicStills(clips: Clip[], lang: Lang): Record<string, GraphicStill> {
+  const [known, setKnown] = useState<Record<string, GraphicStill>>({});
+  const graphics = clips.filter((c) => c.track === "graphics");
+  const missing = graphics.filter((c) => !stillCache.has(stillKey(c)));
+  const missingKey = missing.map(stillKey).join("\n");
+  useEffect(() => {
+    if (!missingKey) return;
+    let live = true;
+    const todo = missing.slice(0, 20);
+    const timer = window.setTimeout(async () => {
+      try {
+        const { items } = await api.graphicStills(
+          todo.map((c) => ({ template: c.template, props: c.props, seconds: c.duration, version: c.template_version ?? 0 })),
+          lang,
+        );
+        todo.forEach((c, k) => items[k] && stillCache.set(stillKey(c), items[k]));
+      } catch (e) {
+        todo.forEach((c) => stillCache.set(stillKey(c), { failed: (e as Error).message }));
+      }
+      if (live) setKnown(Object.fromEntries(stillCache));
+    }, 500);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- missingKey captures the clips to fetch
+  }, [missingKey, lang]);
+  return { ...known, ...Object.fromEntries(graphics.flatMap((c) => (stillCache.has(stillKey(c)) ? [[stillKey(c), stillCache.get(stillKey(c))!]] : []))) };
+}
+
+/** The timeline's sound clips, played with the preview (trimmed, at their gain and fades, under the lane's level). */
+function useSfx(clips: Clip[], tracks: Partial<Record<TrackName, TrackState>> | undefined, timeline: DraftTimeline) {
+  const els = useRef(new Map<string, HTMLAudioElement>());
+  const { playing, now } = timeline;
+  useEffect(() => {
+    const on = playing && audible(tracks, "sfx");
+    const lane = trackOf(tracks, "sfx").volume;
+    const live = new Set<string>();
+    for (const c of clips) {
+      const t = now - c.start;
+      if (!on || c.track !== "sfx" || !c.sound || t < 0 || t >= c.duration) continue;
+      let el = els.current.get(c.id);
+      if (!el || el.dataset.sound !== c.sound) {
+        el?.pause();
+        el = new Audio(api.sfxUrl(c.sound));
+        el.dataset.sound = c.sound;
+        els.current.set(c.id, el);
+      }
+      const want = c.source_in + t;
+      if (el.duration && want >= el.duration) continue; // past the end of the sound
+      live.add(c.id);
+      const fade = Math.min(1, c.fade_in ? t / c.fade_in : 1, c.fade_out ? (c.duration - t) / c.fade_out : 1);
+      el.volume = Math.min(1, Math.max(0, c.gain * lane * 0.8 * fade));
+      if (el.paused || Math.abs(el.currentTime - want) > 0.25) {
+        el.currentTime = want;
+        el.play().catch(() => {});
+      }
+    }
+    for (const [id, el] of els.current) if (!live.has(id)) el.pause();
+  }, [playing, now, clips, tracks]);
+  useEffect(() => {
+    const all = els.current;
+    return () => all.forEach((el) => el.pause());
+  }, []);
+}
+
+function useMusic(file: string, timeline: DraftTimeline, level = 1) {
   const audio = useRef<HTMLAudioElement | null>(null);
   const { playing, now } = timeline;
   const pick = file && file !== "none" ? file : "";
@@ -319,7 +470,7 @@ function useMusic(file: string, timeline: DraftTimeline) {
     if (!pick) return;
     const el = new Audio(fileUrl(`assets/music/${pick}`));
     el.loop = true;
-    el.volume = 0.25;
+    el.volume = 0; // the effect below sets the lane's level
     audio.current = el;
     return () => {
       el.pause();
@@ -329,16 +480,26 @@ function useMusic(file: string, timeline: DraftTimeline) {
   useEffect(() => {
     const el = audio.current;
     if (!el) return;
-    if (!playing) return void el.pause();
+    el.volume = Math.min(0.25 * level, 1);
+    if (!playing || !level) return void el.pause();
     const want = el.duration ? now % el.duration : now;
     if (Math.abs(el.currentTime - want) > 0.5) el.currentTime = want;
     if (el.paused) el.play().catch(() => {});
-  }, [playing, now]);
+  }, [playing, now, level]);
 }
 
 /** Play/pause, a scrubber over the whole video and the timeline's status, under the phone frame. */
-export function LiveControls({ timeline, music }: { timeline: DraftTimeline; music: string }) {
-  useMusic(music, timeline);
+export function LiveControls({ timeline, music, edit }: { timeline: DraftTimeline; music: string; edit?: FrameEdits }) {
+  const tracks = edit?.tracks;
+  const lane = (n: TrackName) => (audible(tracks, n) ? trackOf(tracks, n).volume : 0);
+  // a sound marked to dip the music, playing now: the music drops like the render's ducking (roughly: the render
+  // also dips it under the voice, which the preview doesn't)
+  const ducked = (edit?.clips ?? []).some((c) => c.track === "sfx" && c.duck && timeline.now >= c.start && timeline.now < c.start + c.duration);
+  useMusic(music, timeline, lane("music") * (ducked ? 1 - 0.65 * (trackOf(tracks, "music").duck ?? 1) : 1));
+  useSfx(edit?.clips ?? [], tracks, timeline);
+  const voiceLevel = lane("voice");
+  const { setVoiceVolume } = timeline;
+  useEffect(() => setVoiceVolume(voiceLevel), [setVoiceVolume, voiceLevel]);
   const { playing, now, total, loading, pending, error } = timeline;
   return (
     <div className="grid gap-2">
