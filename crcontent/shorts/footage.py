@@ -3,7 +3,7 @@
 Per beat, in order:
 1. your own file (<media_dir>/<plan>-epNN/scene-XX.*), used as it is
 2. a beat that cuts back to the opening shot reuses the hook's clip
-3. the beat's short searches (queries.py: "cat bath", "wet cat", "cat faucet"), each in Pixabay then Pexels (when its
+3. the beat's short searches (queries.py: "cat bath", "wet cat", "cat faucet"), each in Pixabay, Pexels, Mixkit and Unsplash taking turns (when its
    key is set): the best few clips of each are checked by Gemini for the planned shot (match.py) until one scores
    match.PASS or more; the hook beat's clips must also pass the motion rules (hook.py)
 4. nothing matched: Gemini picks a simpler shot that stock likely has, and its searches are tried the same way
@@ -83,6 +83,8 @@ def sources(cfg: dict) -> tuple[list[str], list[str]]:
             skipped.append("pexels (no PEXELS_API_KEY: add it in Settings)")
         elif s == "pixabay" and not visuals.pixabay_key():
             skipped.append("pixabay (no PIXABAY_API_KEY: add it in Settings)")
+        elif s == "unsplash" and not visuals.unsplash_key():
+            skipped.append("unsplash (no UNSPLASH_ACCESS_KEY: add it in Settings)")
         else:
             use.append(s)
     return use, skipped
@@ -172,7 +174,8 @@ class Picker:
         return attempt
 
     def candidates(self, query: str, length: float, is_hook: bool, deferred: list, skipped: list) -> list:
-        """(item, source) for `query`: the best PER_QUERY unclaimed clips of each source, in source order. Clips
+        """(item, source) for `query`: the best PER_QUERY unclaimed clips of each source, taking turns (each source's
+        best first, so Gemini compares the libraries before any one's second best). Clips
         another Short uses are skipped for a hook; ones used lately go to `deferred` for the last resort."""
         out = []
         for source in self.sources:
@@ -197,7 +200,7 @@ class Picker:
                     continue
                 out.append((m, source))
                 n += 1
-        return out
+        return [(m, m["source"]) for m in lf.spread([m for m, _ in out])]
 
     def search(self, plan: dict, length: float, is_hook: bool, budget: int, log_into: dict) -> dict | None:
         """The beat's searches in order until a clip matches; returns the best attempt (or None). Fills log_into's

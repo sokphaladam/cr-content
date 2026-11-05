@@ -106,6 +106,12 @@ fn start_engine(app: &AppHandle, work: &Path, port: u16) -> Result<Child, Box<dy
         .stdin(Stdio::null());
     cmd.env("PATH", engine_path(app));
     if !cfg!(debug_assertions) {
+        // the Remotion graphics runtime bundled with the installer (scripts/build_remotion.py, crcontent/shorts/motion.py)
+        if let Ok(res) = app.path().resource_dir() {
+            cmd.env("CRCONTENT_REMOTION", res.join("remotion"));
+        }
+    }
+    if !cfg!(debug_assertions) {
         // No console in release: keep the engine's output in a log file.
         let log = File::create(work.join("engine.log"))?;
         cmd.stdout(log.try_clone()?).stderr(log);

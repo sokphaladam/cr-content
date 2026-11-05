@@ -3,7 +3,8 @@
   "bundle": {
     "resources": {
       "engine-dist/engine/": "engine/",
-      "ffmpeg-dist/": "ffmpeg/"
+      "ffmpeg-dist/": "ffmpeg/",
+      "remotion-dist/": "remotion/"
     },
     "windows": {
       "nsis": {

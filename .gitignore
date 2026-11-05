@@ -40,4 +40,6 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/engine-dist/
 src-tauri/ffmpeg-dist/
+src-tauri/remotion-dist/
 build/
+/remotion/node_modules/

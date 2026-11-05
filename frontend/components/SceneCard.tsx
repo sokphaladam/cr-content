@@ -99,12 +99,12 @@ function Picker({
   const { q, setQ, kind, setKind, results, search } = finder;
   const [ideas, setIdeas] = useState<string[]>([]);
   const [ideasBusy, setIdeasBusy] = useState(false);
-  const [picking, setPicking] = useState<number | null>(null);
+  const [picking, setPicking] = useState<string | null>(null); // `${source}-${id}`: ids repeat across libraries
   const [designing, setDesigning] = useState<"still" | "motion" | null>(null);
   const radioName = useId();
 
   async function pick(r: StockResult) {
-    setPicking(r.id);
+    setPicking(`${r.source}-${r.id}`);
     setStatus("Downloading…");
     try {
       const m = await api.pick(r);
@@ -238,14 +238,15 @@ function Picker({
                 style={{ backgroundImage: `url('${r.thumb}')` }}
                 className="relative grid aspect-[9/16] w-full cursor-pointer place-items-center overflow-hidden rounded-lg border-2 border-transparent bg-media bg-cover bg-center p-0 transition hover:border-cobalt focus-visible:border-cobalt disabled:cursor-progress"
               >
-                {picking === r.id && (
+                {picking === `${r.source}-${r.id}` && (
                   <span className="grid size-8 place-items-center rounded-full bg-black/60 text-white">
                     <Spinner />
                   </span>
                 )}
-                {r.kind === "video" && (
+                <span className="absolute left-1 top-1 rounded bg-black/65 px-1 py-0.5 text-2xs leading-none text-white capitalize">{r.source}</span>
+                {r.kind === "video" && r.duration ? (
                   <span className="absolute right-1 bottom-1 rounded bg-black/65 px-1 py-0.5 text-2xs leading-none text-white">{r.duration}s</span>
-                )}
+                ) : null}
               </button>
             </li>
           ))}

@@ -1,5 +1,7 @@
-"""Background media: stock videos/photos (Pexels or Pixabay), user uploads, local footage, or gradient fallback."""
+"""Background media: stock videos/photos (Pexels, Pixabay, Mixkit, Unsplash), user uploads, local footage, or gradient fallback."""
+import html
 import os
+import re
 import random
 import subprocess
 from pathlib import Path
@@ -14,6 +16,10 @@ PEXELS_PHOTO_SEARCH = "https://api.pexels.com/v1/search"
 PEXELS_PHOTO_BY_ID = "https://api.pexels.com/v1/photos/{id}"
 PIXABAY_VIDEOS = "https://pixabay.com/api/videos/"
 PIXABAY_PHOTOS = "https://pixabay.com/api/"
+UNSPLASH_SEARCH = "https://api.unsplash.com/search/photos"
+UNSPLASH_BY_ID = "https://api.unsplash.com/photos/{id}"
+MIXKIT_SEARCH = "https://mixkit.co/free-stock-video/discover/{slug}/"
+MIXKIT_FILE = "https://assets.mixkit.co/videos/{id}/{id}-{size}.mp4"
 LOCAL_FOOTAGE = ASSETS_DIR / "footage"
 STOCK_CACHE = CACHE_DIR / "stock"
 
@@ -33,9 +39,13 @@ def pixabay_key() -> str:
     return os.getenv("PIXABAY_API_KEY", "").strip()
 
 
+def unsplash_key() -> str:
+    return os.getenv("UNSPLASH_ACCESS_KEY", "").strip()
+
+
 def stock_source() -> str:
-    """Which stock library is configured: 'pexels', 'pixabay', or '' for none."""
-    return "pexels" if pexels_key() else "pixabay" if pixabay_key() else ""
+    """The first stock library searched: 'pexels', 'pixabay', else 'mixkit' (it needs no key)."""
+    return "pexels" if pexels_key() else "pixabay" if pixabay_key() else "mixkit"
 
 
 def _get(url: str, headers: dict | None = None, **params) -> dict:
@@ -130,21 +140,144 @@ def _pixabay_download(kind: str, item_id: int) -> Path:
     return _download(file["url"], STOCK_CACHE / f"pixabay-{item_id}.mp4")
 
 
+# ---------- Mixkit (free videos, no API: its tag pages are read) ----------
+
+def _mixkit_page(slug: str) -> list[dict]:
+    r = requests.get(MIXKIT_SEARCH.format(slug=slug), headers={"User-Agent": "Mozilla/5.0 (compatible; ShortStudio)"},
+                     timeout=20)
+    r.raise_for_status()
+    out = []
+    for card in r.text.split('data-item-grid--video-player-item-id-value="')[1:]:
+        item_id = re.match(r"(\d+)\"", card)
+        img = re.search(r'alt="([^"]*)" width="(\d+)" height="(\d+)"', card)
+        if not (item_id and img):
+            continue
+        title = re.search(r'overlay-video-title">\s*([^<]*?)\s*<', card)
+        href = re.search(r'href="(/free-stock-video/[^"]+)"', card)
+        out.append({"id": int(item_id[1]), "alt": html.unescape(img[1]), "title": html.unescape(title[1]) if title else "",
+                    "aspect": int(img[2]) / max(int(img[3]), 1), "page": f"https://mixkit.co{href[1]}" if href else ""})
+    return out
+
+
+def _mixkit_file(item_id: int, aspect: float, width: int, portrait: bool) -> tuple[str, int, int] | None:
+    """The smallest of Mixkit's 720/1080/2160 files that fills a `width`-wide frame (a 9:16 one once cropped), else
+    the biggest it has: not every clip has every size, so each is asked for."""
+    best = None
+    for size in (720, 1080, 2160):
+        w, h = (round(size * aspect), size) if aspect >= 1 else (size, round(size / aspect))
+        url = MIXKIT_FILE.format(id=item_id, size=size)
+        try:
+            if requests.head(url, timeout=10).status_code != 200:
+                continue
+        except requests.RequestException:
+            continue
+        best = (url, w, h)
+        if (min(w, h * 9 / 16) if portrait else w) >= width:
+            break
+    return best
+
+
+def mixkit_search(query: str, width: int = 1080, portrait: bool = True, limit: int = 12) -> list[dict]:
+    """Mixkit clips for `query`. Its pages exist only for tags ("cat", not "cat drinking water"), so the words are
+    dropped from the end until a page has clips."""
+    # shortcut: "green heron fishing" can end at the "green" page (junk the subject check then rejects); try word
+    # windows other than prefixes if that wastes too many checks
+    words = re.findall(r"[a-z0-9]+", query.lower())
+    hits = []
+    for n in range(len(words), 0, -1):
+        if hits := _mixkit_page("-".join(words[:n])):
+            break
+    hits = hits[:limit]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(8) as pool:
+        files = list(pool.map(lambda h: _mixkit_file(h["id"], h["aspect"], width, portrait), hits))
+    return [{"source": "mixkit", "id": h["id"], "kind": "video", "thumb": f"https://assets.mixkit.co/videos/{h['id']}/{h['id']}-thumb-360-0.jpg",
+             "page": h["page"], "author": "Mixkit", "width": f[1], "height": f[2], "url": f[0],
+             "tags": f"{h['title']} {h['alt']}".lower(), "preview": MIXKIT_FILE.format(id=h["id"], size=360)}
+            for h, f in zip(hits, files) if f]
+
+
+def _mixkit_download(item_id: int) -> Path:
+    for size in (1080, 720, 2160):  # the size isn't known from the id alone
+        try:
+            return _download(MIXKIT_FILE.format(id=item_id, size=size), STOCK_CACHE / f"mixkit-{item_id}.mp4")
+        except requests.HTTPError:
+            continue
+    raise ValueError("Video not found on Mixkit.")
+
+
+# ---------- Unsplash (photos only) ----------
+
+def _unsplash(url: str, **params) -> dict:
+    return _get(url, headers={"Authorization": f"Client-ID {unsplash_key()}", "Accept-Version": "v1"}, **params)
+
+
+def unsplash_track(download_location: str) -> None:
+    """Unsplash's API terms: tell it when a photo is downloaded (a failed ping never stops the download)."""
+    try:
+        _unsplash(download_location)
+    except requests.RequestException:
+        pass
+
+
+def _unsplash_url(p: dict) -> str:
+    return f"{p['urls']['raw']}&fm=jpg&q=85&w=2400"  # big enough for a 1080p frame with a slow zoom
+
+
+def unsplash_search(query: str, orientation: str | None = None, per_page: int = 10) -> list[dict]:
+    """orientation: landscape / portrait, or None for any."""
+    data = _unsplash(UNSPLASH_SEARCH, query=query, orientation=orientation, per_page=per_page, content_filter="high")
+    return [{"source": "unsplash", "id": p["id"], "kind": "photo", "thumb": p["urls"]["small"],
+             "page": (p.get("links") or {}).get("html", ""), "author": (p.get("user") or {}).get("name", ""),
+             "width": p.get("width") or 0, "height": p.get("height") or 0, "url": _unsplash_url(p),
+             "download_location": p["links"]["download_location"],
+             "tags": " ".join(filter(None, [p.get("alt_description"), p.get("description"),
+                                            *[t.get("title", "") for t in p.get("tags") or []]])).lower()}
+            for p in data.get("results", [])]
+
+
+def _unsplash_download(item_id: str) -> Path:
+    if not re.fullmatch(r"[\w-]+", item_id):
+        raise ValueError("Not an Unsplash photo id.")
+    p = _unsplash(UNSPLASH_BY_ID.format(id=item_id))
+    unsplash_track(p["links"]["download_location"])
+    return _download(_unsplash_url(p), STOCK_CACHE / f"unsplash-photo-{item_id}.jpg")
+
+
 # ---------- Public API ----------
 
 def search(query: str, kind: str = "video", per_page: int = 15, orientation: str = "portrait") -> list[dict]:
-    """Stock search results for the scene picker UI, from whichever library is configured."""
-    source = stock_source()
-    if source == "pexels":
-        return _pexels_search(query, kind, per_page, orientation)
-    if source == "pixabay":
-        return _pixabay_search(query, kind, per_page, orientation)
-    return []
+    """Stock search results for the scene picker UI from every library that's set up, taking turns (Pexels' 1st,
+    Pixabay's 1st, Mixkit's 1st..., then each one's 2nd), so they can be compared side by side. A library that fails
+    is skipped; the error is raised only when every one failed."""
+    runs = []
+    if pexels_key():
+        runs.append(lambda: _pexels_search(query, kind, per_page, orientation))
+    if pixabay_key():
+        runs.append(lambda: _pixabay_search(query, kind, per_page, orientation))
+    if kind == "video":  # Mixkit needs no key
+        runs.append(lambda: mixkit_search(query, 1080, orientation == "portrait", per_page))
+    elif unsplash_key():
+        runs.append(lambda: unsplash_search(query, orientation, per_page))
+    lists, error = [], None
+    for run_one in runs:
+        try:
+            lists.append(run_one())
+        except (requests.RequestException, ValueError, KeyError) as e:
+            error = e
+    if error and not lists:
+        raise error
+    return [x for k in range(max(map(len, lists), default=0)) for lst in lists if k < len(lst) for x in [lst[k]]]
 
 
-def download_stock(source: str, kind: str, item_id: int, orientation: str = "portrait") -> Path:
+def download_stock(source: str, kind: str, item_id: int | str, orientation: str = "portrait") -> Path:
     """Fetch one item by id (never by a client-supplied URL) into the cache."""
     kind = "photo" if kind == "photo" else "video"
+    if source == "unsplash" and unsplash_key():
+        return _unsplash_download(str(item_id))
+    if source == "mixkit":
+        return _mixkit_download(int(item_id))
     if source == "pexels" and pexels_key():
         return _pexels_download(kind, int(item_id), orientation)
     if source == "pixabay" and pixabay_key():

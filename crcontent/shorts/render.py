@@ -121,12 +121,29 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
         from ..longform.settings import folder
         log(f"      ! no music: {folder(cfg['music']['dir'])} has no tracks (mp3, wav, m4a, flac)")
 
-    (work / "text.ass").write_text(captions.build(script, tl, voices, choice['caption'], choice['graphics'],
-                                                  choice["caption_size"], choice["caption_y"],
-                                                  [e["chosen"].get("focus") for e in entries]), encoding="utf-8")
     profile = LANGS.get(script.lang, LANGS["en"])
-    for _, file in _fonts(script.lang):
+    fonts = _fonts(script.lang)
+    for _, file in fonts:
         _install_font(profile, work / "fonts", file)
+    picture, gfx, busy = "picture.mkv", list(choice["graphics"]), []
+    from . import motion
+
+    if wanted := [g for g in gfx if g in motion.NAMES]:
+        heavy = fonts[0 if script.lang == "km" else 1][1]  # the captions' face (captions.build)
+        where = motion.place(job, tl, voices, log) if "map_zoom" in wanted else None
+        todo = motion.plan(tl, voices, motion.font_url(work / "fonts" / heavy), wanted,
+                           lambda k: motion.photo(entries[k]["chosen"], work, k), where)
+        drawn = motion.overlay(work, picture, todo, log)
+        if drawn:
+            picture, busy = drawn, [(c["at"], c["at"] + c["props"]["seconds"]) for c in todo]
+            if "facts_remotion" in wanted:
+                gfx = [g for g in gfx if g != "facts"]  # never both
+        elif "facts_remotion" in wanted and "facts" not in gfx:  # Remotion unavailable: the built-in pop-ups
+            gfx.append("facts")
+    (work / "text.ass").write_text(captions.build(script, tl, voices, choice['caption'], gfx,
+                                                  choice["caption_size"], choice["caption_y"],
+                                                  [e["chosen"].get("focus") for e in entries], busy),
+                                   encoding="utf-8")
 
     enc = encoder(cfg)
     log(f"      encoding ({'NVENC' if enc == 'nvenc' else 'x264'}), -14 LUFS, captions burned in")
@@ -134,11 +151,11 @@ def render(job: Path, script: Script, tl: Timeline, entries: list[dict], voices:
     volume = choice["music_volume"] if choice["music_volume"] is not None else float(cfg["music"]["volume"])
     kw = dict(music=bed, music_volume=volume, fade_out=0.0, progress=progress_reporter(log))
     try:
-        finalize(work, "picture.mkv", "text.ass", final, encoder=enc, **kw)
+        finalize(work, picture, "text.ass", final, encoder=enc, **kw)
     except RuntimeError as e:
         if enc != "nvenc":
             raise
         log(f"      ! NVENC failed ({str(e).splitlines()[0][:100]}); encoding on the CPU")
         enc = "x264"
-        finalize(work, "picture.mkv", "text.ass", final, encoder=enc, **kw)
+        finalize(work, picture, "text.ass", final, encoder=enc, **kw)
     return {"music": [str(t) for t in used], "encoder": enc, "tail": tail}

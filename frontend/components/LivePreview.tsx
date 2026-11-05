@@ -192,10 +192,8 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
   const offset = pos.t - cutBefore(seg.cuts, pos.t);
   const px = LANG_CAPTION[lang].size * SIZE[style.size];
   const font = fontOf(style, lang);
-  // like the render: the hook (the opening scene's headline) is the only text while it's on screen
   const headline = scene.on_screen_text.trim(); // emoji included: the render draws them in colour
-  const hookOnly = seg.index === 0 && !!headline;
-  const caption = hookOnly ? null : captionAt(seg, pos.t, style.words || LANG_CAPTION[lang].words, !playing);
+  const caption = captionAt(seg, pos.t, style.words || LANG_CAPTION[lang].words, !playing);
   const keys = new Set(scene.keywords ?? []);
   const counted = segments.filter((s) => s.length > 0);
   const broll = (scene.broll ?? []).find((b) => offset >= b.at && offset < b.at + b.duration);

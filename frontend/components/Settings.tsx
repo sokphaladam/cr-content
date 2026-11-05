@@ -16,7 +16,8 @@ const META: Platform[] = ["facebook", "instagram"];
 const SERVICES: { key: ServiceKey; name: string; does: string; url: string; optional?: boolean }[] = [
   { key: "GEMINI_API_KEY", name: "Gemini", does: "Writes scripts, lyrics, titles, descriptions and cover ideas. Has a free tier.", url: "https://aistudio.google.com/apikey" },
   { key: "PIXABAY_API_KEY", name: "Pixabay", does: "Free stock footage and photos for your scenes.", url: "https://pixabay.com/api/docs/" },
-  { key: "PEXELS_API_KEY", name: "Pexels", does: "A second stock footage library, used when Pixabay isn't set.", url: "https://www.pexels.com/api/", optional: true },
+  { key: "PEXELS_API_KEY", name: "Pexels", does: "A second stock footage library, searched alongside Pixabay.", url: "https://www.pexels.com/api/", optional: true },
+  { key: "UNSPLASH_ACCESS_KEY", name: "Unsplash", does: "High-quality stock photos, searched alongside the video libraries (Mixkit videos need no key).", url: "https://unsplash.com/developers", optional: true },
   { key: "ELEVENLABS_API_KEY", name: "ElevenLabs", does: "Composes AI songs. Needs Music API access.", url: "https://elevenlabs.io/app/settings/api-keys" },
   {
     key: "JAMENDO_CLIENT_ID",

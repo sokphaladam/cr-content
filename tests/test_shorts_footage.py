@@ -96,8 +96,8 @@ def test_searches_go_in_order_and_stop_at_the_first_match(monkeypatch):
     best = p.search({"queries": ["cat bath", "wet cat", "cat faucet"], "shot": "wet cat", "key_objects": ["water"]},
                     3.0, False, footage.CHECKS, log)
     assert best["score"] == 8 and best["query"] == "wet cat"
-    assert p.tried == [("cat bath", "pixabay", 1), ("cat bath", "pixabay", 2), ("cat bath", "pexels", 3),
-                       ("wet cat", "pixabay", 4)]                       # Pixabay before Pexels, stops at 8/10
+    assert p.tried == [("cat bath", "pixabay", 1), ("cat bath", "pexels", 3), ("cat bath", "pixabay", 2),
+                       ("wet cat", "pixabay", 4)]                       # the libraries take turns, stops at 8/10
     assert len(log["attempts"]) == 4
     assert p.taken == {"pixabay-video-4"}                               # the others are free for other beats
 

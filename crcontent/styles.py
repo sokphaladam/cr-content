@@ -278,9 +278,9 @@ class CaptionStyle(BaseModel):
     size: str = "m"
     y: float = 0.62  # middle of the caption
     headline_y: float = 0.13  # top of the scene headline (~250 px: clear of the platforms' top bar)
-    color: str = "#FFFFFF"  # words not being spoken
-    highlight: str = "#FFE500"  # the word being spoken
-    keyword: str = "#4ADE80"  # words marked as keywords in the transcript
+    color: str = "#F8FAFC"  # words not being spoken
+    highlight: str = "#FACC15"  # the word being spoken
+    keyword: str = "#38BDF8"  # words marked as keywords in the transcript
     outline: str = "outline"
     case: str = "as_is"
     words: int = 0  # words shown together; 0 = the language's default
@@ -294,8 +294,8 @@ class CaptionStyle(BaseModel):
         s.y = min(max(float(s.y), 0.08), 0.92)
         s.headline_y = min(max(float(s.headline_y), 0.03), 0.85)
         s.words = min(max(int(s.words), 0), 6)
-        s.color, s.highlight = _hex(s.color, "#FFFFFF"), _hex(s.highlight, "#FFE500")
-        s.keyword = _hex(s.keyword, "#4ADE80")
+        s.color, s.highlight = _hex(s.color, "#F8FAFC"), _hex(s.highlight, "#FACC15")
+        s.keyword = _hex(s.keyword, "#38BDF8")
         fonts = available_fonts(lang)
         s.font = s.font if s.font in fonts else ""
         return s
@@ -305,12 +305,12 @@ class CaptionStyle(BaseModel):
 
 
 CAPTION_PRESETS: dict[str, dict] = {
-    "classic": {"label": "Classic", "font": "", "size": "m", "color": "#FFFFFF", "highlight": "#FFE500",
-                "keyword": "#4ADE80", "outline": "outline", "case": "as_is"},
+    "classic": {"label": "Classic", "font": "", "size": "m", "color": "#F8FAFC", "highlight": "#FACC15",
+                "keyword": "#38BDF8", "outline": "outline", "case": "as_is"},
     "bold": {"label": "Bold", "font": "Impact", "size": "l", "color": "#FFFFFF", "highlight": "#FFE500",
              "keyword": "#FF5A5A", "outline": "outline", "case": "upper"},
-    "boxed": {"label": "Boxed", "font": "", "size": "m", "color": "#FFFFFF", "highlight": "#FFE500",
-              "keyword": "#4ADE80", "outline": "box", "case": "as_is"},
+    "boxed": {"label": "Boxed", "font": "", "size": "m", "color": "#F8FAFC", "highlight": "#FACC15",
+              "keyword": "#38BDF8", "outline": "box", "case": "as_is"},
     "neon": {"label": "Neon", "font": "Bahnschrift", "size": "m", "color": "#FFFFFF", "highlight": "#3DF5FF",
              "keyword": "#FF5AF0", "outline": "glow", "case": "upper"},
     "minimal": {"label": "Minimal", "font": "Bahnschrift", "size": "s", "color": "#FFFFFF", "highlight": "#FFE500",

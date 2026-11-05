@@ -24,7 +24,7 @@ The same UI in a native window. A small Rust shell (`src-tauri/`) opens the wind
 on a free port next to it. The engine stops when the app closes, even if the app crashes.
 
 ```powershell
-npm install                  # project root, first time only (Tauri CLI); also run npm install in frontend/
+npm install                  # project root, first time only (Tauri CLI + remotion/); also run npm install in frontend/
 npm run dev                  # desktop app with hot reload: Next.js dev server + engine from .venv
 ```
 
@@ -46,8 +46,9 @@ npm run build                # → src-tauri\target\release\bundle\nsis\Shorts S
 ```
 
 This freezes the engine with PyInstaller (`scripts/build_engine.py` → `src-tauri/engine-dist/`), downloads FFmpeg
-(`scripts/fetch_ffmpeg.py` → `src-tauri/ffmpeg-dist/`), exports the UI to static files (`frontend/out/`), and bundles
-all three. The installed app writes `engine.log` (for troubleshooting) to
+(`scripts/fetch_ffmpeg.py` → `src-tauri/ffmpeg-dist/`), builds the Remotion motion graphics with their own Node and
+headless Chrome (`scripts/build_remotion.py` → `src-tauri/remotion-dist/`, ~480 MB unpacked), exports the UI to static
+files (`frontend/out/`), and bundles them all. The installed app writes `engine.log` (for troubleshooting) to
 `%APPDATA%\com.crcontent.shorts-studio\`; its library is in the folders above. The music-video extras (torch / stable-ts / librosa) aren't bundled,
 so the installed app uses even lyric spacing and bpm-based cuts.
 

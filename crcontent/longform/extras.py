@@ -7,7 +7,7 @@ from pathlib import Path
 from ..music import credit as music_credit
 from .parse import Script, stamp
 
-SOURCES = {"pexels": "Pexels", "pixabay": "Pixabay", "commons": "Wikimedia Commons", "inaturalist": "iNaturalist",
+SOURCES = {"pexels": "Pexels", "pixabay": "Pixabay", "mixkit": "Mixkit", "unsplash": "Unsplash", "commons": "Wikimedia Commons", "inaturalist": "iNaturalist",
            "met": "The Metropolitan Museum of Art", "nasa": "NASA", "archive": "the Internet Archive"}
 MADE = {"own": "your own media", "placeholder": "placeholder card (made by the app)",
         "card": "graphic card (made by the app)", "montage": "montage of the video's other scenes"}
@@ -25,7 +25,7 @@ def _part(path: str) -> dict | None:
     if isinstance(item, dict) and item.get("licence"):
         return {**item, "source": item.get("source", "commons"), "kind": item.get("kind", "photo"), "file": str(p)}
     site = p.name.split("-")[0]
-    if site in ("pexels", "pixabay"):
+    if site in ("pexels", "pixabay", "mixkit", "unsplash"):
         return {"source": site, "kind": "video" if "-video-" in p.name else "photo", "file": str(p),
                 "licence": f"{SOURCES[site]} licence"}
     return None
@@ -69,10 +69,13 @@ def credits(script: Script, entries: list[dict], music: list[str]) -> str:
 def _attributions(entries: list[dict]) -> list[str]:
     """Credit lines the description must carry: Wikimedia and iNaturalist photos (CC BY / BY-SA need the author and
     licence named), and a line for the public-domain archives (not required, but it's how they ask to be cited).
-    Pexels and Pixabay don't require credit; they're thanked in one line."""
+    Unsplash photos name the photographer (its API terms ask for it); Pexels, Pixabay and Mixkit don't require credit:
+    they're thanked in one line."""
     out = []
     shown = [c for e in entries for c in _shown(e)]
     for c in shown:
+        if c["source"] == "unsplash" and (line := f"Photo by {c.get('author') or 'unknown'} on Unsplash") not in out:
+            out.append(line)
         if c["source"] in ("commons", "inaturalist"):
             line = (f"Photo: {c.get('author') or 'unknown'}, {c['licence']}, via {SOURCES[c['source']]} "
                     f"({c.get('page', '')})")
@@ -81,8 +84,7 @@ def _attributions(entries: list[dict]) -> list[str]:
     archive = [SOURCES[s] for s in ("archive", "nasa", "met") if any(c["source"] == s for c in shown)]
     if archive:
         out.append(f"Archive footage and images: {', '.join(archive)} (public domain).")
-    stock = sorted({ {"pexels": "Pexels", "pixabay": "Pixabay"}[c["source"]]
-                     for c in shown if c["source"] in ("pexels", "pixabay")})
+    stock = sorted({SOURCES[c["source"]] for c in shown if c["source"] in ("pexels", "pixabay", "mixkit")})
     if stock:
         out.append(f"Stock footage: {' and '.join(stock)}.")
     return out

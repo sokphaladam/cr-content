@@ -23,14 +23,15 @@ DEFAULTS: dict = {
     "timing": {"pad_seconds": 0.4},  # silence after each scene's voiceover
     "footage": {
         "media_dir": "media",        # your own clips and photos: <media_dir>/<script>/scene-XX.*
-        # stock libraries searched in this order (keys from PEXELS_API_KEY / PIXABAY_API_KEY); commons = freely
+        # stock libraries searched in this order (keys from PEXELS_API_KEY / PIXABAY_API_KEY / UNSPLASH_ACCESS_KEY;
+        # Mixkit needs none); commons = freely
         # licensed Wikimedia photos, which get rare species right where stock sites show "a black bird"
-        "sources": ["pexels", "pixabay", "commons"],
+        "sources": ["pexels", "pixabay", "mixkit", "unsplash", "commons"],
         # the libraries for the other kinds of scene (footage.py): one species (iNaturalist: research-grade wildlife
         # photos), and history, people, artworks, events and space (Internet Archive film and newsreels, NASA,
         # Wikimedia Commons, The Met), all public domain or freely licensed; graphics are drawn by the app
         "by_kind": {
-            "species": ["pexels", "pixabay", "inaturalist", "commons"],
+            "species": ["pexels", "pixabay", "mixkit", "unsplash", "inaturalist", "commons"],
             "archival": ["archive", "nasa", "commons", "met"],
         },
         "alternatives": 4,           # matches kept per scene for the storyboard to swap between

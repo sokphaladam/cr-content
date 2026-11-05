@@ -193,9 +193,9 @@ class IdeasRequest(BaseModel):
 
 
 class PickRequest(BaseModel):
-    source: str  # "pexels" | "pixabay"
+    source: str  # "pexels" | "pixabay" | "mixkit" | "unsplash"
     kind: str  # "video" | "photo"
-    id: int
+    id: int | str  # Unsplash ids are text (checked in download_stock)
 
 
 def _media_info(path: Path) -> dict:
@@ -232,20 +232,17 @@ def topic_ideas(req: TopicIdeasRequest):
 
 @app.get("/api/footage")
 def footage(q: str, kind: str = "video"):
-    if not stock_source():
-        raise HTTPException(400, "Footage search needs a free Pixabay key. Add PIXABAY_API_KEY to .env "
-                                 "(get one at pixabay.com/api/docs), then restart the app. You can still upload your own.")
     if not q.strip():
         raise HTTPException(400, "Type what to search for.")
     try:
         return {"results": search(q.strip(), "photo" if kind == "photo" else "video")}
     except requests.HTTPError as e:
         code = e.response.status_code if e.response is not None else 0
-        name = stock_source().capitalize()
-        msg = f"{name} rejected the API key." if code in (400, 401, 403) else f"{name} search failed ({code})."
+        site = e.request.url.split("/")[2] if e.request is not None else "the stock site"
+        msg = f"{site} rejected the API key." if code in (400, 401, 403) else f"{site} search failed ({code})."
         raise HTTPException(502, msg)
     except requests.RequestException:
-        raise HTTPException(502, f"Couldn't reach {stock_source().capitalize()}. Check your internet connection.")
+        raise HTTPException(502, "Couldn't reach the stock sites. Check your internet connection.")
 
 
 @app.post("/api/footage/pick")
@@ -3033,6 +3030,7 @@ SERVICE_KEYS = {
     "GEMINI_API_KEY": "Gemini",
     "PIXABAY_API_KEY": "Pixabay",
     "PEXELS_API_KEY": "Pexels",
+    "UNSPLASH_ACCESS_KEY": "Unsplash",
     "ELEVENLABS_API_KEY": "ElevenLabs",
     "JAMENDO_CLIENT_ID": "Jamendo",
     "YOUTUBE_API_KEY": "YouTube Data API",

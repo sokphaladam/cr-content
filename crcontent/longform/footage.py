@@ -1,7 +1,7 @@
 """Footage for every scene, in this order:
 a) your own file: <media_dir>/<script>/scene-XX.mp4 (or .mov / .jpg / .png ...), used as it is
 b) what the scene is, as Gemini reads the script (any topic: wildlife, history, science, places...):
-   - footage: everyday real-world shots, from the stock libraries (Pexels, Pixabay) and Wikimedia Commons
+   - footage: everyday real-world shots, from the stock libraries (Pexels, Pixabay, Mixkit, Unsplash) and Wikimedia Commons
    - species: one particular living thing, from stock video and iNaturalist / Wikimedia photos of that species
    - archival: history, people, artworks, events, space: Internet Archive film and newsreels, NASA, Wikimedia
      Commons, The Met (all public domain or freely licensed)
@@ -41,6 +41,8 @@ CHECK_TRIES = 4             # matches downloaded and checked at most per search 
 LICENCES = {
     "pexels": ("Pexels License", "https://www.pexels.com/license/"),
     "pixabay": ("Pixabay Content License", "https://pixabay.com/service/license-summary/"),
+    "mixkit": ("Mixkit Stock Video Free License", "https://mixkit.co/license/#videoFree"),
+    "unsplash": ("Unsplash License", "https://unsplash.com/license"),
 }
 STOCK = (*LICENCES, "commons", *archives.SEARCHES)  # sources a scene's pick can be swapped back to
 KINDS = ("footage", "species", "archival", "graphic", "montage")
@@ -281,6 +283,14 @@ def search(query: str, sources: list[str], width: int, length: float, log=print,
                 for kind in ("video", "photo"):
                     found += _cached(f"pixabay-popular|{kind}|{width}{tall}|{query}",
                                      lambda: _pixabay(query, kind, width, portrait))
+            elif source == "mixkit":
+                lic, lic_url = LICENCES["mixkit"]
+                found += [{**m, "licence": lic, "licence_url": lic_url} for m in
+                          _cached(f"mixkit|{width}{tall}|{query}", lambda: visuals.mixkit_search(query, width, portrait))]
+            elif source == "unsplash" and visuals.unsplash_key():
+                lic, lic_url = LICENCES["unsplash"]
+                found += [{**m, "licence": lic, "licence_url": lic_url} for m in _cached(
+                    f"unsplash|{tall}|{query}", lambda: visuals.unsplash_search(query, None if portrait else "landscape", 6))]
             elif source == "commons":
                 found += _cached(f"commons|{query}", lambda: _commons(query))
             elif source in archives.SEARCHES:
@@ -332,6 +342,8 @@ def fetch(item: dict) -> Path:
         return commons.download({k: item[k] for k in ("title", "url", "page", "licence", "author")})
     if item["source"] in archives.SEARCHES:
         return archives.fetch(item)
+    if item.get("download_location"):  # Unsplash
+        visuals.unsplash_track(item["download_location"])
     ext = ".mp4" if item["kind"] == "video" else ".jpg"
     return visuals._download(item["url"], visuals.STOCK_CACHE / f"{item['source']}-{item['kind']}-{item['id']}{ext}")
 

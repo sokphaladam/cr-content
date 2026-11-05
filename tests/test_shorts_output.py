@@ -48,12 +48,12 @@ def test_caption_widths_fit_between_the_safe_edges():
             captions.RIGHT - captions.LEFT + 1
 
 
-def test_hook_is_on_the_first_frame_and_the_spoken_word_is_yellow():
+def test_hook_is_on_the_first_frame_and_the_spoken_word_is_amber():
     ass = captions.build(*_short())
     hook = [l for l in ass.splitlines() if l.startswith("Dialogue") and ",Hook," in l]
     assert hook and all(",0:00:00.00," in l for l in hook)
     assert "YOUR CAT BROUGHT YOU THIS?" in hook[-1].replace(r"\N", " ")
-    assert captions.YELLOW in ass
+    assert captions.AMBER in ass  # #FACC15
 
 
 def test_caption_groups_break_at_sentence_ends():

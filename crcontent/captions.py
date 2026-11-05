@@ -132,7 +132,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if headline and si == 0:  # the hook pops in on the very first frame
             lines += _hook_events(_esc(_case(headline, "upper", profile.code)), scene_start, scene_end, head_y,
                                   style.font or profile.font_name, hook_px, profile.code)
-            continue  # one strong line of text in the hook: its spoken words aren't captioned too
         elif headline:
             lines.append(f"Dialogue: 1,{_ts(scene_start)},{_ts(scene_end)},Headline,,0,0,0,,"
                          f"{{\\an8\\pos({WIDTH // 2},{head_y})}}{_esc(headline.upper())}")

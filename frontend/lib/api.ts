@@ -210,9 +210,9 @@ export const DEFAULT_CAPTIONS: CaptionStyle = {
   size: "m",
   y: 0.62,
   headline_y: 0.12,
-  color: "#FFFFFF",
-  highlight: "#FFE500",
-  keyword: "#4ADE80",
+  color: "#F8FAFC",
+  highlight: "#FACC15",
+  keyword: "#38BDF8",
   outline: "outline",
   case: "as_is",
   words: 0,
@@ -420,7 +420,7 @@ export interface Options {
   langs: Record<Lang, { name: string; voices: string[] }>;
   music: string[];
   music_use?: Record<string, MusicUse>; // each track's licence for monetized videos (missing on an older engine)
-  keys: { ai: boolean; stock: "" | "pexels" | "pixabay"; elevenlabs: boolean; jamendo?: boolean };
+  keys: { ai: boolean; stock: "" | "pexels" | "pixabay" | "mixkit"; elevenlabs: boolean; jamendo?: boolean };
   styles?: StyleCatalog; // missing on an older engine
   captions?: { presets: Record<string, Partial<CaptionStyle> & { label: string }> };
 }
@@ -535,7 +535,7 @@ export type PublishAccounts = Record<Platform, PublishAccount> & {
   youtube_categories?: Record<string, string>; // id -> name (missing on an older engine)
 };
 
-export type ServiceKey = "GEMINI_API_KEY" | "PIXABAY_API_KEY" | "PEXELS_API_KEY" | "ELEVENLABS_API_KEY" | "JAMENDO_CLIENT_ID" | "YOUTUBE_API_KEY";
+export type ServiceKey = "GEMINI_API_KEY" | "PIXABAY_API_KEY" | "PEXELS_API_KEY" | "UNSPLASH_ACCESS_KEY" | "ELEVENLABS_API_KEY" | "JAMENDO_CLIENT_ID" | "YOUTUBE_API_KEY";
 
 /** A free instrumental track on Jamendo (crcontent/music.py search()). */
 export interface MusicResult {
@@ -792,8 +792,8 @@ export interface ThumbSuggestions {
 }
 
 export interface StockResult {
-  source: "pexels" | "pixabay";
-  id: number;
+  source: "pexels" | "pixabay" | "mixkit" | "unsplash";
+  id: number | string;
   kind: "video" | "photo";
   thumb: string;
   duration?: number;

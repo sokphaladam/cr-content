@@ -11,6 +11,9 @@ RIGHT): nothing in the app's header, the bottom 20% or the right 15%.
 - brackets   an inset hairline frame with accent corners that fade in and breathe
 The attention traps (story devices, not decoration):
 - facts      a number the voice says ("400 years") slams on screen, counting up to it
+  (facts_remotion: the same moments drawn by Remotion, remotion/src/Fact.tsx, and laid over the picture: motion.py)
+Drawn by Remotion only (motion.py): size_compare (a length the voice says, the animal next to a person) and map_zoom
+(the place the voice names, on a globe that dives in).
 - teaser     an open loop: "wait for the end" over the hook beat, closed by "here it is" when the last beat starts
 - chapters   an n/N badge that ticks forward on every cut: a finish line worth reaching
 - callout    a lock-on reticle on the subject the footage search found
@@ -27,6 +30,9 @@ NAMES = {
     "sweep": "Light sweep on each cut",
     "brackets": "Inset frame",
     "facts": "Fact pop-ups (numbers count up)",
+    "facts_remotion": "Fact pop-ups, Remotion (glow, sparks; needs Node)",
+    "size_compare": "Size comparison, Remotion (the animal next to a person)",
+    "map_zoom": "Map zoom to the place named, Remotion",
     "teaser": "Open-loop teaser",
     "chapters": "Chapter counter",
     "callout": "Lock-on callout on the subject",
@@ -99,6 +105,18 @@ def facts(words: list) -> list[tuple[float, float, str, int | None, str]]:
     return out
 
 
+def fact_times(tl, words: dict) -> list[tuple[float, float, str, int | None, str, int]]:
+    """When each fact pops over the Short: (start, end, shown, value, unit, beat index) in the Short's seconds."""
+    out, last = [], -9.0
+    for k, slot in enumerate(tl.slots):
+        for s, e, shown, value, unit in facts(words.get(slot.scene) or []):
+            at = slot.start + s
+            if at - last >= 2.0:   # one at a time: a pile of numbers is noise
+                out.append((at, min(slot.start + e + 1.0, slot.end, tl.total), shown, value, unit, k))
+                last = at
+    return out
+
+
 def _fact_events(at: float, end: float, shown: str, value: int | None, unit: str, family: str) -> list[str]:
     """A number slamming in at FACT_Y: it counts up over 0.4 s when it's a whole number from 10 up, then holds."""
     def card(s: float, e: float, text: str, pop: str = "") -> str:
@@ -134,12 +152,12 @@ def _reticle(start: float, end: float, x: int, y: int, size: int = 320) -> list[
 
 
 def events(names: list[str] | tuple[str, ...], tl, words: dict | None = None, script=None,
-           focus: list | None = None, family: str = "Arial", lang: str = "en") -> list[str]:
+           focus: list | None = None, family: str = "Arial", lang: str = "en", busy=()) -> list[str]:
     """The ASS events for the chosen graphics over the Short's timeline `tl` (longform.timing.Timeline). The attention
     traps also use the voice's `words` ({scene: [tts.Word]}, times from each beat's start), the `script` (a beat's
     name labels its callout) and `focus` (each beat's subject point, None where none was found)."""
     names = [n for n in names if n in NAMES]
-    out = _trap_events(names, tl, words or {}, script, focus or [], family, lang)
+    out = _trap_events(names, tl, words or {}, script, focus or [], family, lang, busy)
     total = tl.total
     cuts = [s.start for s in tl.slots]   # the first beat's start is the Short's first frame
     if "progress" in names:
@@ -178,17 +196,14 @@ def events(names: list[str] | tuple[str, ...], tl, words: dict | None = None, sc
     return out
 
 
-def _trap_events(names: list[str], tl, words: dict, script, focus: list, family: str, lang: str) -> list[str]:
+def _trap_events(names: list[str], tl, words: dict, script, focus: list, family: str, lang: str,
+                 busy=()) -> list[str]:
     out: list[str] = []
     slots = tl.slots
     if "facts" in names:
-        last = -9.0
-        for slot in slots:
-            for s, e, shown, value, unit in facts(words.get(slot.scene) or []):
-                at = slot.start + s
-                if at - last >= 2.0:   # one at a time: a pile of numbers is noise
-                    out += _fact_events(at, min(slot.start + e + 1.0, slot.end, tl.total), shown, value, unit, family)
-                    last = at
+        for at, end, shown, value, unit, _ in fact_times(tl, words):
+            if not any(s <= at < e for s, e in busy):  # a Remotion graphic is on screen then
+                out += _fact_events(at, end, shown, value, unit, family)
     if "teaser" in names and len(slots) >= 3:
         open_, close = TEASER.get(lang, TEASER["en"])
         pulse = r"\t(0,300,\fscx106\fscy106)\t(300,600,\fscx100\fscy100)"

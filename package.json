@@ -5,7 +5,9 @@
     "dev": "tauri dev",
     "build:engine": "python scripts/build_engine.py",
     "build:ffmpeg": "python scripts/fetch_ffmpeg.py",
-    "build": "npm run build:engine && npm run build:ffmpeg && tauri build --config src-tauri/tauri.bundle.json",
+    "build:remotion": "python scripts/build_remotion.py",
+    "build": "npm run build:engine && npm run build:ffmpeg && npm run build:remotion && tauri build --config src-tauri/tauri.bundle.json",
+    "postinstall": "cd remotion && npm install --no-audit --no-fund",
     "tauri": "tauri"
   },
   "devDependencies": {

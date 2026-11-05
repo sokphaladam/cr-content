@@ -5,7 +5,7 @@ covers.SAFE holds those edges.
 - the hook: beat 1's On-screen Text on a white card (captions._hook_events) from the very first frame
 - labels: every other beat's On-screen Text, at the top, white on a dark card
 - captions: the voiceover word by word from its real word timings, big and bold, white with a thick black outline,
-  the word being spoken in yellow; a few words at a time, broken at sentence ends, shrunk to fit the safe width
+  the word being spoken in amber, numbers in sky blue (the Classic look); a few words at a time, broken at sentence ends, shrunk to fit the safe width
 English and Khmer both work: each language has its own fonts (longform.video._fonts) and libass shapes Khmer with
 HarfBuzz (finalize uses shaping=complex). Emoji in the sheet's text are drawn by finalize (emoji.py).
 """
@@ -27,11 +27,14 @@ HOOK_PX, LABEL_PX, CAPTION_PX = 92, 76, 100
 CAPTION_Y = round(HEIGHT * 0.64)     # the caption's middle: under the animal, well above the bottom 20%
 LABEL_TOP = TOP + 40
 YELLOW, WHITE, BLACK = "&H0000D4FF&", "&H00FFFFFF&", "&H00000000&"
+# the Classic look's palette (ASS colours are &H00BBGGRR&): text #F8FAFC, spoken word #FACC15, keyword #38BDF8
+SLATE, AMBER, SKY = "&H00FCFAF8&", "&H0015CCFA&", "&H00F8BD38&"
 SENTENCE_END = (".", "!", "?", "…", "—", ":", ";")
-# caption looks (edit.py picks one per Short): the spoken word's colour, the others' colour, size, outline and how hard
-# a group's first word pops in
+# caption looks (edit.py picks one per Short): the spoken word's colour, the others' colour, the keywords' colour
+# (key_words; none without "key"), size, outline and how hard a group's first word pops in
 STYLES = {
-    "classic": {"label": "Classic", "hi": YELLOW, "base": WHITE, "px": CAPTION_PX, "bord": 7, "edge": BLACK, "pop": (82, 106)},
+    "classic": {"label": "Classic", "hi": AMBER, "base": SLATE, "key": SKY, "px": CAPTION_PX, "bord": 7, "edge": BLACK,
+                "pop": (82, 106)},
     "pop": {"label": "Pop", "hi": "&H009B30FF&", "base": WHITE, "px": 112, "bord": 8, "edge": BLACK, "pop": (60, 118)},
     "neon": {"label": "Neon", "hi": "&H00FFE500&", "base": WHITE, "px": 96, "bord": 6, "edge": "&H00601A00&", "pop": (90, 104)},
     "minimal": {"label": "Minimal", "hi": WHITE, "base": "&H00C8C8C8&", "px": 84, "bord": 5, "edge": BLACK, "pop": (96, 100)},
@@ -78,11 +81,21 @@ def label_events(text: str, start: float, end: float, family: str, lang: str) ->
             + r"\N".join(_esc(r) for r in rows)]
 
 
+def key_words(words: list[Word]) -> set[int]:
+    """id() of the words a look's keyword colour picks out: the numbers the voice says and their unit ("400 YEARS"),
+    the same ones the fact pop-ups catch (graphics.facts)."""
+    from .graphics import facts
+
+    spans = [(s, e) for s, e, *_ in facts(words)]
+    return {id(w) for w in words if any(s <= w.start and w.end <= e for s, e in spans)}
+
+
 def caption_events(words: list[Word], at: float, family: str, lang: str, n: int, until: float,
                    look: dict = STYLES["classic"], y: int = CAPTION_Y) -> list[str]:
     """The voiceover's words (times relative to `at`, the beat's start) as captions; the last group stays up to
     `until` at most."""
     out = []
+    keys = key_words(words) if look.get("key") else set()
     gs = groups(words, n)
     for gi, g in enumerate(gs):
         g_end = gs[gi + 1][0].start if gi + 1 < len(gs) else min(g[-1].end + 0.3, until - at)
@@ -101,8 +114,9 @@ def caption_events(words: list[Word], at: float, family: str, lang: str, n: int,
             lo, hi = look["pop"]
             pop = (rf"\fscx{lo}\fscy{lo}\t(0,80,0.7,\fscx{hi}\fscy{hi})\t(80,130,\fscx100\fscy100)"
                    if wi == 0 and lo != hi else "")
-            body = r"\N".join(" ".join(f"{{\\1c{look['hi'] if j == wi else look['base']}}}{texts[j]}" for j in idx)
-                              for idx in per_row)
+            colour = [look["hi"] if j == wi else look["key"] if id(g[j]) in keys else look["base"]
+                      for j in range(len(g))]
+            body = r"\N".join(" ".join(f"{{\\1c{colour[j]}}}{texts[j]}" for j in idx) for idx in per_row)
             out.append(f"Dialogue: 1,{_ts(s)},{_ts(e)},Caption,,0,0,0,,{{\\an5\\pos({CX},{y})\\fs{size}"
                        f"{pop}}}{body}")
     return out
@@ -110,10 +124,10 @@ def caption_events(words: list[Word], at: float, family: str, lang: str, n: int,
 
 def build(script: Script, tl: Timeline, voices: dict[int, list[Word]], style: str = "classic",
           graphics: tuple[str, ...] | list[str] = (), size: float = 1.0, y: float | None = None,
-          focus: list | None = None) -> str:
+          focus: list | None = None, busy=()) -> str:
     """The whole text layer: hook, labels and captions for every beat; `style` is a key of STYLES, `size` scales the
     captions and `y` places their middle (a share of the height; None: CAPTION_Y). `focus`: each beat's subject point
-    (for the callout graphic)."""
+    (for the callout graphic). `busy`: (start, end) spans a Remotion graphic covers: no fact pop-up there."""
     look = dict(STYLES.get(style, STYLES["classic"]))
     look["px"] = round(look["px"] * size)
     cap_y = CAPTION_Y if y is None else round(HEIGHT * y)
@@ -135,7 +149,7 @@ def build(script: Script, tl: Timeline, voices: dict[int, list[Word]], style: st
     if graphics:
         from . import graphics as gfx
 
-        events = gfx.events(graphics, tl, voices, script, focus, heavy, lang) + events
+        events = gfx.events(graphics, tl, voices, script, focus, heavy, lang, busy) + events
     styles = [
         f"Style: Hook,{heavy},{HOOK_PX},&H00141414&,&H00141414&,&H00FFFFFF&,&H00FFFFFF&,-1,0,0,0,100,100,0,0,1,0,0,"
         "8,0,0,0,1",

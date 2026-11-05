@@ -15,10 +15,11 @@ DEFAULTS: dict = _merge(LONGFORM, {
     "voice": {"edge": {"rate": "+5%"}},
     "timing": {"pad_seconds": 0.25},  # a Short keeps moving: a short breath between beats
     "footage": {
-        # your own clips first (<media_dir>/<plan>-epNN/scene-XX.*), then each search in Pixabay, then Pexels (when
-        # PEXELS_API_KEY is set), then a placeholder card
-        "sources": ["pixabay", "pexels"],
-        "by_kind": {"species": ["pixabay", "pexels"], "archival": ["pixabay", "pexels"]},
+        # your own clips first (<media_dir>/<plan>-epNN/scene-XX.*), then each search in these libraries taking turns
+        # (Pexels needs PEXELS_API_KEY, Unsplash UNSPLASH_ACCESS_KEY and has photos only), then a placeholder card
+        "sources": ["pixabay", "pexels", "mixkit", "unsplash"],
+        "by_kind": {"species": ["pixabay", "pexels", "mixkit", "unsplash"],
+                    "archival": ["pixabay", "pexels", "mixkit", "unsplash"]},
         # which beats Gemini looks at (match.py, one image call per candidate clip): "all" = every beat (default),
         # "hook" = only the opening beat, "off" = none. Beats it skips take the first clip tagged with the animal, which
         # is NOT safe for confusable animals: stock tags "mantis" on praying mantises, so a mantis shrimp Short got
