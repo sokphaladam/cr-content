@@ -21,7 +21,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import addons, art, campaigns, director_plan, drafts, locations, lyricvideo, music, packaging, publish, quality, quality_preview, rights, schedule, sheet, voiceover
+from . import addons, art, campaigns, director_plan, drafts, locations, profiles, lyricvideo, music, packaging, publish, quality, quality_preview, rights, schedule, sheet, voiceover
+from .history.models import ResearchBrief as ResearchBriefModel
 from .config import ASSETS_DIR, CACHE_DIR, CODE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT, SCENE_PAD_SEC, frame_size
 from .lyrics import SongScript, generate_song, suggest_video_ideas
 from .align import lines_from_json, load_lines, save_lines
@@ -134,6 +135,12 @@ def _voices(lang: str) -> list[str]:
         found = []
     defaults = list(LANGS[lang].voices)
     return defaults + [v for v in found if v not in defaults]
+
+
+@app.get("/api/profiles")
+def channel_profiles():
+    """The channel profiles a new Script-to-Video project can start from (profiles.py)."""
+    return [p.model_dump() for p in profiles.PROFILES.values()]
 
 
 @app.get("/api/options")
@@ -960,6 +967,10 @@ def _run_render(job_id: str, req: RenderRequest) -> None:
             meta_path = final.parent / "meta.json"
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             meta["draft"] = req.draft_id
+            try:
+                profiles.stamp(meta, drafts.load(req.draft_id).plan)
+            except KeyError:  # the draft was deleted while it rendered
+                pass
             meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         with jobs_lock:
             job.update(status="done", step=5, video=final.parent.name)
@@ -1392,6 +1403,9 @@ def _run_storyboard(job_id: str, script_md: Path, plan=None, choice: dict | None
         folder = longform.make_storyboard(script_md, log=log, choice=choice)
         if plan is not None:  # a Script-to-Video project keeps its Director Plan beside the storyboard
             (folder / "plan.json").write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+            if plan.project.channel_profile_id:
+                meta = profiles.stamp(_read_meta(folder), plan)
+                (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         with jobs_lock:
             job.update(status="done", step=5, video=folder.name, source=folder.name)
     except Exception as e:
@@ -1435,6 +1449,8 @@ class ScriptVideoRequest(BaseModel):
     rate: str = ""
     music: str = ""  # "" = matches the mood (a long video: your tracks in Settings), "none", or a track in assets/music
     target_seconds: float = 0  # optional; a pacing hint for the AI Director, the narration is never cut
+    channel_profile_id: str = ""  # profiles.PROFILES key; "" = the general defaults
+    research_brief_id: str = ""   # an approved topic brief the script was written from (a Short then keeps it)
 
 
 RATES = ("-10%", "+0%", "+5%", "+15%")  # the editor's Speed choices
@@ -1460,6 +1476,15 @@ def script_video(req: ScriptVideoRequest):
         raise HTTPException(400, "The target length should be between 0 and 4 hours.")
     if req.voice and req.voice not in {v for code in LANGS for v in _voices(code)}:
         raise HTTPException(400, f"Unknown voice {req.voice}.")
+    profile, profile_note = profiles.resolve(req.channel_profile_id)
+    if req.research_brief_id and req.format != "short":
+        raise HTTPException(400, "A script written from research becomes a Short; long videos can't take it yet.")
+
+    def tag(plan):  # the project remembers its channel profile (none: the general defaults, as before profiles)
+        if profile:
+            plan.project.channel_profile_id, plan.project.channel_profile_version = profile.id, profile.version
+        return plan
+
     if req.format == "long":  # a script already written as the long-video table keeps its chapters and title cards
         LONG_SCRIPTS.mkdir(parents=True, exist_ok=True)
         probe = LONG_SCRIPTS / f".paste-{uuid.uuid4().hex[:8]}.md"
@@ -1475,7 +1500,7 @@ def script_video(req: ScriptVideoRequest):
             plan = director_plan.from_scenes(title, "long", table.lang, req.visual_style, [
                 {"narration": s.voiceover, "visual_query": s.visual, "on_screen_text": s.text} for s in table.scenes])
             plan.project.target_seconds = req.target_seconds
-            return _start_long(req.text, plan, _choice(req))
+            return _start_long(req.text, tag(plan), _choice(req)) | {"profile_note": profile_note}
     try:
         script, lang, method = import_script(req.text, req.lang, use_claude=bool(os.getenv("GEMINI_API_KEY")))
     except ValueError as e:
@@ -1483,21 +1508,32 @@ def script_video(req: ScriptVideoRequest):
     plan = director_plan.from_scenes(script.title, req.format, lang, req.visual_style,
                                      [s.model_dump() for s in script.scenes])
     plan.project.target_seconds = req.target_seconds
+    tag(plan)
     if req.format == "long":  # the job directs it, so the plan shows up in its progress log
-        return _start_long(director_plan.longform_markdown(plan), plan, _choice(req)) | {"method": method}
+        return _start_long(director_plan.longform_markdown(plan), plan, _choice(req)) | {"method": method, "profile_note": profile_note}
     problems: list[str] = []
-    plan = _direct_or_keep(plan, problems.append)
+    research = _topic_research(req.research_brief_id, plan) if req.research_brief_id else None
+    plan = _direct_or_keep(plan, problems.append, research)
+    if research is not None:  # also when Gemini didn't direct it: linking claims needs no model
+        from . import ai_director
+
+        plan = ai_director.link_research(plan, research)
     voice = req.voice if req.voice in _voices(lang) else ""  # a voice for the other language: its default instead
     voice_note = f"{req.voice} doesn't speak this script's language, so the default voice is used." if req.voice and not voice else ""
     draft_id, _ = drafts.create(drafts.Draft(script=script, lang=lang, topic=script.title, plan=plan, voice=voice,
                                              rate=req.rate or drafts.Draft.model_fields["rate"].default, music=req.music))
+    if research is not None:  # the topic's approved research now belongs to this project
+        from .history import research as hr
+
+        hr.write(_research_path("draft", draft_id), research.model_copy(update={
+            "id": draft_id, "project_kind": "draft", "project_ref": draft_id, "written_script": []}))
     footage_job = _start_plan_footage("draft", draft_id, [], script.title)  # the AI finds the footage, not the user
     return {"format": "short", "id": draft_id, "title": script.title, "scenes": len(script.scenes), "method": method,
             "planned_by": plan.planned_by, "director_note": problems[-1] if problems else "", "footage_job": footage_job,
-            "voice_note": voice_note}
+            "voice_note": voice_note, "profile_note": profile_note}
 
 
-def _direct_or_keep(plan: "director_plan.DirectorPlan", log) -> "director_plan.DirectorPlan":
+def _direct_or_keep(plan: "director_plan.DirectorPlan", log, research=None) -> "director_plan.DirectorPlan":
     """The AI Director's plan when Gemini is set up and answers; otherwise the plan seeded from the script, said in `log`."""
     from . import ai_director
 
@@ -1506,7 +1542,7 @@ def _direct_or_keep(plan: "director_plan.DirectorPlan", log) -> "director_plan.D
         return plan
     log("Director: reading the whole script and planning the shots")
     try:
-        directed = ai_director.direct(plan)
+        directed = ai_director.direct(plan, research=research)
     except (llm.APIError, RuntimeError, ValueError) as e:
         log(f"Director: couldn't plan the shots ({_llm_error(e).detail if isinstance(e, llm.APIError) else e}); "
             "kept one shot per scene from your script")
@@ -1632,6 +1668,214 @@ def _plan_media(kind: str, ref: str) -> Path:
     if kind == "long":
         return longform.media_folder(Script.load(_longform_dir(ref) / "scenes.json").slug, cfg)
     return longform.media_folder(ref, cfg)
+
+
+# ---------- Research briefs (Hidden History Files spec, H2): source-backed claims for a project or a topic ----------
+# kind "draft" / "long": research.json in the project's folder; kind "topic": <data>/research/<id>.json.
+
+research_jobs: dict[str, str] = {}  # "kind/ref" -> its research job id while queued or running
+
+
+def _research_path(kind: str, ref: str) -> Path:
+    if kind == "draft":
+        folder = drafts.DRAFTS_DIR / ref
+        if not ref or ref.startswith(".") or folder.resolve().parent != drafts.DRAFTS_DIR.resolve() \
+                or not (folder / "draft.json").exists():
+            raise HTTPException(404, "Draft not found. It may have been deleted.")
+        return folder / "research.json"
+    if kind == "long":
+        return _longform_dir(ref) / "research.json"
+    if kind == "topic":
+        if not re.fullmatch(r"[0-9a-f]{10}", ref):
+            raise HTTPException(404, "Research brief not found.")
+        return ROOT / "research" / f"{ref}.json"
+    raise HTTPException(404, "Unknown project kind.")
+
+
+def _research_scenes(kind: str, ref: str) -> list[tuple[str, str]]:
+    """The project's narration as (plan scene id, text); nothing for a topic."""
+    if kind == "topic":
+        return []
+    try:
+        return [(s.id, s.narration) for s in _plan_get(kind, ref).scenes if s.narration.strip()]
+    except HTTPException:
+        if kind != "draft":
+            raise
+        return [(f"scene-{i:03d}", s.narration) for i, s in enumerate(drafts.load(ref).script.scenes, 1) if s.narration.strip()]
+
+
+def _research_brief(kind: str, ref: str):
+    from .history import research
+
+    path = _research_path(kind, ref)
+    try:
+        return path, research.load(path)
+    except ValueError as e:
+        raise HTTPException(422, f"This research brief can't be read: {str(e).splitlines()[0]}")
+
+
+def _run_research(job_id: str, kind: str, ref: str) -> None:
+    from .history import research
+
+    job = jobs[job_id]
+    log = _job_logger(job, research.STEPS)
+    with jobs_lock:
+        job["status"] = "running"
+    try:
+        path, brief = _research_brief(kind, ref)
+        research.run(path, brief or research.new(kind, ref), _research_scenes(kind, ref), log=log)
+        with jobs_lock:
+            job.update(status="done", step=research.STEPS)
+    except Exception as e:
+        _fail(job, e)
+
+
+def _start_research(kind: str, ref: str, title: str) -> str:
+    key = f"{kind}/{ref}"
+    with jobs_lock:
+        running = research_jobs.get(key)
+        if running and jobs.get(running, {}).get("status") in ("queued", "running"):
+            return running
+        job_id = uuid.uuid4().hex[:10]
+        jobs[job_id] = {"id": job_id, "kind": "research", "status": "queued", "step": 0, "log": [], "title": title}
+        research_jobs[key] = job_id
+    footage_pool.submit(_run_research, job_id, kind, ref)
+    return job_id
+
+
+class TopicResearchRequest(BaseModel):
+    topic: str
+
+
+@app.post("/api/research/topic")
+def research_topic(req: TopicResearchRequest):
+    """Topic workflow: a new research brief for a topic, researched in the background (watch /api/jobs/<id>)."""
+    from .history import research
+
+    topic = req.topic.strip()
+    if len(topic) < 3 or len(topic) > 500:
+        raise HTTPException(400, "Describe the topic in a few words (up to 500 characters).")
+    brief = research.new("topic", "", topic)
+    brief.project_ref = brief.id
+    research.write(_research_path("topic", brief.id), brief)
+    return {"id": brief.id, "job": _start_research("topic", brief.id, topic)}
+
+
+@app.get("/api/research/{kind}/{ref}")
+def research_get(kind: str, ref: str):
+    from .history import research
+
+    _, brief = _research_brief(kind, ref)
+    running = research_jobs.get(f"{kind}/{ref}")
+    running = running if running and jobs.get(running, {}).get("status") in ("queued", "running") else None
+    return {"brief": brief, "job": running, "blockers": research.blockers(brief) if brief else []}
+
+
+@app.post("/api/research/{kind}/{ref}/run")
+def research_run(kind: str, ref: str):
+    """Research (or re-check) the brief: claims, sources and evidence. Claims the creator edited are kept."""
+    path, brief = _research_brief(kind, ref)
+    if kind != "topic" and not _research_scenes(kind, ref):
+        raise HTTPException(400, "This project has no narration to research yet.")
+    return {"id": _start_research(kind, ref, brief.topic if brief else ref)}
+
+
+@app.put("/api/research/{kind}/{ref}")
+def research_save(kind: str, ref: str, brief: ResearchBriefModel):
+    """Save the creator's edits; statuses are settled from the attached evidence again."""
+    from .history import research
+
+    path, _ = _research_brief(kind, ref)
+    brief.project_kind, brief.project_ref = kind, ref
+    return research.save_edit(path, brief)
+
+
+class SourceRequest(BaseModel):
+    url: str
+    note: str = ""
+    excerpt: str = ""
+
+
+@app.post("/api/research/{kind}/{ref}/sources")
+def research_add_source(kind: str, ref: str, req: SourceRequest):
+    """Add a source by its link (with an optional note and the passage that backs a claim)."""
+    from .history import research
+
+    path, brief = _research_brief(kind, ref)
+    try:
+        return research.add_source(path, brief or research.new(kind, ref), req.url, req.note, req.excerpt)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/research/{kind}/{ref}/approve")
+def research_approve(kind: str, ref: str):
+    """Approve the brief; a project's Director Plan then carries its claims (scene claim ids, key facts)."""
+    from . import ai_director
+    from .history import research
+
+    path, _ = _research_brief(kind, ref)
+    try:
+        brief = research.approve(path)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    if kind != "topic":
+        try:
+            _plan_put(kind, ref, ai_director.link_research(_plan_get(kind, ref), brief))
+        except HTTPException:
+            pass  # a project without a Director Plan: nothing to link
+    return brief
+
+
+def _approved_research(kind: str, ref: str):
+    """The project's research brief when it's approved (what the AI Director may rely on), else None."""
+    if kind not in ("draft", "long"):
+        return None
+    try:
+        _, brief = _research_brief(kind, ref)
+    except HTTPException:
+        return None
+    return brief if brief and brief.research_status == "approved" else None
+
+
+def _topic_research(brief_id: str, plan: "director_plan.DirectorPlan"):
+    """An approved topic brief, its claims linked to the plan's scenes by the script written from it."""
+    from .history import script as hscript
+
+    _, brief = _research_brief("topic", brief_id)
+    if brief is None or brief.research_status != "approved":
+        raise HTTPException(409, "Approve the research before making the video from it.")
+    return hscript.attach(brief, brief.written_script, [s.id for s in plan.scenes], [s.narration for s in plan.scenes])
+
+
+class HistoryScriptRequest(BaseModel):
+    target_seconds: float = 40
+
+
+@app.post("/api/research/topic/{ref}/script")
+def research_script(ref: str, req: HistoryScriptRequest):
+    """Write a Hidden History Files script from an approved topic brief (only its sourced claims). The creator
+    reviews the text in the form before making the video; nothing is created here."""
+    from .history import research, script as hscript
+
+    if not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(400, "Writing the script needs Gemini. Add your key in Settings.")
+    if not 10 <= req.target_seconds <= 180:
+        raise HTTPException(400, "The target length should be between 10 seconds and 3 minutes.")
+    path, brief = _research_brief("topic", ref)
+    if brief is None:
+        raise HTTPException(404, "Research brief not found.")
+    try:
+        out = hscript.write(brief, req.target_seconds)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except llm.APIError as e:
+        raise _llm_error(e)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    brief.written_script = out["scenes"]
+    research.write(path, brief)  # not an edit of the research: no new revision, approval stands
+    return out
 
 
 def _running_plan_job(key: str) -> str | None:
@@ -1831,7 +2075,8 @@ def plan_direct(kind: str, ref: str, req: DirectRequest):
             raise HTTPException(409, "The AI Director is already planning this video.")
         plan_busy.add(key)
     try:
-        plan = ai_director.direct(_plan_get(kind, ref), req.scenes, req.note[:1000])
+        plan = ai_director.direct(_plan_get(kind, ref), req.scenes, req.note[:1000],
+                                  research=_approved_research(kind, ref))
         _plan_put(kind, ref, plan)
         new = [] if kind == "short" else [s.id for s in plan.shots if s.footage is None and s.shot_type != "graphic"]
         job = _start_plan_footage(kind, ref, new, plan.project.title) if new else None  # only the re-planned shots

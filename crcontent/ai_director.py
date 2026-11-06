@@ -155,6 +155,78 @@ conclusion. Rhythm and progression, not constant fast cuts; don't hold the same 
 }
 
 
+# Hidden History Files (spec 6.2-6.3): added to SYSTEM for history projects only; other documentaries are untouched
+HISTORY = """This is a HISTORY documentary Short for the channel Hidden History Files: cinematic, measured, curious and
+authoritative; never a horror trailer. One central historical mystery or discovery. Story model: hook (0-3 s:
+surprising evidence, a consequence or a specific question; no channel intro), context (who, where, when, quickly),
+investigation (clues, records, artifacts or conflicting explanations, in a meaningful order), revelation (what the
+evidence actually shows), resonance (why it matters, or what genuinely remains uncertain). These are guides, not
+fixed scene boundaries. A loop back to the start is optional: never force one if it makes the conclusion confusing.
+
+Visuals are evidence first. Prefer, in order: authentic archive footage or photographs of the actual subject;
+museum, library, university or excavation imagery; the real site or landscape today; close-ups of artifacts,
+inscriptions, documents and maps; then context stock (period-neutral landscape, texture, light); a graphic or map;
+and only when nothing authentic can exist, a reconstruction. Give every shot its visual_origin: "archive" (genuine
+historical material of the subject), "evidence" (the artifact, document, site or record the narration cites, as it
+is today), "context" (atmosphere or setting that shows no specific event), "graphic" (map, timeline, date card,
+document excerpt), "reconstruction" (an illustration of something no camera recorded; always labelled as such).
+Never present context footage or a reconstruction as the event itself: generic "ancient temple" or "old ship"
+footage must not imply that a specific event happened there. Never plan animal, wildlife or nature-documentary
+footage unless the narration is about that animal. Footage searches name the entity, the place and the period
+(e.g. "Phnom Kulen plateau aerial", "Angkor temple lidar map", "Mary Celeste brigantine painting").
+Avoid artificial danger, exaggerated claims and conspiracy framing. Distinguish evidence from dramatization. Plan
+sound design to support the story (low ambience, impacts only on real story beats), not constant noise. Keep shots
+readable on a phone: one clear subject per frame, text-friendly space for dates and names."""
+
+HISTORY_SHORT = """Format: vertical 9:16 YouTube Short, usually 30-50 seconds. The first 1-2 seconds must show and
+say something specific that raises a clear question (a concrete object, place, date or person), not a vague tease.
+1-3 purposeful shots per scene framed for a vertical screen; a still image needs a slow push-in or pan. A single
+shot held longer than about 4 seconds loses viewers: split longer narration into shots that each add evidence."""
+
+
+def is_history(plan: DirectorPlan) -> bool:
+    """History direction for the Hidden History Files profile, or a project given the history look."""
+    p = plan.project
+    return p.channel_profile_id == "hidden_history_files" or p.visual_style == "cinematic_history"
+
+
+def _system(plan: DirectorPlan) -> str:
+    return f"{SYSTEM}\n\n{HISTORY}" if is_history(plan) else SYSTEM
+
+
+def _schema(plan: DirectorPlan) -> dict:
+    if not is_history(plan):
+        return SCHEMA
+    schema = json.loads(json.dumps(SCHEMA))  # a copy: the shared schema stays as every other project needs it
+    shot = schema["properties"]["scenes"]["items"]["properties"]["shots"]["items"]
+    shot["properties"]["visual_origin"] = {"type": "string", "enum": list(dp.VISUAL_ORIGINS)}
+    shot["required"] = [*shot["required"], "visual_origin"]
+    return schema
+
+
+def _research_block(brief) -> str:
+    """The approved research the narration rests on: what the pictures must not contradict or overstate."""
+    if not brief or brief.research_status != "approved":
+        return ""
+    lines = [f"- [{c.status}] {c.claim_text}" for c in brief.claims if c.status != "unsupported"]
+    return ("Approved research (statuses come from attached sources; never show a disputed or uncertain claim as "
+            "settled fact, and never add facts beyond these):\n" + "\n".join(lines)) if lines else ""
+
+
+def link_research(plan: DirectorPlan, brief) -> DirectorPlan:
+    """Put an approved brief's claims into the plan: each scene's claim ids (from the claims' scene ids) and the
+    story's key facts. Deterministic: no model involved. A brief that isn't approved links nothing."""
+    if not brief or brief.research_status != "approved":
+        return plan
+    out = plan.model_copy(deep=True)
+    usable = [c for c in brief.claims if c.status != "unsupported"]
+    for scene in out.scenes:
+        scene.claim_ids = [c.id for c in usable if scene.id in c.script_scene_ids]
+    out.story.key_facts = [c.claim_text for c in usable if c.importance == "central"] or out.story.key_facts
+    out.story.research_revision = brief.approved_revision
+    return out
+
+
 def _clean(text: str) -> str:
     return " ".join(FILLER.sub("", text or "").split()).strip(" ,")
 
@@ -174,14 +246,19 @@ def _listing(plan: DirectorPlan, only: set[str] | None) -> str:
     return "\n".join(lines)
 
 
-def _task(plan: DirectorPlan, only: set[str] | None, note: str) -> str:
+def _task(plan: DirectorPlan, only: set[str] | None, note: str, research=None) -> str:
     p = plan.project
+    history = is_history(plan)
+    rules = HISTORY_SHORT if history and p.format == "short" else FORMAT_RULES[p.format]
     task = (f"Title: {p.title!r}\nLanguage of the narration: {p.language}\nVisual style: {p.visual_style}\n"
-            f"{FORMAT_RULES[p.format]}\n\nScenes (id, estimated narration seconds, the fewest shots it needs, narration):\n{_listing(plan, only)}")
+            f"{rules}\n\nScenes (id, estimated narration seconds, the fewest shots it needs, narration):\n{_listing(plan, only)}")
     from .shorts.analytics import director_brief
 
-    if brief := director_brief()[0]:
+    # the imported channel numbers are the wildlife channel's (hook styles, animals): not evidence for history
+    if not history and (brief := director_brief()[0]):
         task += f"\n\n{brief}"
+    if history and (facts := _research_block(research)):
+        task += f"\n\n{facts}"
     if p.target_seconds:
         task += (f"\n\nThe creator aims for about {round(p.target_seconds)} seconds in total; the narration above is fixed, "
                  "so pace the shots (holds, cuts) for that length.")
@@ -194,9 +271,10 @@ def _task(plan: DirectorPlan, only: set[str] | None, note: str) -> str:
     return task
 
 
-def _ask(plan: DirectorPlan, only: set[str] | None, note: str, client) -> tuple[dict, Path]:
-    task = _task(plan, only, note)
-    key = hashlib.sha256(json.dumps([LLM_MODEL, SYSTEM, task]).encode()).hexdigest()[:20]
+def _ask(plan: DirectorPlan, only: set[str] | None, note: str, client, research=None) -> tuple[dict, Path]:
+    task = _task(plan, only, note, research)
+    system = _system(plan)
+    key = hashlib.sha256(json.dumps([LLM_MODEL, system, task]).encode()).hexdigest()[:20]
     cached = CACHE / f"{key}.json"
     if cached.exists():  # same script, same request: no second Gemini call (a retry after a failed render, a reload)
         return json.loads(cached.read_text(encoding="utf-8")), cached
@@ -206,8 +284,8 @@ def _ask(plan: DirectorPlan, only: set[str] | None, note: str, client) -> tuple[
         client = make_client()
     response = client.beta.messages.create(
         model=LLM_MODEL, max_tokens=32000,
-        output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
-        system=SYSTEM, messages=[{"role": "user", "content": task}])
+        output_config={"effort": "medium", "format": {"type": "json_schema", "schema": _schema(plan)}},
+        system=system, messages=[{"role": "user", "content": task}])
     if getattr(response, "stop_reason", None) == "refusal":
         raise RuntimeError("Gemini declined to plan this video.")
     if getattr(response, "stop_reason", None) == "max_tokens":
@@ -240,6 +318,7 @@ def _shots(scene: dp.Scene, raw: list[dict]) -> list[Shot]:
             narration_reference=scene.narration,
             footage_queries=queries or ([scene.visual_notes] if scene.visual_notes else []),
             evidence=_pick(r.get("evidence"), dp.EVIDENCE, "subject"),
+            visual_origin=_pick(r.get("visual_origin"), dp.VISUAL_ORIGINS, ""),
             factual_requirements=[str(x).strip() for x in r.get("factual_requirements", []) if str(x).strip()],
             sound_design=[str(x).strip() for x in r.get("sound_design", []) if str(x).strip()],
             alternatives=[str(x).strip() for x in r.get("alternatives", []) if str(x).strip()],
@@ -248,7 +327,8 @@ def _shots(scene: dp.Scene, raw: list[dict]) -> list[Shot]:
     return shots
 
 
-def direct(plan: DirectorPlan, scene_ids: list[str] | None = None, note: str = "", client=None) -> DirectorPlan:
+def direct(plan: DirectorPlan, scene_ids: list[str] | None = None, note: str = "", client=None,
+           research=None) -> DirectorPlan:
     """The plan directed by Gemini: the whole video, or just `scene_ids` (the rest is kept as it is).
     Raises llm.APIError / RuntimeError when Gemini can't be reached or answers nonsense; the plan isn't touched then."""
     known = {s.id for s in plan.scenes}
@@ -256,9 +336,9 @@ def direct(plan: DirectorPlan, scene_ids: list[str] | None = None, note: str = "
     if only and only - known:
         raise ValueError(f"Unknown scenes: {', '.join(sorted(only - known))}")
     locked = {s.scene_id for s in plan.shots if s.locked}
-    data, cached = _ask(plan, only, note, client)
+    data, cached = _ask(plan, only, note, client, research)
     try:
-        out = _apply(plan, data, only, locked)
+        out = link_research(_apply(plan, data, only, locked), research)
     except (ValidationError, TypeError, ValueError, AttributeError) as e:  # wrong types or shapes in Gemini's answer
         raise RuntimeError(f"Gemini's plan wasn't usable ({type(e).__name__}). Try again.") from e
     if not cached.exists():  # only a usable answer is worth reusing

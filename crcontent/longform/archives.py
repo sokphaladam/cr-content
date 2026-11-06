@@ -11,6 +11,7 @@ items carry what fetch() needs to find it.
 """
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import requests
@@ -33,7 +34,20 @@ NASA_LICENCE = ("NASA media (public domain)", "https://www.nasa.gov/nasa-brand-c
 ARCHIVE_SEARCH = "https://archive.org/advancedsearch.php"
 ARCHIVE_META = "https://archive.org/metadata/{}"
 ARCHIVE_COLLECTIONS = ("prelinger", "universal_newsreels", "FedFlix")
-ARCHIVE_LICENCE = ("Public domain (Internet Archive)", "https://archive.org/details/{}")
+# Hosting on the Archive doesn't make a film public domain (Hidden History spec 7.2): an item's own licenseurl decides;
+# without one its rights are not stated and the creator checks the item page
+UNSTATED = "Rights not stated (Internet Archive item)"
+
+
+def archive_licence(licenseurl: str, ident: str) -> tuple[str, str]:
+    url = (licenseurl or "").strip()
+    if "publicdomain/mark" in url:
+        return "Public domain (Public Domain Mark, Internet Archive)", url
+    if "publicdomain/zero" in url:
+        return "CC0 (Internet Archive)", url
+    if m := re.search(r"/licenses/([a-z-]+)/([\d.]+)", url):
+        return f"CC {m.group(1).upper()} {m.group(2)} (Internet Archive)", url
+    return UNSTATED, f"https://archive.org/details/{ident}"
 ARCHIVE_SPOTS = (0.3, 0.55, 0.8)  # where in a film a clip is taken from (its opening is mostly titles)
 
 
@@ -132,18 +146,18 @@ def archive(query: str, count: int = 3) -> list[dict]:
     q = (f"(title:({words}) OR subject:({words}) OR description:({words})) AND mediatype:movies "
          f"AND collection:({' OR '.join(ARCHIVE_COLLECTIONS)})")
     docs = (_get(ARCHIVE_SEARCH, q=q, rows=count, output="json",
-                 **{"fl[]": ["identifier", "title", "year"]}).get("response") or {}).get("docs", [])
+                 **{"fl[]": ["identifier", "title", "year", "licenseurl", "creator"]}).get("response") or {}).get("docs", [])
     out = []
-    lic, lic_url = ARCHIVE_LICENCE
     for d in docs:
         ident = d["identifier"]
+        lic, lic_url = archive_licence(str(d.get("licenseurl") or ""), ident)
         for spot in ARCHIVE_SPOTS:
             out.append({"source": "archive", "id": f"{ident}@{round(spot * 100)}", "kind": "video", "film": ident,
                         "spot": spot, "thumb": f"https://archive.org/services/img/{ident}", "url": "",
                         "page": f"https://archive.org/details/{ident}",
                         "title": " ".join(filter(None, [d.get("title", ""), str(d.get("year") or "")])),
-                        "author": "Internet Archive", "width": 0, "height": 0,
-                        "licence": lic, "licence_url": lic_url.format(ident)})
+                        "author": ", ".join(c if isinstance(c, list) else [c]) if (c := d.get("creator")) else "Internet Archive",
+                        "width": 0, "height": 0, "licence": lic, "licence_url": lic_url})
     return out
 
 

@@ -33,6 +33,20 @@ SIZES = {"short": (1080, 1920), "long": (1920, 1080)}
 # words that mean nothing to a stock library and make its search return junk ("octopus coral reef vertical": a burger)
 FORMAT_WORDS = re.compile(r"\b(vertical|horizontal|portrait|landscape|9:16|16:9|[48]k|hd|footage|video|clip|stock)\b", re.I)
 
+# provenance (Hidden History Files spec 7.2-7.3): what kind of material each source gives, and which licences count
+# as stated. A source category alone doesn't prove rights: an item whose licence isn't stated is rights_unknown.
+STOCK = ("pexels", "pixabay", "mixkit", "unsplash")
+TYPE_OF = {"own": "own", "card": "graphic", "archive": "archival", "nasa": "archival", "met": "museum",
+           "commons": "photograph", "inaturalist": "photograph", **{k: "stock" for k in STOCK}}
+LICENSED = re.compile(r"\bcc0\b|\bcc[ -]by|public domain|nasa media|open access|made by the app|your own media", re.I)
+
+HISTORY_CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {"subject": {"type": "integer"}, "action": {"type": "integer"}, "period": {"type": "integer"},
+                   "specific": {"type": "integer"}, "quality": {"type": "integer"}, "problem": {"type": "string"}},
+    "required": ["subject", "action", "period", "specific", "quality", "problem"],
+}
+
 CHECK_SCHEMA = {
     "type": "object",
     "properties": {"subject": {"type": "integer"}, "action": {"type": "integer"}, "quality": {"type": "integer"},
@@ -71,11 +85,14 @@ def _frames(path: Path) -> bytes:
     return buf.getvalue()
 
 
-def look(path: Path, shot: Shot, client=None) -> dict:
+def look(path: Path, shot: Shot, client=None, history: bool = False) -> dict:
     """Gemini's 0-10 scores for `path` as footage for `shot`: subject, action (None when the shot doesn't need the
-    exact action), quality, and what's wrong. Kept next to the file, so the same clip is never paid for twice."""
+    exact action), quality, and what's wrong. Kept next to the file, so the same clip is never paid for twice.
+    history: also the period (None otherwise) and whether it is the actual named subject or only looks like it."""
     exact = shot.evidence == "exact_action" and bool(shot.action)
     ask = {"subject": shot.subject or shot.visual_description, "action": shot.action if exact else ""}
+    if history:
+        ask["history"] = shot.factual_requirements[:3]
     note = path.with_suffix(".shot-check.json")
     saved = json.loads(note.read_text(encoding="utf-8")) if note.exists() else {}
     if saved.get("ask") == ask:
@@ -94,9 +111,17 @@ def look(path: Path, shot: Shot, client=None) -> dict:
                if exact else "action: return 0 (not asked). ")
             + "quality: framing, sharpness and light as documentary footage, 0-10 (watermarks, text over the picture "
             "or heavy blur lower it). problem: one short sentence on what's wrong for this shot, \"\" if nothing.")
+    if history:  # a history documentary: the wrong person, artifact, building, place or period is the wrong shot
+        task += ("\nThis is a HISTORY documentary. For subject, a different person, artifact, building, site or event is "
+                 "0-3 even if it looks similar. period: 0 = clearly the wrong era (modern objects, clothes, vehicles or "
+                 "buildings in a historical shot, or the wrong century), 5 = can't tell, 10 = clearly the right period "
+                 "or a neutral landscape that could be any time. specific: 0 = generic or a lookalike, 10 = clearly the "
+                 "actual named subject itself (that exact manuscript, site, ship or person), not something similar."
+                 + (f" Facts it must respect: {'; '.join(ask['history'])}." if ask["history"] else ""))
     response = client.beta.messages.create(
         model=LLM_MODEL, max_tokens=1000,
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": CHECK_SCHEMA}},
+        output_config={"effort": "low", "format": {"type": "json_schema",
+                                                   "schema": HISTORY_CHECK_SCHEMA if history else CHECK_SCHEMA}},
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                          "data": base64.b64encode(_frames(path)).decode()}},
@@ -105,6 +130,8 @@ def look(path: Path, shot: Shot, client=None) -> dict:
     clamp = lambda v: max(0, min(int(v), 10))  # noqa: E731
     verdict = {"subject": clamp(data["subject"]), "action": clamp(data["action"]) if exact else None,
                "quality": clamp(data["quality"]), "problem": str(data.get("problem", "")).strip()}
+    if history:
+        verdict |= {"period": clamp(data.get("period", 5)), "specific": clamp(data.get("specific", 0))}
     note.write_text(json.dumps({"ask": ask, "verdict": verdict}), encoding="utf-8")
     return verdict
 
@@ -112,8 +139,8 @@ def look(path: Path, shot: Shot, client=None) -> dict:
 def match_of(shot: Shot, v: dict | None) -> str:
     if v is None:
         return "unchecked"
-    if v["subject"] < MIN_SHOW:
-        return "weak"
+    if v["subject"] < MIN_SHOW or (v.get("period") is not None and v["period"] < MIN_SHOW):
+        return "weak"  # history: the wrong period is as wrong as the wrong subject
     if v["action"] is not None:  # the narration states an action: the subject alone isn't the shot
         if v["subject"] >= PASS and v["action"] >= PASS:
             return "exact"
@@ -154,14 +181,32 @@ def _footage(item: dict, query: str) -> Footage:
                    raw={k: v for k, v in item.items() if k not in ("check", "problem")})
 
 
-def _scored(f: Footage, shot: Shot, v: dict | None) -> Footage:
+def _scored(f: Footage, shot: Shot, v: dict | None, named: list[str] = ()) -> Footage:
+    """named: the entities the shot is about ("Voynich Manuscript"). Looking like it is not being it (a live check
+    took a facsimile of another manuscript for the Voynich): "actual" also needs the item's own record to name one."""
     if v:
         f.subject_score, f.action_score, f.quality_score, f.problem = v["subject"], v["action"], v["quality"], v["problem"]
+        f.period_score = v.get("period")
     f.match = match_of(shot, v)
+    provenance(f)
+    if v and "specific" in v and f.asset_type != "stock":
+        record = f"{f.raw.get('title', '')} {f.page}".replace("_", " ").replace("%20", " ").lower()
+        says = not named or any(n.lower() in record for n in named)
+        f.depicts = "actual" if v["specific"] >= PASS and f.match in ("exact", "good") and says else "illustrative"
     return f
 
 
-def warnings_for(shot: Shot, fmt: str) -> list[str]:
+def provenance(f: Footage) -> Footage:
+    """Fill in what kind of material it is and whether its rights are stated (spec 7.3). Stock is never the actual
+    historical subject; other material is "unknown" until a history check says whether it shows the real thing."""
+    f.asset_type = f.asset_type or TYPE_OF.get(f.source, "photograph")
+    f.rights = "licensed" if f.source in (*STOCK, "own", "card") or LICENSED.search(f.licence or "") else "rights_unknown"
+    if not f.depicts and f.asset_type not in ("own", "graphic"):
+        f.depicts = "illustrative" if f.asset_type == "stock" else "unknown"
+    return f
+
+
+def warnings_for(shot: Shot, fmt: str, history: bool = False) -> list[str]:
     """Plain-words problems with a shot's footage."""
     f, what = shot.footage, shot.subject or shot.visual_description or "this shot"
     if f is None:
@@ -177,6 +222,14 @@ def warnings_for(shot: Shot, fmt: str) -> list[str]:
         out.append("Not checked by Gemini (no key): make sure it shows the right subject.")
     if f.source in ("own", "card"):
         return out
+    if f.rights == "rights_unknown":
+        out.append(f"The source doesn't state a licence ({f.licence or 'none given'}): check {f.page or 'its page'} "
+                   "before publishing.")
+    if history and shot.visual_origin in ("archive", "evidence") and f.depicts == "illustrative":
+        out.append(f"{'Stock footage' if f.asset_type == 'stock' else 'This picture'} stands in for {what}: it is "
+                   "illustrative, not the real thing. Don't present it as the actual evidence.")
+    if history and f.period_score is not None and f.period_score < PASS:
+        out.append(f"The period may be wrong ({f.period_score}/10): {f.problem or 'check it against the date'}")
     if f.kind == "photo" and shot.camera.movement in MOVING:
         out.append(f"A still photo can't be a {shot.camera.movement.replace('_', ' ')} shot: it gets a slow zoom instead.")
     if f.kind == "video" and f.duration and shot.duration_seconds and f.duration < shot.duration_seconds:
@@ -221,6 +274,29 @@ def own_file(media: Path | None, shot: Shot, first_in_scene: bool) -> Path | Non
     return None
 
 
+def entities(plan: DirectorPlan) -> list[str]:
+    """The proper names a history project is about (title, narration, the Director's subjects and places)."""
+    from .history.sources import names
+
+    text = ". ".join([plan.project.title, *(s.narration for s in plan.scenes), *plan.continuity.subjects,
+                      *plan.continuity.locations])
+    return names(text, 12)
+
+
+def anchored(shot: Shot, qs: list[str], known: list[str]) -> list[str]:
+    """History searches name the entity: when the shot's subject or description names one (a site, artifact or
+    person) and no search does, a search for it comes first ("Voynich Manuscript manuscript pages", then the bare
+    name), then the Director's. A context shot (no specific event) and a graphic keep their searches."""
+    if shot.visual_origin in ("context", "graphic"):
+        return qs
+    said = f"{shot.subject} {shot.visual_description}".lower()
+    hits = [n for n in known if n.lower() in said]
+    if not hits or (qs and any(n.lower() in qs[0].lower() for n in known)):  # the first search already names it
+        return qs
+    rest = [w for w in (qs[0] if qs else shot.subject).split() if w.lower() not in hits[0].lower().split()][:3]
+    return list(dict.fromkeys([" ".join([hits[0], *rest]), hits[0], *qs]))
+
+
 def queries(shot: Shot) -> list[str]:
     """The shot's searches without format words, most specific first, ending with the subject's plain name
     ("Common octopus (Octopus vulgaris)" -> "Common octopus") when the specific ones find nothing right."""
@@ -230,6 +306,10 @@ def queries(shot: Shot) -> list[str]:
 
 
 def sources(plan: DirectorPlan, cfg: dict) -> list[str]:
+    from .ai_director import is_history
+
+    if is_history(plan):  # archives and museums first, then stock for context (spec 7.2); Settings decides which
+        return list(dict.fromkeys([*lf.sources_for("archival", cfg), *lf.sources_for("footage", cfg)]))
     kind = "species" if plan.project.visual_style == "cinematic_wildlife" else "footage"
     return lf.sources_for(kind, cfg)
 
@@ -242,10 +322,14 @@ def find(plan: DirectorPlan, media: Path | None, cfg: dict, shot_ids: list[str] 
 
     import requests
 
+    from .ai_director import is_history
+
     out = plan.model_copy(deep=True)
     fmt = plan.project.format
     width, portrait = SIZES[fmt][0], fmt == "short"
     libs = sources(plan, cfg)
+    history = is_history(plan)
+    known = entities(plan) if history else []
     check = bool(cfg["footage"].get("check_subject", True)) and bool(os.getenv("GEMINI_API_KEY") or client)
     firsts = {s.scene_id: s.id for s in reversed(out.shots)}
     used = {f"{s.footage.source}-{s.footage.kind}-{s.footage.raw.get('id', '')}" for s in out.shots
@@ -278,9 +362,12 @@ def find(plan: DirectorPlan, media: Path | None, cfg: dict, shot_ids: list[str] 
                 shot.footage, shot.candidates = None, []
         else:
             best, tried = None, []
-            for query in queries(shot):
+            named = [n for n in known if n.lower() in f"{shot.subject} {shot.visual_description}".lower()]
+            for query in (anchored(shot, queries(shot), known) if history else queries(shot)):
                 found = [m for m in lf.search(query, libs, width, shot.duration_seconds or 3, log, portrait)
                          if lf.key(m) not in used]
+                if history:  # the sources' priority beats size: an archive scan of the real thing over sharp stock
+                    found.sort(key=lambda m: libs.index(m["source"]) if m["source"] in libs else len(libs))
                 checked, satisfied, pending, trusted = 0, False, [], not check
                 for item in lf.spread(found):
                     if satisfied or checked >= (TRIES if check else 1):
@@ -290,16 +377,17 @@ def find(plan: DirectorPlan, media: Path | None, cfg: dict, shot_ids: list[str] 
                         continue
                     try:
                         path = lf.fetch(item)
-                        v = look(path, shot, client) if check else None
+                        v = look(path, shot, client, history) if check else None
                     except (requests.RequestException, OSError, ValueError, RuntimeError, KeyError) as e:
                         log(f"      ! {shot.id}: couldn't use {lf.key(item)} ({type(e).__name__})")
                         with lock:
                             used.discard(lf.key(item))
                         continue
                     checked += 1
-                    f = _scored(_footage(item, query), shot, v)
+                    f = _scored(_footage(item, query), shot, v, named)
                     f.file = str(path)
-                    rank = (TIER[f.match], -((f.subject_score or 0) + (f.action_score or 0)), -(f.quality_score or 0))
+                    rank = (TIER[f.match], history and f.depicts != "actual",
+                            -((f.subject_score or 0) + (f.action_score or 0)), -(f.quality_score or 0))
                     if best is None or rank < best[0]:
                         if best:
                             tried.append(best[1])
@@ -325,7 +413,10 @@ def find(plan: DirectorPlan, media: Path | None, cfg: dict, shot_ids: list[str] 
             ok = [t for t in tried if not (t.subject_score is not None and t.subject_score < MIN_SHOW)]
             ok.sort(key=lambda t: (t.subject_score is None, TIER[t.match], -(t.subject_score or 0)))
             shot.candidates = list({lf.key(t.raw): t for t in ok}.values())[:KEEP]
-        shot.warnings = warnings_for(shot, fmt)
+        for f in [shot.footage, *shot.candidates]:
+            if f is not None:
+                provenance(f)  # alternatives not downloaded yet too: their source page and licence go with them
+        shot.warnings = warnings_for(shot, fmt, history)
         with lock:
             done[0] += 1
             f = shot.footage
@@ -356,7 +447,9 @@ def pick(plan: DirectorPlan, shot_id: str, index: int) -> DirectorPlan:
     if shot.footage and shot.footage.source != "own":
         shot.candidates.insert(0, shot.footage)
     shot.footage, shot.locked = chosen, True
-    shot.warnings = [w for w in warnings_for(shot, out.project.format)
+    from .ai_director import is_history
+
+    shot.warnings = [w for w in warnings_for(shot, out.project.format, is_history(out))
                      if not w.startswith(("May not show", "Not checked"))]  # the user looked at it
     out.warnings = plan_warnings(out)
     return out

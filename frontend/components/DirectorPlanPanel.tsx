@@ -11,6 +11,7 @@ import {
   type PlanFootage,
   type PlanKind,
   type PlanShot,
+  type ResearchBrief,
 } from "@/lib/api";
 import { Button, Chip, FileInput, Message } from "./ui";
 
@@ -21,6 +22,12 @@ const EVIDENCE: Record<PlanShot["evidence"], string> = {
   supporting: "supporting footage",
   illustrative: "illustrative",
 };
+// what a history shot is (director_plan.VISUAL_ORIGINS): real material, or something that must not pass for it
+const ORIGIN: Record<string, string> = {
+  archive: "archive", evidence: "evidence", context: "context only", graphic: "graphic", reconstruction: "reconstruction",
+};
+const CLAIM_TONE: Record<string, string> = { supported: "text-ok", disputed: "text-warn", uncertain: "text-warn", unsupported: "text-danger" };
+
 const MATCH: Record<FootageMatch, { label: string; tone: "ink" | "caption" | "neutral" }> = {
   own: { label: "your file", tone: "ink" },
   drawn: { label: "drawn card", tone: "ink" },
@@ -58,6 +65,13 @@ export function DirectorPlanPanel({
   const [msg, setMsg] = useState<{ text: string; error?: boolean }>({
     text: "",
   });
+  // a history project's research: each scene shows the claims it states and their sources
+  const [research, setResearch] = useState<ResearchBrief | null>(null);
+  const researchRev = plan?.story.research_revision ?? 0;
+  useEffect(() => {
+    if (kind !== "draft" && kind !== "long") return;
+    api.research(kind, refId).then((r) => setResearch(r.brief), () => setResearch(null));
+  }, [kind, refId, researchRev]);
   const [busy, setBusy] = useState<string | null>(null); // "all" or the scene id being re-planned
   const [note, setNote] = useState("");
   const [jobId, setJobId] = useState<string | null>(null); // a footage search running for this plan
@@ -190,6 +204,9 @@ export function DirectorPlanPanel({
       </div>
     );
   const { story, continuity } = plan;
+  const history = plan.project.channel_profile_id === "hidden_history_files" || plan.project.visual_style === "cinematic_history";
+  const claims = Object.fromEntries((research?.claims ?? []).map((c) => [c.id, c]));
+  const sources = Object.fromEntries((research?.sources ?? []).map((x) => [x.id, x]));
   return (
     <div className="grid gap-4 p-3">
       <section className="grid gap-2">
@@ -201,6 +218,7 @@ export function DirectorPlanPanel({
           </Chip>
           <Chip>{plan.project.aspect_ratio}</Chip>
           <Chip>{words(plan.project.visual_style)}</Chip>
+          {plan.project.channel_profile_id && <Chip tone="ink">Channel: {words(plan.project.channel_profile_id)}</Chip>}
         </div>
         <input
           className="field-input"
@@ -354,7 +372,12 @@ export function DirectorPlanPanel({
         </section>
       )}
 
-      <ChannelNumbers />
+      {!history && <ChannelNumbers /> /* the wildlife channel's numbers: history direction never uses them */}
+      {history && research?.research_status !== "approved" && (
+        <p className="m-0 text-xs text-warn">
+          The research isn&apos;t approved yet, so the Director plans without checked facts. Approve it in the Research tab, then direct again.
+        </p>
+      )}
 
       <ol className="m-0 grid list-none gap-3 p-0">
         {plan.scenes.map((scene, i) => {
@@ -385,6 +408,20 @@ export function DirectorPlanPanel({
                   >
                     “{scene.narration}”
                   </span>
+                  {history && (scene.claim_ids ?? []).map((cid) => {
+                    const c = claims[cid];
+                    if (!c) return null;
+                    return (
+                      <span key={cid} className="text-xs">
+                        <b className={CLAIM_TONE[c.status]}>{c.status}</b> {c.claim_text}
+                        {c.source_ids.map((sid) => sources[sid] && (
+                          <a key={sid} href={sources[sid].url} target="_blank" rel="noreferrer" className="ml-1 text-ink-soft underline">
+                            {sources[sid].publisher || sources[sid].title}
+                          </a>
+                        ))}
+                      </span>
+                    );
+                  })}
                 </div>
                 <Button
                   size="sm"
@@ -456,6 +493,11 @@ function ShotRow({
         >
           · {EVIDENCE[shot.evidence]}
         </span>
+        {shot.visual_origin && (
+          <Chip tone={shot.visual_origin === "reconstruction" || shot.visual_origin === "context" ? "caption" : "neutral"}>
+            {ORIGIN[shot.visual_origin]}
+          </Chip>
+        )}
         {shot.locked && (
           <button
             type="button"
@@ -548,8 +590,11 @@ function FootageView({ shot, onPick, onSearch }: { shot: PlanShot; onPick: (i: n
             <>
               <span className="flex flex-wrap items-center gap-1">
                 <Chip tone={MATCH[f.match].tone}>{MATCH[f.match].label}</Chip>
+                {f.rights === "rights_unknown" && <Chip tone="caption">rights unknown</Chip>}
+                {f.depicts === "actual" && <Chip tone="ink">the real subject</Chip>}
+                {f.depicts === "illustrative" && <Chip>illustrative</Chip>}
                 <span className="text-ink-soft">
-                  {f.kind} · {f.source}
+                  {f.kind} · {f.asset_type ? `${f.asset_type} · ` : ""}{f.source}
                   {f.duration ? ` · ${f.duration.toFixed(0)} s` : ""}
                 </span>
               </span>

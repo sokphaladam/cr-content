@@ -1,9 +1,10 @@
 "use client";
 
 import { Clapperboard } from "lucide-react";
-import { useState } from "react";
-import { api, type Lang, type Options, type VisualStyle } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { api, type ChannelProfile, type Lang, type Options, type VisualStyle } from "@/lib/api";
 import { USE_LABEL, useMonetizableOnly, type MusicUse } from "@/lib/musicLicence";
+import { ResearchPanel } from "./ResearchPanel";
 import { groupVoices, RATES, REGION, trackName, voiceName } from "./Storyboard";
 import { Button, DropZone, Field, Message, Segmented } from "./ui";
 
@@ -12,7 +13,9 @@ const STYLES: { value: VisualStyle; label: string }[] = [
   { value: "cinematic_wildlife", label: "Wildlife documentary" },
   { value: "educational", label: "Educational" },
   { value: "storytelling", label: "Storytelling" },
+  { value: "cinematic_history", label: "Cinematic history" },
 ];
+const PROFILE_KEY = "crcontent.channelProfile"; // the last profile picked, for the next project
 const KHMER = /[ក-៿]/g;
 const OFF_BY = 0.25; // the estimate this far from the target gets a note
 
@@ -57,6 +60,31 @@ export function ScriptVideoForm({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
   const [safeOnly, setSafeOnly] = useMonetizableOnly();
+  const [profiles, setProfiles] = useState<ChannelProfile[]>([]);
+  const [profileId, setProfileId] = useState(""); // "" = General: the defaults every project had before profiles
+  const profile = profiles.find((p) => p.id === profileId);
+  const [topic, setTopic] = useState("");
+  const [topicBrief, setTopicBrief] = useState(""); // the topic brief being researched in this form
+  const [fromBrief, setFromBrief] = useState(""); // the brief the script below was written from (the Short keeps it)
+  const [writing, setWriting] = useState(false);
+
+  // a profile sets the defaults; every field can still be changed for this project
+  function pickProfile(id: string, list = profiles) {
+    const p = list.find((x) => x.id === id);
+    setProfileId(p ? p.id : "");
+    setStyle(p ? p.visual_style : "cinematic_documentary");
+    setTarget(p?.format_defaults.target_seconds ? clock(p.format_defaults.target_seconds) : "");
+    if (p) setFormat(p.format_defaults.format);
+    localStorage.setItem(PROFILE_KEY, p ? p.id : "");
+  }
+
+  useEffect(() => {
+    api.profiles().then((list) => {
+      setProfiles(list);
+      const saved = localStorage.getItem(PROFILE_KEY) ?? "";
+      if (saved) pickProfile(saved, list); // a profile this app no longer has falls back to General
+    }, () => setProfiles([])); // an older engine without profiles: General only
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const voices = options ? (lang === "auto" ? (Object.keys(options.langs) as Lang[]) : [lang]).flatMap((l) => options.langs[l].voices) : [];
   const tracks = options?.music ?? [];
@@ -66,6 +94,30 @@ export function ScriptVideoForm({
   const targetSec = parseLength(target);
   const off = targetSec && estimate ? (estimate - targetSec) / targetSec : 0;
 
+  async function writeFromResearch() {
+    setWriting(true);
+    try {
+      const r = await api.researchScript(topicBrief, targetSec || 40);
+      setText(r.text);
+      setFromBrief(topicBrief);
+      setFormat("short");
+      setMsg({ text: ["Script written from the approved claims. Read it through and edit before creating the video.", ...r.warnings].join(" ") });
+    } catch (err) {
+      setMsg({ text: (err as Error).message, error: true });
+    } finally {
+      setWriting(false);
+    }
+  }
+
+  async function researchTopic() {
+    try {
+      setTopicBrief((await api.researchTopic(topic)).id);
+      setMsg({ text: "" });
+    } catch (err) {
+      setMsg({ text: (err as Error).message, error: true });
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (target.trim() && !targetSec) return setMsg({ text: "Write the target length as 0:45, 45 or 1.5m.", error: true });
@@ -74,7 +126,8 @@ export function ScriptVideoForm({
     try {
       const r = await api.scriptVideo({
         text, format, lang, visual_style: style, target_seconds: targetSec,
-        voice: voices.includes(voice) ? voice : "", rate, music,
+        voice: voices.includes(voice) ? voice : "", rate, music, channel_profile_id: profileId,
+        research_brief_id: format === "short" && profileId === "hidden_history_files" ? fromBrief : "",
       });
       setMsg({ text: "" });
       if (r.format === "long") onLongVideo(r.id, r.title);
@@ -86,7 +139,8 @@ export function ScriptVideoForm({
             : `Made ${r.scenes} scenes. Your voiceover is kept word for word.`) +
             (r.planned_by === "ai" ? " The AI Director's shot plan is under Director." : r.director_note ? ` ${r.director_note}` : "") +
             (r.footage_job ? " Footage for every shot is being found and checked now." : "") +
-            (r.voice_note ? ` ${r.voice_note}` : ""),
+            (r.voice_note ? ` ${r.voice_note}` : "") +
+            (r.profile_note ? ` ${r.profile_note}` : ""),
         );
     } catch (err) {
       setMsg({ text: (err as Error).message, error: true });
@@ -97,6 +151,46 @@ export function ScriptVideoForm({
 
   return (
     <form onSubmit={submit} className="grid gap-5 card p-5 sm:p-6">
+      {profiles.length > 0 && (
+        <Field label="Channel profile" htmlFor="script-video-profile">
+          <select id="script-video-profile" className="field-input" value={profileId} onChange={(e) => pickProfile(e.target.value)}>
+            <option value="">General</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.display_name}
+              </option>
+            ))}
+          </select>
+          <p className="m-0 flex items-center gap-2 text-sm text-ink-soft">
+            {Object.entries(profile?.palette ?? {}).map(([role, hex]) => (
+              <span key={role} title={`${role} ${hex}`} className="inline-block size-4 rounded-sm border border-line" style={{ background: hex }} />
+            ))}
+            {profile ? profile.description : "Your own defaults, as before channel profiles."}
+          </p>
+        </Field>
+      )}
+      {profileId === "hidden_history_files" && (
+        <details className="grid gap-2 rounded-md border border-line p-3" open={!!topicBrief}>
+          <summary className="cursor-pointer text-base font-semibold">Research a topic first (optional)</summary>
+          <p className="m-0 mt-2 text-sm text-ink-soft">
+            Collects sources and the claims they back before you write. Pasting a finished script works too: its claims are checked
+            in the editor&apos;s Research tab.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <input aria-label="History topic" className="field-input flex-1" placeholder="e.g. The lost city hidden beneath Cambodia's jungle"
+              value={topic} onChange={(e) => setTopic(e.target.value)} />
+            <Button type="button" disabled={topic.trim().length < 3} onClick={researchTopic}>Research</Button>
+          </div>
+          {topicBrief && <ResearchPanel key={topicBrief} kind="topic" refId={topicBrief} />}
+          {topicBrief && (
+            <Button type="button" loading={writing} disabled={!ai} onClick={writeFromResearch}
+              title={ai ? "Hook, context, investigation, revelation, resonance: only from approved claims" : "Needs Gemini (Settings)"}>
+              Write the script from this research
+            </Button>
+          )}
+        </details>
+      )}
+
       <Field label="Finished script" htmlFor="script-video-text">
         <DropZone
           accept=".txt,.md,.markdown,text/plain,text/markdown"

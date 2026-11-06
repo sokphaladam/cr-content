@@ -35,8 +35,9 @@ import {
   Trash2,
   Undo2,
   Wand2,
+  BookOpenCheck,
 } from "lucide-react";
-import { useCallback, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { api, DEFAULT_CAPTIONS, fileUrl, pinnedComment, type ArtStyle, type CaptionStyle, type Clip, type DraftData, type Lang, type Options, type TrackName, type TrackState, type VideoScript } from "@/lib/api";
 import { usePaneWidth } from "@/lib/appearance";
 import { isImagePath } from "@/lib/format";
@@ -52,6 +53,7 @@ import { CaptionPanel, type ItemRef } from "./LivePreview";
 import { SceneCard, type DraftScene } from "./SceneCard";
 import { Timeline } from "./Timeline";
 import { DirectorPlanPanel } from "./DirectorPlanPanel";
+import { ResearchPanel } from "./ResearchPanel";
 import { ClipInspector, GraphicsBin, useCatalog } from "./ClipInspector";
 import { SoundPanel } from "./SoundPanel";
 import { EditDirectorPanel } from "./EditDirectorPanel";
@@ -372,6 +374,11 @@ export function Storyboard({
   const [leftTab, setLeftTab] = useState<LeftTab>("scenes");
   const [rightTab, setRightTab] = useState<RightTab>("scene");
   const [planStamp, setPlanStamp] = useState(""); // the Director Plan's story, so the pre-render check follows it
+  const [channel, setChannel] = useState(""); // the project's channel profile ("" = General or no plan)
+  useEffect(() => {
+    if (!draft.id) return;
+    api.plan("draft", draft.id).then((p) => setChannel(p.project.channel_profile_id ?? ""), () => setChannel(""));
+  }, [draft.id]);
   const [narrowTab, setNarrowTab] = useState<LeftTab | RightTab>("scene");
   const wide = useMinWidth(1024);
   // the side panels can be dragged wider or narrower; the widths are remembered
@@ -829,6 +836,7 @@ export function Storyboard({
 
   const keptScenes = draft.scenes.filter((s) => s.narration.trim() || s.seconds); // the scenes toScript() renders
   const panels: Record<LeftTab | RightTab, ReactNode> = {
+    research: draft.id ? <ResearchPanel key={draft.id} kind="draft" refId={draft.id} /> : null,
     media: (
       <>
         <MediaBin scenes={draft.scenes} activeUid={activeUid} activeItem={activeItem} onActive={activate} onSelectItem={selectItem} />
@@ -964,7 +972,9 @@ export function Storyboard({
 
   const rightTabs = exportPanel ? RIGHT_TABS : RIGHT_TABS.filter((t) => t.value !== "export");
   const inspectorTab = rightTabs.some((t) => t.value === rightTab) ? rightTab : "scene";
-  const narrowTabs = [RIGHT_TABS[0], ...LEFT_TABS, ...rightTabs.slice(1)];
+  // Research is part of the history workflow only (spec 5.1: no one else is pushed into research-first)
+  const leftTabs = channel === "hidden_history_files" ? LEFT_TABS : LEFT_TABS.filter((t) => t.value !== "research");
+  const narrowTabs = [RIGHT_TABS[0], ...leftTabs, ...rightTabs.slice(1)];
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -986,6 +996,11 @@ export function Storyboard({
           {totalSeconds > 0 && ` · ${clock(totalSeconds)}`}
           {filled < draft.scenes.length && ` · ${draft.scenes.length - filled} without voiceover`}
         </span>
+        {channel && (
+          <span className="hidden shrink-0 rounded-sm border border-line px-1.5 text-xs text-ink-soft md:inline" title="Channel profile">
+            {channel.replace(/_/g, " ")}
+          </span>
+        )}
         <SaveStatus state={saveState} saved={draft.id !== null} />
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <IconButton label="Undo (Ctrl+Z)" onClick={history.undo} disabled={!history.canUndo}>
@@ -1046,12 +1061,12 @@ export function Storyboard({
         <div className="flex min-h-0 flex-1">
           {/* Project: scenes, script, visuals, audio, post */}
           {leftPane.collapsed ? (
-            <PanelRail side="left" label="Project" items={LEFT_TABS} onOpen={(t) => { setLeftTab(t); leftPane.setCollapsed(false); }} />
+            <PanelRail side="left" label="Project" items={leftTabs} onOpen={(t) => { setLeftTab(t); leftPane.setCollapsed(false); }} />
           ) : (
             <aside aria-label="Project" className="relative flex min-h-0 shrink-0 flex-col border-r border-line bg-paper" style={{ width: leftPane.width }}>
-              <PanelTabs label="Project" value={leftTab} onChange={setLeftTab} items={LEFT_TABS} />
+              <PanelTabs label="Project" value={leftTabs.some((t) => t.value === leftTab) ? leftTab : "scenes"} onChange={setLeftTab} items={leftTabs} />
               <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto">
-                {panels[leftTab]}
+                {panels[leftTabs.some((t) => t.value === leftTab) ? leftTab : "scenes"]}
               </div>
               <ResizeHandle edge="right" label="Resize project panel" width={leftPane.width} min={240} max={560} onResize={leftPane.setWidth} onReset={leftPane.reset} />
             </aside>
@@ -1101,13 +1116,14 @@ export function Storyboard({
   );
 }
 
-type LeftTab = "scenes" | "media" | "script" | "director" | "visuals" | "audio" | "post";
+type LeftTab = "scenes" | "media" | "script" | "research" | "director" | "visuals" | "audio" | "post";
 type RightTab = "scene" | "captions" | "check" | "export";
 
 const LEFT_TABS: { value: LeftTab; label: string; icon: ReactNode }[] = [
   { value: "scenes", label: "Scenes", icon: <ListVideo className="size-4" /> },
   { value: "media", label: "Media", icon: <Film className="size-4" /> },
   { value: "script", label: "Script", icon: <ScrollText className="size-4" /> },
+  { value: "research", label: "Research", icon: <BookOpenCheck className="size-4" /> },
   { value: "director", label: "Director", icon: <Clapperboard className="size-4" /> },
   { value: "visuals", label: "Visuals", icon: <Palette className="size-4" /> },
   { value: "audio", label: "Audio", icon: <AudioLines className="size-4" /> },

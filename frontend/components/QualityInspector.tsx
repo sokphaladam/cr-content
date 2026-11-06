@@ -75,7 +75,7 @@ export function QualityReportView({ report, total, onSelect, onReview, onApply, 
           {VERDICT[report.stage][report.verdict]}
         </p>
         <p className="m-0 text-2xs text-ink-soft">
-          {report.profile_label} profile{report.file ? ` · ${report.file}` : ""}{report.mode ? ` · ${report.mode} check` : ""} ·{" "}
+          {report.profile_label} profile{report.channel_profile ? ` · ${report.channel_profile}` : ""}{report.file ? ` · ${report.file}` : ""}{report.mode ? ` · ${report.mode} check` : ""} ·{" "}
           {new Date(report.created).toLocaleString()} · {report.counts.fail} fail, {report.counts.warning} warning, {report.counts.pass} pass,{" "}
           {report.counts.not_checked} not checked
         </p>

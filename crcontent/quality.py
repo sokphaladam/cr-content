@@ -313,6 +313,14 @@ def _clock(t: float) -> str:
     return f"{int(t // 60)}:{t % 60:04.1f}"
 
 
+def _channel_profile(folder: Path) -> str:
+    """The channel profile the video was made with (its meta.json), "" for none."""
+    try:
+        return json.loads((folder / "meta.json").read_text(encoding="utf-8")).get("channel_profile_name", "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
 def inspect_file(path: Path, profile: str, expect: dict, cancel: threading.Event | None = None, report=None,
                  rights_of: tuple[str, str] | None = None) -> dict:
     """The report for the rendered file at `path`. expect: width, height, fps, and optionally duration (seconds the
@@ -321,6 +329,7 @@ def inspect_file(path: Path, profile: str, expect: dict, cancel: threading.Event
     checks: list[dict] = []
     result = {"stage": "render", "profile": profile, "profile_label": rules["label"], "file": path.name,
               "created": datetime.now().isoformat(timespec="seconds"), "expect": expect, "checks": checks,
+              "channel_profile": _channel_profile(path.parent),
               "cancelled": False, "rights_of": rights_of, "sampled": (f"every frame decoded once for black/frozen/sound; sharpness, exposure, colour, borders and repeats from {rules['sample_fps']} sampled frames per second, not every frame")}
     say = report or (lambda f, d="": None)
 

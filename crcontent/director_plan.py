@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 
 VERSION = 2  # 2: story phases, beat roles and open loops (attention roadmap M1); v1 plans load with them empty
 ASPECTS = {"short": "9:16", "long": "16:9"}
-STYLES = ("cinematic_documentary", "cinematic_wildlife", "educational", "storytelling")
+STYLES = ("cinematic_documentary", "cinematic_wildlife", "educational", "storytelling", "cinematic_history")
 KHMER = re.compile(r"[ក-៿]")
 SHOT_TYPES = ("extreme_wide", "wide", "medium", "close_up", "extreme_close_up", "tracking", "establishing",
               "reaction", "cutaway", "montage", "graphic")
@@ -24,6 +24,9 @@ FRAMINGS = ("tight", "medium", "loose")
 TRANSITIONS = ("hard_cut", "match_cut", "cross_dissolve", "dip_to_black", "whip", "j_cut", "l_cut")
 # how closely footage must match the narration (milestone 3 searches and scores by it)
 EVIDENCE = ("exact_action", "subject", "supporting", "illustrative")
+# what a history shot is (Hidden History Files spec 6.2, H3): real archive material, place/period context, the
+# evidence itself (artifact, document, site), an explanatory graphic or map, or an AI reconstruction; "" = not set
+VISUAL_ORIGINS = ("archive", "context", "evidence", "graphic", "reconstruction")
 # Setup -> Tension -> Payoff, and what a beat does inside its phase (roadmap section 4); "" = not planned yet
 PHASES = ("setup", "tension", "payoff")
 BEAT_ROLES = ("pattern_interrupt", "curiosity_gap", "context", "stakes", "evidence", "escalation", "complication",
@@ -37,6 +40,7 @@ class Camera(BaseModel):
 
 
 MATCHES = ("own", "drawn", "exact", "good", "subject_only", "weak", "unchecked")
+ASSET_TYPES = ("own", "graphic", "archival", "museum", "photograph", "stock")
 
 
 class Footage(BaseModel):
@@ -59,6 +63,11 @@ class Footage(BaseModel):
     problem: str = ""
     match: Literal["own", "drawn", "exact", "good", "subject_only", "weak", "unchecked"] = "unchecked"
     raw: dict = {}              # the search result, to download it later
+    # provenance (Hidden History Files spec 7.3, H4); "" on footage found before H4
+    asset_type: str = ""        # ASSET_TYPES: what kind of material it is, from its source
+    depicts: Literal["", "actual", "illustrative", "unknown"] = ""  # the real subject, or a stand-in for it
+    rights: Literal["", "licensed", "rights_unknown"] = ""          # a licence is stated, or it must be checked
+    period_score: int | None = None  # history: Gemini's 0-10 on the period (modern objects in an 802 AD shot: low)
 
 
 class Shot(BaseModel):
@@ -80,6 +89,7 @@ class Shot(BaseModel):
     factual_requirements: list[str] = []
     alternatives: list[str] = []
     evidence: str = "subject"
+    visual_origin: str = ""  # one of VISUAL_ORIGINS (history projects); "" = not set
     locked: bool = False  # the user edited it or picked its footage: the AI Director and footage search leave it alone
     footage: Footage | None = None
     candidates: list[Footage] = []  # alternatives to swap to, best first
@@ -101,6 +111,7 @@ class Scene(BaseModel):
     opens: list[str] = []        # loop ids (Story.loops) this beat raises
     resolves: list[str] = []     # loop ids this beat answers
     tension: int | None = Field(default=None, ge=0, le=100)  # relative anticipation; editorial guidance, not a measurement
+    claim_ids: list[str] = []    # research claims (history/models.py) this scene's narration states
 
 
 class Loop(BaseModel):
@@ -117,6 +128,8 @@ class Project(BaseModel):
     language: str = "en"
     visual_style: str = STYLES[0]
     target_seconds: float = 0  # the length the creator aims for (0 = none); the narration is never cut to fit
+    channel_profile_id: str = ""     # profiles.PROFILES key; "" = the general defaults (every pre-profile project)
+    channel_profile_version: int = 0
 
     @model_validator(mode="after")
     def _aspect(self):
@@ -132,6 +145,7 @@ class Story(BaseModel):
     audience: str = ""
     key_facts: list[str] = []  # claims in the narration the footage must not misrepresent
     loops: list[Loop] = []     # open loops, opened and resolved by Scene.opens / Scene.resolves
+    research_revision: int = 0  # the approved research brief revision linked into the plan (0 = none)
 
 
 class Continuity(BaseModel):

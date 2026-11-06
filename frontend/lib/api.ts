@@ -17,7 +17,39 @@ export const API_BASE = (desktopEngine ?? process.env.NEXT_PUBLIC_API_URL ?? "ht
 
 export type Lang = "en" | "km";
 // must match director_plan.STYLES in the engine
-export type VisualStyle = "cinematic_documentary" | "cinematic_wildlife" | "educational" | "storytelling";
+export type VisualStyle = "cinematic_documentary" | "cinematic_wildlife" | "educational" | "storytelling" | "cinematic_history";
+/** Research brief (crcontent/history/models.py): a claim is "supported" only with attached source evidence. */
+export type ClaimStatus = "supported" | "disputed" | "uncertain" | "unsupported";
+export interface ResearchSource {
+  id: string; title: string; publisher: string; author: string; url: string; source_type: string; provider: string;
+  publication_date: string; accessed_at: string; excerpts: string[]; note: string;
+  source_role: "primary" | "scholarly_secondary" | "museum_or_archive" | "reference"; license_note: string; retrieval_error: string;
+}
+export interface ClaimEvidence { source_id: string; excerpt: string; stance: "supports" | "disputes" }
+export interface HistoricalClaim {
+  id: string; claim_text: string; claim_type: string; status: ClaimStatus; importance: "central" | "supporting" | "optional";
+  evidence: ClaimEvidence[]; source_ids: string[]; notes: string; script_scene_ids: string[]; locked: boolean;
+}
+export interface ResearchBrief {
+  version: number; id: string; topic: string; project_kind: string; project_ref: string; created_at: string; updated_at: string;
+  period: string; places: string[]; people: string[]; entities: string[]; summary: string;
+  timeline_events: { date: string; event: string }[]; claims: HistoricalClaim[]; sources: ResearchSource[];
+  contradictions: { claim_id: string; note: string; source_ids: string[] }[]; open_questions: string[];
+  research_status: "draft" | "needs_review" | "approved"; revision: number; approved_revision: number; approved_at: string;
+  provider_notes: string[];
+}
+export type ResearchKind = "draft" | "long" | "topic";
+/** A channel's editorial defaults for a new Script-to-Video project (crcontent/profiles.py). */
+export interface ChannelProfile {
+  id: string;
+  display_name: string;
+  description: string;
+  version: number;
+  format_defaults: { format: "short" | "long"; aspect_ratio: string; target_seconds: number; fps: number };
+  visual_style: VisualStyle;
+  palette: Record<string, string>;
+  voice_defaults: string;
+}
 
 /** The Director Plan of a Script-to-Video project (crcontent/director_plan.py). */
 export type FootageMatch = "own" | "drawn" | "exact" | "good" | "subject_only" | "weak" | "unchecked";
@@ -39,6 +71,11 @@ export interface PlanFootage {
   quality_score: number | null;
   problem: string;
   match: FootageMatch;
+  // provenance (missing on footage found before it existed)
+  asset_type?: "" | "own" | "graphic" | "archival" | "museum" | "photograph" | "stock";
+  depicts?: "" | "actual" | "illustrative" | "unknown";
+  rights?: "" | "licensed" | "rights_unknown";
+  period_score?: number | null;
 }
 export interface PlanShot {
   id: string;
@@ -59,6 +96,7 @@ export interface PlanShot {
   factual_requirements: string[];
   alternatives: string[];
   evidence: "exact_action" | "subject" | "supporting" | "illustrative";
+  visual_origin?: "" | "archive" | "context" | "evidence" | "graphic" | "reconstruction"; // history projects
   locked: boolean;
   footage: PlanFootage | null;
   candidates: PlanFootage[];
@@ -80,6 +118,7 @@ export interface PlanScene {
   opens?: string[];
   resolves?: string[];
   tension?: number | null;
+  claim_ids?: string[]; // research claims this scene states (history projects)
 }
 export interface PlanLoop {
   id: string;
@@ -89,8 +128,11 @@ export interface PlanLoop {
 export interface DirectorPlan {
   version: number;
   planned_by: "script" | "ai";
-  project: { title: string; format: "short" | "long"; aspect_ratio: string; language: string; visual_style: string; target_seconds?: number };
-  story: { hook: string; central_idea: string; emotional_arc: string[]; payoff: string; audience: string; key_facts: string[]; loops?: PlanLoop[] };
+  project: {
+    title: string; format: "short" | "long"; aspect_ratio: string; language: string; visual_style: string; target_seconds?: number;
+    channel_profile_id?: string; channel_profile_version?: number; // missing / "" = the general defaults
+  };
+  story: { hook: string; central_idea: string; emotional_arc: string[]; payoff: string; audience: string; key_facts: string[]; loops?: PlanLoop[]; research_revision?: number };
   continuity: { subjects: string[]; locations: string[]; lighting: string[]; visual_style: string };
   scenes: PlanScene[];
   shots: PlanShot[];
@@ -550,7 +592,7 @@ export type Aspect = "16:9" | "9:16";
 
 export interface Job {
   id: string;
-  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short" | "lyric_video" | "inspect" | "plan_footage";
+  kind?: "song" | "song_video" | "lyrics_sync" | "excel" | "publish" | "campaign_prepare" | "campaign_clips" | "highlights" | "long_video" | "short" | "lyric_video" | "inspect" | "plan_footage" | "research";
   status: "queued" | "running" | "done" | "error";
   step: number;
   progress?: number | null; // how far the current step is, 0..1 (null/absent: no measure for it)
@@ -1290,6 +1332,7 @@ export interface QualityReport {
   fingerprint?: string | { sha256: string }; // preview: the project state it was made from
   profile: "short" | "lyric";
   profile_label: string;
+  channel_profile?: string; // the channel profile the video was made with ("" = none)
   file?: string;
   created: string;
   cancelled: boolean;
@@ -1350,13 +1393,30 @@ export const api = {
   /** Script to Video: a finished script becomes a Short draft or starts a Long Video storyboard, with its Director Plan. */
   scriptVideo: (body: {
     text: string; format: "short" | "long"; lang: Lang | "auto"; visual_style: VisualStyle;
-    voice?: string; rate?: string; music?: string; target_seconds?: number;
+    voice?: string; rate?: string; music?: string; target_seconds?: number; channel_profile_id?: string;
+    research_brief_id?: string; // an approved topic brief the script was written from
   }) =>
     request<{
       format: "short" | "long"; id: string; title: string; scenes: number; method?: "claude" | "basic";
-      planned_by?: "script" | "ai"; director_note?: string; footage_job?: string; voice_note?: string;
+      planned_by?: "script" | "ai"; director_note?: string; footage_job?: string; voice_note?: string; profile_note?: string;
     }>(
       "/api/script-video", { method: "POST", json: body, timeout: 0 }),
+  profiles: () => request<ChannelProfile[]>("/api/profiles"),
+  research: (kind: ResearchKind, ref: string) =>
+    request<{ brief: ResearchBrief | null; job: string | null; blockers: string[] }>(`/api/research/${kind}/${encodeURIComponent(ref)}`),
+  researchTopic: (topic: string) => request<{ id: string; job: string }>("/api/research/topic", { method: "POST", json: { topic } }),
+  runResearch: (kind: ResearchKind, ref: string) =>
+    request<{ id: string }>(`/api/research/${kind}/${encodeURIComponent(ref)}/run`, { method: "POST" }),
+  saveResearch: (kind: ResearchKind, ref: string, brief: ResearchBrief) =>
+    request<ResearchBrief>(`/api/research/${kind}/${encodeURIComponent(ref)}`, { method: "PUT", json: brief }),
+  addResearchSource: (kind: ResearchKind, ref: string, body: { url: string; note?: string; excerpt?: string }) =>
+    request<ResearchBrief>(`/api/research/${kind}/${encodeURIComponent(ref)}/sources`, { method: "POST", json: body, timeout: 0 }),
+  /** A Hidden History Files script from an approved topic brief (the creator reviews it before making the video). */
+  researchScript: (ref: string, target_seconds: number) =>
+    request<{ title: string; text: string; warnings: string[] }>(`/api/research/topic/${encodeURIComponent(ref)}/script`,
+      { method: "POST", json: { target_seconds }, timeout: 0 }),
+  approveResearch: (kind: ResearchKind, ref: string) =>
+    request<ResearchBrief>(`/api/research/${kind}/${encodeURIComponent(ref)}/approve`, { method: "POST" }),
   plan: (kind: PlanKind, ref: string) => request<DirectorPlan>(`/api/plans/${kind}/${encodeURIComponent(ref)}`),
   savePlan: (kind: PlanKind, ref: string, plan: DirectorPlan) =>
     request<DirectorPlan>(`/api/plans/${kind}/${encodeURIComponent(ref)}`, { method: "PUT", json: plan }),

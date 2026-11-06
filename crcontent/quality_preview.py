@@ -361,12 +361,48 @@ def label_methods(checks: list) -> None:
                        else "inferred" if d.startswith("plan.") else "heuristic" if d.startswith(rules) else "measured")
 
 
-def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[float], full: bool, plan=None) -> dict:
+def history_hook_checks(checks: list, plan, research=None) -> None:
+    """A history project's hook, judged by history rules (history/hook.py), never by the wildlife hook judge."""
+    from .ai_director import is_history
+    from .history import hook
+
+    if not is_history(plan):
+        return
+    for f in hook.judge(plan, research):
+        _check(checks, f"history.hook.{f['key']}", "storytelling", f["status"], f["title"], "",
+               "medium" if f["status"] == "fail" else "low", f["fix"])
+    history_footage_checks(checks, plan)
+
+
+def history_footage_checks(checks: list, plan) -> None:
+    """Where each shot's picture came from (spec 7.3, H4): rights not stated, and stand-ins for real evidence."""
+    shots = [s for s in plan.shots if s.footage and s.footage.source not in ("own", "card")]
+    unknown = [s for s in shots if s.footage.rights == "rights_unknown"]
+    for s in unknown:
+        _check(checks, f"history.rights.{s.id}", "rights", "warning", f"{s.id}: the source states no licence",
+               s.footage.page, "medium", "Check the item page and confirm the rights, or replace the picture.")
+    if shots and not unknown:
+        _check(checks, "history.rights", "rights", "pass", "Every sourced picture states a licence")
+    stand_ins = [s for s in shots if s.visual_origin in ("archive", "evidence") and s.footage.depicts == "illustrative"]
+    for s in stand_ins:
+        what = "stock footage" if s.footage.asset_type == "stock" else "a similar picture"
+        _check(checks, f"history.visual.{s.id}", "visual", "warning",
+               f"{s.id}: {what} stands in for {s.subject or 'the evidence'}", s.footage.page, "medium",
+               "Don't present it as the real thing: find authentic material, or say it's illustrative.")
+    if shots and not stand_ins:
+        _check(checks, "history.visual", "visual", "pass", "No evidence shot uses a stand-in picture")
+
+
+def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[float], full: bool, plan=None,
+                  research=None) -> dict:
     """lengths: each scene's length in seconds as the editor's timeline has it (0 = not voiced yet).
     plan: the draft's Director Plan (None: the story-beat checks say not checked)."""
     rules, checks = rules_for("short_preview"), []
     W, H = frame_size("9:16")
+    from .profiles import stamp
+
     result = {"stage": "preview", "profile": "short", "profile_label": "Shorts", "mode": "full" if full else "quick",
+              "channel_profile": stamp({}, plan).get("channel_profile_name", ""),
               "created": datetime.now().isoformat(timespec="seconds"), "checks": checks, "cancelled": False,
               "sampled": "project data" + (" and a probe and a few frames of every media file" if full else " only (no media decoded)")}
     profile = LANGS.get(lang, LANGS["en"])
@@ -533,6 +569,8 @@ def inspect_short(script: VideoScript, lang: str, music: str, lengths: list[floa
                       f"“{first[:60]}”", "low", "Consider opening with the claim or the most surprising detail.", 0, lengths[0] or 0), 0)
     elif first:
         _check(checks, "story.hook", "storytelling", "pass", "Opens without a warm-up phrase")
+    if plan is not None:
+        history_hook_checks(checks, plan, research)
     last = scenes[-1].narration.strip()
     if last and TERMINAL.search(last):
         _check(checks, "story.loop", "storytelling", "pass", "Ends on a complete sentence",
@@ -932,7 +970,15 @@ def preview_short(req: ShortPreviewRequest):
             plan = drafts.load(req.draft).plan
         except (KeyError, ValueError, OSError):
             pass  # a deleted or unreadable draft: the story-beat checks say not checked
-    return inspect_short(req.script, req.lang, req.music, req.lengths, req.full, plan)
+    research = None
+    if plan is not None and req.draft:
+        from .history import research as hr
+
+        try:
+            research = hr.load(drafts.DRAFTS_DIR / req.draft / "research.json")
+        except (ValueError, OSError):
+            pass  # an unreadable brief: the hook is judged without it
+    return inspect_short(req.script, req.lang, req.music, req.lengths, req.full, plan, research)
 
 
 def _song_report(folder: Path) -> Path:
