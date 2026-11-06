@@ -1,6 +1,7 @@
 """Pacing for shorts: where the picture hits (impacts on the punchy words, one in the hook) and where it cuts to a new
 framing, so something changes on screen every 1-2 seconds instead of one picture sitting there for 8."""
 import re
+import unicodedata
 
 # words that land with a hit: a zoom punch, a shake and a flash (plus a sound on the bigger ones)
 IMPACT_WORDS = re.compile(
@@ -19,8 +20,60 @@ SOUND_GAP = 3.0  # hits with a sound effect are at least this far apart (the res
 MAX_SOUNDS = 4
 
 
+def _edge(text: str) -> str:
+    """voiceover.keyword() without the lowercasing: punctuation and symbols off the ends, Khmer vowel signs kept."""
+    edge = lambda c: unicodedata.category(c)[0] in "PSZ"
+    start, end = 0, len(text)
+    while start < end and edge(text[start]):
+        start += 1
+    while end > start and edge(text[end - 1]):
+        end -= 1
+    return text[start:end]
+
+
 def _clean(word: str) -> str:
     return re.sub(r"[^\w']", "", word).lower()
+
+
+MAX_KEYWORDS = 2  # per scene: an accent, not a second highlight colour on every line
+_FILLER = {"the", "a", "an", "and", "or", "but", "of", "to", "in", "on", "at", "for", "with", "is", "are", "was",
+           "were", "it", "its", "this", "that", "these", "those", "they", "their", "you", "your", "we", "our", "i",
+           "he", "she", "his", "her", "them", "can", "has", "have", "had", "be", "been", "from", "by", "as", "so",
+           "just", "very", "than", "then", "when", "what", "why", "how", "if", "not", "no", "do", "does", "did"}
+
+
+def auto_keywords(narration: str, subject: str = "", marked: list[str] = ()) -> list[str]:
+    """Words of the narration worth the captions' keyword colour, best first, at most MAX_KEYWORDS: numbers (with a
+    unit after them), the script's hit words, punchy words, names (a capital mid-sentence), then the scene's subject
+    (words of its English `subject`, the visual query, that are spoken). Lowercase, as Scene.keywords stores them."""
+    raw = narration.split()  # space-separated like the captions' words (Khmer phrases too)
+    words = [_edge(w) for w in raw]
+    subj = {_edge(w).lower() for w in subject.split()} - _FILLER
+    hits = {_edge(w).lower() for w in marked}
+    picks: list[tuple[int, int, str]] = []  # (rank, position, word)
+    for k, w in enumerate(words):
+        low = w.lower()
+        if not w or low in _FILLER or len(w) < 2 and not w.isdigit():
+            continue
+        sentence_start = k == 0 or raw[k - 1].rstrip("\"'”’)").endswith((".", "!", "?", "…", ":"))
+        if any(c.isdigit() for c in w):
+            picks.append((0, k, low))
+            nxt = words[k + 1] if k + 1 < len(words) else ""
+            if any(c.isalpha() for c in nxt) and not any(c.isdigit() for c in nxt) and nxt.lower() not in _FILLER:
+                picks.append((0, k + 1, nxt.lower()))  # "400 YEARS"
+        elif low in hits:
+            picks.append((1, k, low))
+        elif IMPACT_WORDS.match(low):
+            picks.append((2, k, low))
+        elif w[0].isupper() and not sentence_start:
+            picks.append((3, k, low))
+        elif low in subj:
+            picks.append((4, k, low))
+    out = []
+    for _, _, w in sorted(picks):
+        if w not in out:
+            out.append(w)
+    return out[:MAX_KEYWORDS]
 
 
 def impacts(words: list, marked: list[str] | None = None, length: float = 0.0, hook: bool = False,

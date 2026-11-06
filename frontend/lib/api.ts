@@ -1704,6 +1704,9 @@ export const api = {
   /** Preview frames of graphics (Remotion stills, cached by the engine); one answer per item, in order. */
   graphicStills: (items: { template: string; props: Record<string, string | number>; seconds: number; version?: number }[], lang: Lang) =>
     request<{ items: GraphicStill[] }>("/api/graphics/stills", { method: "POST", json: { items, lang }, timeout: 0 }),
+  /** Caption keywords picked from each scene's narration (crcontent/pacing.py auto_keywords), in keyword() form. */
+  autoKeywords: (scenes: { narration: string; visual_query: string; impacts?: string[] }[]) =>
+    request<{ keywords: string[][] }>("/api/keywords/auto", { method: "POST", json: { scenes } }),
   sfxUrl: (name: string) => `${API_BASE}/api/sfx/${encodeURIComponent(name)}.wav`,
   /** Add a sound to the library with the licence it comes under (and the credit it asks for). */
   importSound: (file: File, info: { label: string; category: string; licence: string; credit: string; source: string }) => {

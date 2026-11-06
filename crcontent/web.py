@@ -613,6 +613,19 @@ def graphic_stills(req: StillsRequest):
     return {"items": out}
 
 
+class AutoKeywordsRequest(BaseModel):
+    scenes: list[dict] = Field(default_factory=list, max_length=200)  # {narration, visual_query, impacts}
+
+
+@app.post("/api/keywords/auto")
+def auto_keywords(req: AutoKeywordsRequest):
+    """The caption keywords each scene would get by itself (the Transcript's Auto-pick, for drafts made before)."""
+    from .pacing import auto_keywords as pick
+
+    return {"keywords": [pick(str(s.get("narration") or ""), str(s.get("visual_query") or ""),
+                              [str(w) for w in s.get("impacts") or []]) for s in req.scenes]}
+
+
 @app.get("/api/graphics/stills/{key}.png")
 def graphic_still(key: str):
     from . import graphic_templates as gt

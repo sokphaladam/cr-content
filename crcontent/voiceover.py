@@ -4,7 +4,6 @@ so the transcript editor plays exactly the audio the render uses. Pauses cut in 
 import hashlib
 import json
 import subprocess
-import unicodedata
 from array import array
 from pathlib import Path
 
@@ -53,13 +52,9 @@ def with_emoji(text: str, words: list[Word]) -> list[Word]:
 def keyword(text: str) -> str:
     """A word as the keyword list stores it: lowercase, without punctuation or symbols around it (Khmer vowel signs
     are kept, unlike a \\w match)."""
-    edge = lambda c: unicodedata.category(c)[0] in "PSZ"
-    start, end = 0, len(text)
-    while start < end and edge(text[start]):
-        start += 1
-    while end > start and edge(text[end - 1]):
-        end -= 1
-    return text[start:end].lower()
+    from .pacing import _edge
+
+    return _edge(text).lower()
 
 
 def scene_voice(text: str, voice: str, rate: str) -> tuple[Path, list[Word]]:

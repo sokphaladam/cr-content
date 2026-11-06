@@ -6,7 +6,7 @@ from pathlib import Path
 from . import llm
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .config import LLM_MODEL, LANGS
 from .styles import CaptionStyle
@@ -50,7 +50,9 @@ class Scene(BaseModel):
     seconds: float = 0
     # Transcript edits: words shown in the keyword colour in the captions (voiceover.keyword() form), and stretches
     # (seconds) cut out of the voiceover, which only apply to the voiceover they were made on (cuts_key).
-    keywords: list[str] = []
+    # Not given (a new scene): picked from the narration (the AI script marks them; else pacing.auto_keywords), so the
+    # captions colour the numbers, names and subject by themselves; [] = the creator cleared them
+    keywords: list[str] | None = None
     # words of the narration that land with a hit (zoom punch, shake, flash, sound); pacing.py also finds punchy
     # words by itself
     impacts: list[str] = []
@@ -77,6 +79,16 @@ class Scene(BaseModel):
     # the creator's choice (it never does), "" = not calm
     calm: Literal["", "auto", "on", "off"] = ""
     calm_note: str = ""  # why (the Edit Director's reason)
+
+    @model_validator(mode="after")
+    def _keywords(self) -> "Scene":
+        from .pacing import _edge, auto_keywords
+
+        if self.keywords is None:
+            self.keywords = auto_keywords(self.narration, self.visual_query, self.impacts)
+        else:
+            self.keywords = list(dict.fromkeys(k for k in (_edge(p).lower() for w in self.keywords for p in w.split()) if k))
+        return self
 
 
 TIMELINE_VERSION = 1
@@ -189,8 +201,9 @@ SCHEMA = {
                     "visual_query": {"type": "string"},
                     "on_screen_text": {"type": "string"},
                     "impacts": {"type": "array", "items": {"type": "string"}},
+                    "keywords": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["narration", "visual_query", "on_screen_text", "impacts"],
+                "required": ["narration", "visual_query", "on_screen_text", "impacts", "keywords"],
                 "additionalProperties": False,
             },
         },
@@ -231,6 +244,9 @@ Field rules:
   punch, a flash and a sound): the action or the payoff word ("punches", "boils", "smashes", "faster"). Scene 1
   always gets one, early in its first sentence: the hook's promised action must be SHOWN hitting in the first two
   seconds, not just described.
+- keywords: 1-2 single words copied exactly from this scene's narration that the captions show in a highlight colour:
+  the word the viewer must catch (the subject's name, a number and its unit, the surprising detail, the payoff word),
+  never a filler word like "the", "is" or "this".
 - title: 30-60 characters (Khmer: under about 40), specific and front-loaded: a number, a name, a vivid detail or a
   clear promise. Title Case for English, no hashtags, no clickbait the video doesn't deliver.
 - caption: the social post caption in the requested language: a first line that hooks on its own with the most

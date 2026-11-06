@@ -2,7 +2,7 @@
 
 import { Highlighter, Pause, Play, RotateCcw, Scissors, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { keyword, type SceneVoice } from "@/lib/api";
+import { api, keyword, type SceneVoice } from "@/lib/api";
 import type { DraftTimeline, Segment } from "@/lib/useDraftTimeline";
 import type { DraftScene } from "./SceneCard";
 import type { Draft } from "./Storyboard";
@@ -135,6 +135,26 @@ export function Transcript({
     toast(count ? `Cut ${count} pause${count === 1 ? "" : "s"}` : "No long pauses left", "success");
   }
 
+  /** Mark each scene's key words (numbers, names, the subject) on top of the ones already marked. */
+  const [picking, setPicking] = useState(false);
+  async function autoPick() {
+    setPicking(true);
+    try {
+      const scenes = draft.scenes;
+      const { keywords } = await api.autoKeywords(
+        scenes.map((s) => ({ narration: s.narration, visual_query: s.visual_query, impacts: (s as { impacts?: string[] }).impacts })),
+      );
+      const added = new Map(scenes.map((s, k) => [s.uid, (keywords[k] ?? []).filter((w) => !(s.keywords ?? []).includes(w))]));
+      const count = [...added.values()].reduce((n, a) => n + a.length, 0);
+      setDraft((d) => ({ ...d, scenes: d.scenes.map((s) => (added.get(s.uid)?.length ? { ...s, keywords: [...(s.keywords ?? []), ...added.get(s.uid)!] } : s)) }));
+      toast(count ? `Highlighted ${count} keyword${count === 1 ? "" : "s"}` : "No more keywords to pick", "success");
+    } catch (e) {
+      toast(`Couldn't pick keywords: ${(e as Error).message}`, "error");
+    } finally {
+      setPicking(false);
+    }
+  }
+
   const anyCuts = segments.some((s) => s.cuts.length);
   const restore = () => setDraft((d) => ({ ...d, scenes: d.scenes.map((s) => ({ ...s, cuts: [], cuts_key: "" })) }));
 
@@ -213,6 +233,17 @@ export function Transcript({
                   Restore pauses
                 </Button>
               )}
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Highlighter className="size-3.5" />}
+                title="Highlight each scene's numbers, names and subject in the keyword colour"
+                loading={picking}
+                disabled={!draft.scenes.some((s) => s.narration.trim())}
+                onClick={autoPick}
+              >
+                Auto-pick keywords
+              </Button>
               <Button size="sm" variant="secondary" icon={<Scissors className="size-3.5" />} disabled={!voiced} onClick={cleanup}>
                 Speech cleanup
               </Button>
