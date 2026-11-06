@@ -19,18 +19,14 @@ import sys
 import tarfile
 import zipfile
 from pathlib import Path
-from urllib.request import Request, urlopen
+
+from fetch_ffmpeg import fetch  # same downloader, with the certifi fix for python.org Python on macOS
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "remotion"
 DEST = ROOT / "src-tauri" / "remotion-dist"
 NPM = "npm.cmd" if sys.platform == "win32" else "npm"
 
-
-def fetch(url: str) -> bytes:
-    print(f"  downloading {url}", flush=True)
-    with urlopen(Request(url, headers={"User-Agent": "shorts-studio-build"}), timeout=300) as r:
-        return r.read()
 
 
 def node_binary(force: bool) -> None:
