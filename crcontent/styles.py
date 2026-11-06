@@ -307,14 +307,14 @@ class CaptionStyle(BaseModel):
 CAPTION_PRESETS: dict[str, dict] = {
     "classic": {"label": "Classic", "font": "", "size": "m", "color": "#F8FAFC", "highlight": "#FACC15",
                 "keyword": "#38BDF8", "outline": "outline", "case": "as_is"},
-    "bold": {"label": "Bold", "font": "Impact", "size": "l", "color": "#FFFFFF", "highlight": "#FFE500",
-             "keyword": "#FF5A5A", "outline": "outline", "case": "upper"},
+    "bold": {"label": "Bold", "font": "Impact", "size": "l", "color": "#F8FAFC", "highlight": "#FACC15",
+             "keyword": "#38BDF8", "outline": "outline", "case": "upper"},
     "boxed": {"label": "Boxed", "font": "", "size": "m", "color": "#F8FAFC", "highlight": "#FACC15",
               "keyword": "#38BDF8", "outline": "box", "case": "as_is"},
     "neon": {"label": "Neon", "font": "Bahnschrift", "size": "m", "color": "#FFFFFF", "highlight": "#3DF5FF",
              "keyword": "#FF5AF0", "outline": "glow", "case": "upper"},
-    "minimal": {"label": "Minimal", "font": "Bahnschrift", "size": "s", "color": "#FFFFFF", "highlight": "#FFE500",
-                "keyword": "#FFE500", "outline": "shadow", "case": "lower"},
+    "minimal": {"label": "Minimal", "font": "Bahnschrift", "size": "s", "color": "#F8FAFC", "highlight": "#FACC15",
+                "keyword": "#38BDF8", "outline": "shadow", "case": "lower"},
 }
 
 

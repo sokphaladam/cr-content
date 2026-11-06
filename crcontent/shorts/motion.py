@@ -26,7 +26,8 @@ from ..render import run
 from ..visuals import IMAGE_EXTS
 from . import graphics
 
-PROJECT = Path(os.getenv("CRCONTENT_REMOTION") or Path(__file__).resolve().parents[2] / "remotion")
+# Tauri's resource_dir is a \\?\C:\... verbatim path on Windows, which Node can't load a script from
+PROJECT = Path((os.getenv("CRCONTENT_REMOTION") or "").removeprefix("\\\\?\\") or Path(__file__).resolve().parents[2] / "remotion")
 NAMES = ("facts_remotion", "size_compare", "map_zoom")  # the graphics.NAMES drawn here
 ACCENT = "#FACC15"  # the captions' spoken-word amber
 SIZE_SECONDS, MAP_SECONDS = 3.4, 3.2

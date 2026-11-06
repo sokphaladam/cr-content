@@ -192,7 +192,9 @@ def render_stills(jobs: list[dict], font: str = "", timeout: int = 300) -> dict[
             out = subprocess.run([exe, str(motion.PROJECT / "still.mjs"), str(spec)], cwd=motion.PROJECT, stdin=subprocess.DEVNULL,
                                  capture_output=True, text=True, timeout=timeout)
             lines = out.stdout.splitlines()
-            failed_all = out.returncode != 0 and (out.stderr.strip().splitlines() or ["the renderer stopped"])[-1][:200]
+            # the error line, not Node's closing "Node.js v22..." banner
+            errs = [ln for ln in out.stderr.splitlines() if ln.strip() and not ln.startswith("Node.js v")]
+            failed_all = out.returncode != 0 and (next((ln for ln in errs if "Error" in ln), errs[-1] if errs else "the renderer stopped").strip()[:200])
         except (OSError, subprocess.TimeoutExpired) as e:
             lines, failed_all = [], f"{type(e).__name__}"
         finally:
