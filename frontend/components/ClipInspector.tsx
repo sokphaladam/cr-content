@@ -102,6 +102,8 @@ function PropField({ f, value, onChange }: { f: TemplateField; value: string | n
       ) : f.type === "number" ? (
         <input id={id} type="number" step={f.step ?? "any"} min={f.min} max={f.max} className="field-input h-8 py-0 text-sm"
           value={value} onChange={(e) => onChange(e.target.value === "" ? "" : Number(e.target.value))} aria-invalid={!!error} />
+      ) : (f.max_len ?? 0) >= 300 ? (
+        <textarea id={id} rows={3} className="field-input py-1 font-mono text-xs" value={String(value)} onChange={(e) => onChange(e.target.value)} aria-invalid={!!error} />
       ) : (
         <input id={id} className="field-input h-8 py-0 text-sm" value={String(value)} onChange={(e) => onChange(e.target.value)} aria-invalid={!!error} />
       )}

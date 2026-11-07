@@ -11,6 +11,7 @@ import {
   type PlanFootage,
   type PlanKind,
   type PlanShot,
+  type ReconstructionBrief,
   type ResearchBrief,
 } from "@/lib/api";
 import { Button, Chip, FileInput, Message } from "./ui";
@@ -445,6 +446,7 @@ export function DirectorPlanPanel({
                   onUnlock={() => void unlock(shot.id)}
                   onPick={(i) => void pick(shot.id, i)}
                   onSearch={jobId || kind === "short" ? undefined : () => void findFootage([shot.id])}
+                  rebuild={shot.visual_origin === "reconstruction" && kind !== "short" ? { kind, refId, onPlan: setPlan } : undefined}
                 />
               ))}
             </li>
@@ -470,9 +472,11 @@ function ShotRow({
   onUnlock,
   onPick,
   onSearch,
+  rebuild,
 }: {
   id: string;
   shot: PlanShot;
+  rebuild?: { kind: PlanKind; refId: string; onPlan: (p: DirectorPlan) => void }; // a history reconstruction shot
   onEdit: (p: Partial<PlanShot>) => void;
   onUnlock: () => void;
   onPick: (index: number) => void;
@@ -551,7 +555,108 @@ function ShotRow({
           Must: {shot.factual_requirements.join("; ")}
         </span>
       )}
+      {rebuild && <ReconstructionBox shot={shot} {...rebuild} />}
       <FootageView shot={shot} onPick={onPick} onSearch={onSearch} />
+    </div>
+  );
+}
+
+/** A reconstruction shot (H6): what the research lets it show, the prompt (editable), and draw / redraw / reject.
+ *  Drawn pictures carry an "AI RECONSTRUCTION" label; earlier drawings stay as alternatives. */
+function ReconstructionBox({ shot, kind, refId, onPlan }: { shot: PlanShot; kind: PlanKind; refId: string; onPlan: (p: DirectorPlan) => void }) {
+  const [open, setOpen] = useState(false);
+  const [info, setInfo] = useState<{ brief: ReconstructionBrief; installed: boolean } | null>(null);
+  const [prompt, setPrompt] = useState("");
+  const [job, setJob] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const drawn = shot.footage?.asset_type === "reconstruction";
+
+  async function show() {
+    setOpen(true);
+    try {
+      const r = await api.reconstruction(kind, refId, shot.id);
+      setInfo(r);
+      setPrompt(r.brief.prompt);
+      setMsg({ text: "" });
+    } catch (e) {
+      setMsg({ text: (e as Error).message, error: true });
+    }
+  }
+
+  async function draw() {
+    try {
+      setJob((await api.drawReconstruction(kind, refId, shot.id, prompt)).id);
+      setMsg({ text: "Drawing on this computer… (the first time downloads the model)" });
+    } catch (e) {
+      setMsg({ text: (e as Error).message, error: true });
+    }
+  }
+
+  async function reject() {
+    try {
+      onPlan(await api.rejectReconstruction(kind, refId, shot.id));
+    } catch (e) {
+      setMsg({ text: (e as Error).message, error: true });
+    }
+  }
+
+  useEffect(() => {
+    if (!job) return;
+    const timer = setInterval(async () => {
+      try {
+        const j = await api.job(job);
+        if (j.status !== "done" && j.status !== "error") return;
+        setJob(null);
+        setMsg(j.status === "error" ? { text: j.error ?? "Drawing failed.", error: true } : { text: "" });
+        onPlan(await api.plan(kind, refId));
+      } catch {
+        setJob(null);
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [job, kind, refId, onPlan]);
+
+  const b = info?.brief;
+  return (
+    <div className="grid gap-1.5 rounded border border-line p-2 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-semibold">AI reconstruction</span>
+        <span className="text-ink-soft">labelled on screen · drawn only from approved research</span>
+        {!open && (
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => void show()}>
+            {drawn ? "Redraw / review" : "Plan the reconstruction"}
+          </Button>
+        )}
+      </div>
+      {open && b && (
+        <>
+          <span className="text-ink-soft">
+            {b.kind} · {[b.period, b.location, b.framing, b.aspect].filter(Boolean).join(" · ")}
+          </span>
+          {b.verified.length > 0 && <span>Verified: {b.verified.join("; ")}</span>}
+          {b.uncertain.length > 0 && <span className="text-warn">Not shown as certain: {b.uncertain.join("; ")}</span>}
+          <span className="text-ink-soft">Never invented: {b.must_not_invent.join(", ")}</span>
+          <label className="grid gap-0.5">
+            <span className="text-ink-soft">What to draw (edit freely; keep to the verified facts)</span>
+            <textarea rows={2} className="field-input resize-y text-xs" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+          </label>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button size="sm" loading={!!job} disabled={!info?.installed || !!job || !prompt.trim()} onClick={() => void draw()}
+              title={info?.installed ? "Draw with the free local generator (SDXL)" : "The local image generator isn't installed"}>
+              {drawn ? "Draw again" : "Draw"}
+            </Button>
+            {drawn && (
+              <Button size="sm" variant="ghost" disabled={!!job} onClick={() => void reject()} title="Take it out of the video (kept as an alternative)">
+                Reject
+              </Button>
+            )}
+            {!info?.installed && (
+              <span className="text-ink-soft">No local generator: add your own picture named {shot.id}.jpg to the media folder, then search the shot.</span>
+            )}
+          </div>
+        </>
+      )}
+      <Message text={msg.text} error={msg.error} />
     </div>
   );
 }
@@ -592,7 +697,7 @@ function FootageView({ shot, onPick, onSearch }: { shot: PlanShot; onPick: (i: n
                 <Chip tone={MATCH[f.match].tone}>{MATCH[f.match].label}</Chip>
                 {f.rights === "rights_unknown" && <Chip tone="caption">rights unknown</Chip>}
                 {f.depicts === "actual" && <Chip tone="ink">the real subject</Chip>}
-                {f.depicts === "illustrative" && <Chip>illustrative</Chip>}
+                {f.asset_type === "reconstruction" ? <Chip tone="caption">AI reconstruction</Chip> : f.depicts === "illustrative" && <Chip>illustrative</Chip>}
                 <span className="text-ink-soft">
                   {f.kind} · {f.asset_type ? `${f.asset_type} · ` : ""}{f.source}
                   {f.duration ? ` · ${f.duration.toFixed(0)} s` : ""}

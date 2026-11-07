@@ -3,6 +3,7 @@
 import { AlertTriangle, CheckCircle2, CircleDashed, ShieldCheck, XCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE, api, type Disposition, type InspectTarget, type Job, type QualityCheck, type QualityReport } from "@/lib/api";
+import { HistoryTraceView } from "./HistoryGatePanel";
 import { Button, useToast } from "./ui";
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
@@ -13,6 +14,12 @@ const STATUS = {
   not_checked: { label: "Not checked", icon: CircleDashed, tone: "text-ink-soft" },
 } as const;
 const ORDER = { fail: 0, warning: 1, not_checked: 2, pass: 3 };
+// spec 11.2: a history render's three states; source and rights failures can't be dismissed away
+const HISTORY = {
+  ready: { label: "ready (every check passed or reviewed)", tone: "text-ok" },
+  review_required: { label: "review required (warnings you haven't reviewed)", tone: "text-warn" },
+  blocked: { label: "blocked (a failed check: fix it and render again)", tone: "text-danger" },
+} as const;
 const METHODS = {
   measured: "measured from the project or its media",
   heuristic: "a rule of thumb: advice, it may be deliberate",
@@ -74,6 +81,10 @@ export function QualityReportView({ report, total, onSelect, onReview, onApply, 
         <p className={`m-0 text-sm font-bold ${report.verdict === "fail" ? "text-danger" : report.verdict === "pass" ? "text-ok" : "text-warn"}`}>
           {VERDICT[report.stage][report.verdict]}
         </p>
+        {report.history_status && (
+          <p className={`m-0 text-sm font-bold ${HISTORY[report.history_status].tone}`}>History video: {HISTORY[report.history_status].label}</p>
+        )}
+        {report.history && <HistoryTraceView trace={report.history} />}
         <p className="m-0 text-2xs text-ink-soft">
           {report.profile_label} profile{report.channel_profile ? ` · ${report.channel_profile}` : ""}{report.file ? ` · ${report.file}` : ""}{report.mode ? ` · ${report.mode} check` : ""} ·{" "}
           {new Date(report.created).toLocaleString()} · {report.counts.fail} fail, {report.counts.warning} warning, {report.counts.pass} pass,{" "}

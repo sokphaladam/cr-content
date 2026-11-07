@@ -958,6 +958,7 @@ def _run_render(job_id: str, req: RenderRequest) -> None:
     with jobs_lock:
         job["status"] = "running"
     try:
+        verdict = _history_sources(req) if req.draft_id else None
         music = req.music
         if music and music != "none":
             music = str(ASSETS_DIR / "music" / Path(music).name)
@@ -971,6 +972,8 @@ def _run_render(job_id: str, req: RenderRequest) -> None:
                 profiles.stamp(meta, drafts.load(req.draft_id).plan)
             except KeyError:  # the draft was deleted while it rendered
                 pass
+            if verdict is not None:
+                meta["history_gate"] = verdict  # what was checked and approved, kept with the video
             meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         with jobs_lock:
             job.update(status="done", step=5, video=final.parent.name)
@@ -987,6 +990,8 @@ def render(req: RenderRequest):
         raise HTTPException(400, f"Unknown language {req.lang}")
     if not req.script.scenes:
         raise HTTPException(400, "The script has no scenes.")
+    if req.draft_id:
+        _history_gate_or_409("draft", req.draft_id)
     job_id = uuid.uuid4().hex[:10]
     with jobs_lock:
         jobs[job_id] = {"id": job_id, "status": "queued", "step": 0, "log": [], "title": req.script.title}
@@ -1596,6 +1601,10 @@ def longform_approve(name: str):
     running = _longform_job(name)
     if running:
         return {"id": running}
+    if (verdict := _history_gate_or_409("long", name)) is not None:
+        meta = _read_meta(folder)
+        meta["history_gate"] = verdict
+        (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     storyboard.approve(folder)
     job_id = uuid.uuid4().hex[:10]
     with jobs_lock:
@@ -1846,6 +1855,219 @@ def _topic_research(brief_id: str, plan: "director_plan.DirectorPlan"):
     if brief is None or brief.research_status != "approved":
         raise HTTPException(409, "Approve the research before making the video from it.")
     return hscript.attach(brief, brief.written_script, [s.id for s in plan.scenes], [s.narration for s in plan.scenes])
+
+
+def _history_project(kind: str, ref: str):
+    """(plan, approved-or-not research brief, folder) of a history project; None when it isn't one."""
+    from .ai_director import is_history
+
+    if kind not in ("draft", "long"):
+        raise HTTPException(404, "Unknown project kind.")
+    plan = _plan_get(kind, ref)
+    if not is_history(plan):
+        return None
+    path, brief = _research_brief(kind, ref)
+    return plan, brief, path.parent
+
+
+def _history_gate_or_409(kind: str, ref: str) -> dict | None:
+    """The gate's verdict for a history project's render (None: not a history project); 409 unless it's ready."""
+    from .history import gate
+
+    try:
+        found = _history_project(kind, ref)
+    except HTTPException as e:
+        if e.status_code == 404 and kind == "draft":
+            return None  # an ordinary draft without a Director Plan
+        raise
+    if found is None:
+        return None
+    verdict = gate.evaluate(*found)
+    if verdict["status"] != "ready":
+        left = [it["title"] for it in verdict["items"] if not it["approved"]]
+        word = "blocked" if verdict["status"] == "blocked" else "waiting for your review"
+        raise HTTPException(409, f"History check {word}: {'; '.join(left[:4])}{' …' if len(left) > 4 else ''}. "
+                                 "Open the Pre-render check to see and resolve each item.")
+    return {"status": "ready", "checked_at": verdict["checked_at"], "approved": verdict["approved"], "open": [],
+            "trace": gate.trace(found[0], found[1])}
+
+
+def _history_sources(req: RenderRequest) -> dict | None:
+    """A history draft's render: the research sources (and rights the creator confirmed) go into post.txt."""
+    from .history import gate
+
+    try:
+        found = _history_project("draft", req.draft_id)
+    except HTTPException:
+        return None
+    if found is None:
+        return None
+    plan, brief, folder = found
+    confirmed = [f"- {s.footage.page or s.footage.source}: rights confirmed by the creator ({s.footage.rights_note})"
+                 for s in plan.shots if s.footage and s.footage.rights_note]
+    listed = "\n".join(x for x in (gate.sources_text(plan, brief), gate.credits_text(plan, req.script.clips), *confirmed) if x)
+    if listed:
+        req.script.sources = "\n".join(x for x in (req.script.sources.strip(), listed) if x)
+    verdict = gate.evaluate(plan, brief, folder)
+    return {"status": verdict["status"], "checked_at": verdict["checked_at"], "approved": verdict["approved"],
+            "open": [{"key": it["key"], "level": it["level"], "title": it["title"]} for it in verdict["items"] if not it["approved"]],
+            "trace": gate.trace(plan, brief)}
+
+
+def _history_publish_block(folder: Path) -> str:
+    """Why a rendered history video may not go out ("" = it may): it needs the gate's passing verdict, recorded when
+    it was rendered."""
+    meta = _read_meta(folder)
+    if meta.get("channel_profile_id") != "hidden_history_files":
+        return ""
+    if (meta.get("history_gate") or {}).get("status") == "ready":
+        return ""
+    return ("This history video wasn't rendered through the history check (sources, rights, misleading pictures). "
+            "Resolve the check in its draft and render it again.")
+
+
+@app.get("/api/history/{kind}/{ref}/gate")
+def history_gate(kind: str, ref: str):
+    from .history import gate
+
+    found = _history_project(kind, ref)
+    if found is None:
+        return {"status": "not_history", "items": [], "approved": []}
+    return {**gate.evaluate(*found), "trace": gate.trace(found[0], found[1])}
+
+
+# ---------- AI reconstructions (H6): drawn from approved research, labelled, reviewable ----------
+
+def _reconstruction_shot(kind: str, ref: str, shot_id: str):
+    from .history import reconstruct
+
+    found = _history_project(kind, ref)
+    if found is None:
+        raise HTTPException(400, "Reconstructions are for Hidden History projects.")
+    plan, brief, _ = found
+    shot = next((s for s in plan.shots if s.id == shot_id), None)
+    if shot is None:
+        raise HTTPException(404, "That shot isn't in the plan any more.")
+    try:
+        return plan, shot, reconstruct.brief(plan, shot, brief)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/history/{kind}/{ref}/shots/{shot_id}/reconstruction")
+def reconstruction_brief(kind: str, ref: str, shot_id: str):
+    """The shot's reconstruction brief (what's verified, what's uncertain, what mustn't be invented) and its prompt."""
+    from . import imagegen
+
+    _, _, b = _reconstruction_shot(kind, ref, shot_id)
+    return {"brief": b, "installed": imagegen.installed()}
+
+
+class ReconstructRequest(BaseModel):
+    prompt: str = Field("", max_length=600)  # the creator's edit of the brief's prompt ("" = as built)
+    seed: int | None = None                  # None: a new picture each time
+
+
+def _run_reconstruction(job_id: str, kind: str, ref: str, shot_id: str, b: dict, seed: int | None, fmt: str) -> None:
+    from . import shot_footage
+    from .history import reconstruct
+
+    job = jobs[job_id]
+    job["status"] = "running"
+    try:
+        f = reconstruct.draw(b, shot_footage.SIZES[fmt], seed,
+                             log=lambda m: job["log"].append(str(m)))
+        plan = _plan_get(kind, ref)  # again: the plan may have changed while it drew
+        shot = next(s for s in plan.shots if s.id == shot_id)
+        if shot.footage and shot.footage.asset_type == "reconstruction":
+            shot.candidates.insert(0, shot.footage)  # the earlier drawing stays as an alternative
+        shot.footage, shot.locked = f, True
+        shot.warnings = shot_footage.warnings_for(shot, plan.project.format, True)
+        _plan_put(kind, ref, plan)
+        job.update(status="done", step=1, summary=f"Drew the reconstruction for {shot_id}")
+    except Exception as e:
+        _fail(job, e)
+
+
+@app.post("/api/history/{kind}/{ref}/shots/{shot_id}/reconstruction")
+def reconstruction_draw(kind: str, ref: str, shot_id: str, req: ReconstructRequest):
+    """Draw (or redraw) the shot's reconstruction with the local generator, in the background (watch /api/jobs/<id>)."""
+    import random
+
+    from . import imagegen
+
+    plan, _, b = _reconstruction_shot(kind, ref, shot_id)
+    if not imagegen.installed():
+        raise HTTPException(400, "The local image generator isn't installed (Settings → AI add-on). "
+                                 f"Or add your own picture named {shot_id}.jpg to the media folder and search again.")
+    if req.prompt.strip():
+        b["prompt"] = " ".join(req.prompt.split())
+    seed = req.seed if req.seed is not None else random.randrange(2**31)
+    job_id = uuid.uuid4().hex[:10]
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "kind": "reconstruction", "status": "queued", "step": 0, "log": [],
+                        "title": f"{plan.project.title}: {shot_id}"}
+    footage_pool.submit(_run_reconstruction, job_id, kind, ref, shot_id, b, seed, plan.project.format)
+    return {"id": job_id}
+
+
+@app.delete("/api/history/{kind}/{ref}/shots/{shot_id}/reconstruction")
+def reconstruction_reject(kind: str, ref: str, shot_id: str):
+    """Reject the shot's reconstruction: it leaves the video (kept as an alternative to pick back)."""
+    from . import shot_footage
+
+    plan, shot, _ = _reconstruction_shot(kind, ref, shot_id)
+    if shot.footage and shot.footage.asset_type == "reconstruction":
+        shot.candidates.insert(0, shot.footage)
+        shot.footage = None
+    shot.warnings = shot_footage.warnings_for(shot, plan.project.format, True)
+    _plan_put(kind, ref, plan)
+    return plan.model_dump()
+
+
+class GateApproval(BaseModel):
+    key: str
+    note: str
+
+
+@app.post("/api/history/{kind}/{ref}/gate/approve")
+def history_gate_approve(kind: str, ref: str, req: GateApproval):
+    """Approve one review item with your reason (kept in history_review.json); blockers and rights can't be."""
+    from .history import gate
+
+    found = _history_project(kind, ref)
+    if found is None:
+        raise HTTPException(400, "This isn't a history project.")
+    try:
+        return gate.approve(found[2], *found[:2], req.key, req.note)
+    except KeyError:
+        raise HTTPException(404, "That item isn't in the check any more. Refresh it.")
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+class RightsConfirm(BaseModel):
+    shot_id: str
+    note: str
+
+
+@app.post("/api/history/{kind}/{ref}/rights")
+def history_rights(kind: str, ref: str, req: RightsConfirm):
+    """Confirm the rights of a picture whose source states no licence, saying what you checked (the note goes into
+    the post's credits). Replacing the picture asks again."""
+    from .history import gate
+
+    note = " ".join(req.note.split())
+    if len(note) < gate.NOTE_MIN:
+        raise HTTPException(400, "Say what you checked (e.g. 'Item page: public domain, US government film').")
+    plan = _plan_get(kind, ref)
+    shot = next((s for s in plan.shots if s.id == req.shot_id), None)
+    if shot is None or shot.footage is None:
+        raise HTTPException(404, "That shot has no picture.")
+    shot.footage.rights, shot.footage.rights_note = "licensed", note[:300]
+    _plan_put(kind, ref, plan)
+    found = _history_project(kind, ref)
+    return gate.evaluate(*found) if found else {"status": "not_history", "items": [], "approved": []}
 
 
 class HistoryScriptRequest(BaseModel):
@@ -3655,6 +3877,9 @@ def _auto_publish(folder: Path, log) -> None:
     """After a render: upload to every connected platform with auto-upload on, right away or at its next posting
     time (never fails the render)."""
     try:
+        if why := _history_publish_block(folder):
+            log(f"Auto-upload skipped: {why}")
+            return
         prefs = publish.settings()
         for p in publish.PLATFORMS:
             if not (prefs[p]["auto"] and publish.connected(p)):
@@ -3677,6 +3902,8 @@ def _run_scheduled(item: dict) -> None:
     try:
         if not (folder / "video.mp4").exists():
             raise publish.PublishError("The video was deleted.")
+        if why := _history_publish_block(folder):
+            raise publish.PublishError(why)
         at = datetime.fromisoformat(item["at"])
         # Facebook publishes it at its time itself (schedule.EARLY): uploaded ahead with that time
         native = item["platform"] == "facebook" and publish.fb_can_schedule(at)
@@ -3740,6 +3967,8 @@ def _check_channel(channel: str) -> str:
 @app.post("/api/videos/{name}/schedule")
 def schedule_video(name: str, req: ScheduleRequest):
     folder = _video_dir(name)
+    if why := _history_publish_block(folder):
+        raise HTTPException(409, why)
     if not (folder / "video.mp4").exists():
         raise HTTPException(400, "Render the video first.")
     try:
@@ -3900,6 +4129,8 @@ def publish_video(name: str, req: PublishRequest):
     folder = _video_dir(name)
     if not (folder / "video.mp4").exists():
         raise HTTPException(400, "Render the video first.")
+    if why := _history_publish_block(folder):
+        raise HTTPException(409, why)
     for p in req.platforms:
         if not publish.connected(_platform(p)):
             raise HTTPException(400, f"Connect {PLATFORM_NAMES[p]} first.")

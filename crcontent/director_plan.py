@@ -40,7 +40,7 @@ class Camera(BaseModel):
 
 
 MATCHES = ("own", "drawn", "exact", "good", "subject_only", "weak", "unchecked")
-ASSET_TYPES = ("own", "graphic", "archival", "museum", "photograph", "stock")
+ASSET_TYPES = ("own", "graphic", "archival", "museum", "photograph", "stock", "reconstruction")
 
 
 class Footage(BaseModel):
@@ -68,6 +68,7 @@ class Footage(BaseModel):
     depicts: Literal["", "actual", "illustrative", "unknown"] = ""  # the real subject, or a stand-in for it
     rights: Literal["", "licensed", "rights_unknown"] = ""          # a licence is stated, or it must be checked
     period_score: int | None = None  # history: Gemini's 0-10 on the period (modern objects in an 802 AD shot: low)
+    rights_note: str = ""       # the creator confirmed rights_unknown material: what they checked (H7)
 
 
 class Shot(BaseModel):

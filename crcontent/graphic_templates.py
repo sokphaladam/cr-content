@@ -83,6 +83,22 @@ TEMPLATES = {
         _text("place", "Iceland", 32, "Place", required=True), _num("lat", 64.9, -90, 90, "Latitude", 0.1),
         _num("lon", -19.0, -180, 180, "Longitude", 0.1), _choice("zoom", "country", ["world", "continent", "country", "region", "city"], "Zoom")],
         place={"enter": "none", "exit": "none"}),
+    "HistoryMap": _t("History map", "Dated places, a route between them and, only with its source, a historical region.", 4.5, [
+        _text("title", "Angkor", 32, "Label", required=True), _text("period", "c. 1200 CE", 24, "Period / date"),
+        _text("markers", "Angkor Thom @ 13.44, 103.86; Phnom Kulen @ 13.56, 104.11", 400, "Places (name @ lat, lon; ...)", required=True),
+        _choice("route", "none", ["none", "through_the_places"], "Route"),
+        _choice("zoom", "region", ["continent", "country", "region", "city"], "Zoom (one place; several are fitted)"),
+        _text("map_source", "Natural Earth (modern borders)", 80, "Base map credit"),
+        _text("region_geojson", "", 20000, "Region shape (GeoJSON, from a source)"),
+        _text("region_source", "", 300, "Region source (link)"), _text("region_dates", "", 40, "Region date range"),
+        _color()], place={"enter": "none", "exit": "none"}),
+    "Timeline": _t("Timeline", "Up to five dated events in order (date: what happened; ...), with their source.", 4, [
+        _text("title", "", 40, "Title"), _text("events", "802: Jayavarman II crowned; 1113: Angkor Wat begun", 300, "Events (date: what; ...)", required=True),
+        _text("source", "", 80, "Source"), _color(default="#B99A60")], place={"y": 0.42, "enter": "none", "exit": "fade"}),
+    "DocumentExcerpt": _t("Document excerpt", "A short passage quoted from a document, with who wrote it and when.", 4, [
+        _text("quote", "The walls are of stone, and very high.", 200, "Quoted passage", required=True),
+        _text("source", "Zhou Daguan, The Customs of Cambodia", 80, "Source (author, title)", required=True),
+        _text("date", "1297", 24, "Date"), _color(default="#B99A60")], place={"y": 0.42, "enter": "fade", "exit": "fade"}),
     "SizeCompare": _t("Size comparison", "The subject's length next to a person (or a phone, under 40 cm).", 3.4, [
         _num("metres", 1.0, 0.005, 100, "Length (m)", 0.01), _text("shown", "1", 12, "As said", required=True),
         _text("unit", "metre", 16, "Unit")], fixed={"photo": ""}, place={"enter": "none", "exit": "none"}),
@@ -125,7 +141,52 @@ def validate(template: str, props: dict, version: int = 0) -> tuple[dict, list[s
             elif len(v) > f["max_len"]:
                 errors.append(f"{label}: {len(v)} characters, at most {f['max_len']}.")
         out[k] = v
+    if template == "HistoryMap" and not errors:
+        derived, errors = history_map(out)
+        return {**out, **derived}, errors
     return {**out, **t["fixed"], **_derived(template, out)}, errors
+
+
+MARKER = re.compile(r"^(.+?)@\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$")
+SHAPES = ("Polygon", "MultiPolygon")
+
+
+def history_map(props: dict) -> tuple[dict, list[str]]:
+    """({points, region}, problems). A region is drawn only with its source link and date range: no geometry
+    without a source (spec 8.2). Without a region the map honestly shows the places and route only."""
+    points, errors = [], []
+    for part in filter(None, (p.strip() for p in props["markers"].split(";"))):
+        m = MARKER.match(part)
+        if not m:
+            errors.append(f"Places: '{part}' isn't 'name @ latitude, longitude'.")
+            continue
+        lat, lon = float(m.group(2)), float(m.group(3))
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            errors.append(f"Places: {m.group(1).strip()} has no such latitude/longitude ({lat:g}, {lon:g}).")
+        points.append({"label": m.group(1).strip(), "lat": lat, "lon": lon})
+    if len(points) > 8:
+        errors.append(f"Places: {len(points)} places, at most 8 (they must stay readable).")
+    if props["route"] != "none" and len(points) < 2:
+        errors.append("Route: it needs at least two places.")
+    region = None
+    if props["region_geojson"].strip():
+        try:
+            g = json.loads(props["region_geojson"])
+            g = g.get("geometry", g) if g.get("type") == "Feature" else g
+            if g.get("type") == "FeatureCollection":
+                g = {"type": "GeometryCollection", "geometries": [f.get("geometry") or {} for f in g.get("features") or []]}
+            shapes = g.get("geometries", [g]) if g.get("type") == "GeometryCollection" else [g]
+            if not shapes or any(s.get("type") not in SHAPES or not s.get("coordinates") for s in shapes):
+                errors.append("Region shape: only Polygon / MultiPolygon shapes can be drawn.")
+            else:
+                region = g
+        except (ValueError, AttributeError):
+            errors.append("Region shape: not valid GeoJSON.")
+        if not re.match(r"https?://\S+$", props["region_source"].strip()):
+            errors.append("Region source: a region needs the link to the source its shape comes from.")
+        if not props["region_dates"].strip():
+            errors.append("Region date range: say which years this shape shows.")
+    return {"points": points, "region": region}, errors
 
 
 def _derived(template: str, props: dict) -> dict:

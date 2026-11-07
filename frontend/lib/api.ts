@@ -39,6 +39,17 @@ export interface ResearchBrief {
   provider_notes: string[];
 }
 export type ResearchKind = "draft" | "long" | "topic";
+/** The history gate (crcontent/history/gate.py): what stops a history video from rendering and publishing. */
+export interface HistoryGateItem {
+  key: string; level: "blocked" | "review"; title: string; detail: string; overridable: boolean; fix: string;
+  approved: { note: string; at: string } | null;
+}
+export interface HistoryGate {
+  status: "ready" | "review_required" | "blocked" | "not_history";
+  items: HistoryGateItem[];
+  approved: { key: string; title: string; note: string; at: string }[];
+  trace?: HistoryTrace; // claims -> sources, shots -> material
+}
 /** A channel's editorial defaults for a new Script-to-Video project (crcontent/profiles.py). */
 export interface ChannelProfile {
   id: string;
@@ -72,7 +83,7 @@ export interface PlanFootage {
   problem: string;
   match: FootageMatch;
   // provenance (missing on footage found before it existed)
-  asset_type?: "" | "own" | "graphic" | "archival" | "museum" | "photograph" | "stock";
+  asset_type?: "" | "own" | "graphic" | "archival" | "museum" | "photograph" | "stock" | "reconstruction";
   depicts?: "" | "actual" | "illustrative" | "unknown";
   rights?: "" | "licensed" | "rights_unknown";
   period_score?: number | null;
@@ -145,6 +156,13 @@ export interface DirectorPlan {
   media_folder?: string; // where your own clips for its shots go (GET only)
 }
 export type PlanKind = "draft" | "long" | "short"; // short: a Shorts Mode job
+
+/** What an AI reconstruction may show (crcontent/history/reconstruct.py): only the approved research's facts. */
+export type ReconstructionBrief = {
+  shot_id: string; period: string; location: string; verified: string[]; uncertain: string[]; must_not_invent: string[];
+  framing: string; aspect: string; kind: "proposed reconstruction" | "illustrative"; research_revision: number;
+  prompt: string; negative: string;
+};
 
 export interface Scene {
   narration: string;
@@ -1326,6 +1344,13 @@ export interface QualityCheck {
 
 export type Disposition = "unreviewed" | "reviewed" | "dismissed" | "fixed";
 
+/** Traceability for a history video (crcontent/history/gate.py trace). */
+export type HistoryTrace = {
+  claims: { id: string; text: string; status: string; importance: string; scenes: number[]; sources: { title: string; url: string }[] }[];
+  shots: { id: string; origin: string; subject: string; material: string; depicts: string; rights: string; source: string;
+    author: string; licence: string; rights_note: string }[];
+};
+
 export interface QualityReport {
   stage: "render" | "preview";
   mode?: "quick" | "full"; // preview only
@@ -1333,6 +1358,8 @@ export interface QualityReport {
   profile: "short" | "lyric";
   profile_label: string;
   channel_profile?: string; // the channel profile the video was made with ("" = none)
+  history?: HistoryTrace; // a Hidden History render: claims -> sources, shots -> material (H7)
+  history_status?: "ready" | "review_required" | "blocked";
   file?: string;
   created: string;
   cancelled: boolean;
@@ -1402,6 +1429,11 @@ export const api = {
     }>(
       "/api/script-video", { method: "POST", json: body, timeout: 0 }),
   profiles: () => request<ChannelProfile[]>("/api/profiles"),
+  historyGate: (draftId: string) => request<HistoryGate>(`/api/history/draft/${encodeURIComponent(draftId)}/gate`),
+  approveGateItem: (draftId: string, key: string, note: string) =>
+    request<HistoryGate>(`/api/history/draft/${encodeURIComponent(draftId)}/gate/approve`, { method: "POST", json: { key, note } }),
+  confirmRights: (draftId: string, shot_id: string, note: string) =>
+    request<HistoryGate>(`/api/history/draft/${encodeURIComponent(draftId)}/rights`, { method: "POST", json: { shot_id, note } }),
   research: (kind: ResearchKind, ref: string) =>
     request<{ brief: ResearchBrief | null; job: string | null; blockers: string[] }>(`/api/research/${kind}/${encodeURIComponent(ref)}`),
   researchTopic: (topic: string) => request<{ id: string; job: string }>("/api/research/topic", { method: "POST", json: { topic } }),
@@ -1433,6 +1465,15 @@ export const api = {
   assemblePlan: (kind: PlanKind, ref: string, scenes: Scene[] = []) =>
     request<{ scenes?: Scene[]; mood?: string; notes: string[] }>(`/api/plans/${kind}/${encodeURIComponent(ref)}/assemble`, {
       method: "POST", json: { scenes } }),
+  /** History (H6): a reconstruction shot's brief, built from the approved research. */
+  reconstruction: (kind: PlanKind, ref: string, shot: string) =>
+    request<{ brief: ReconstructionBrief; installed: boolean }>(`/api/history/${kind}/${encodeURIComponent(ref)}/shots/${encodeURIComponent(shot)}/reconstruction`),
+  /** Draw it with the local generator, in the background (watch the job). */
+  drawReconstruction: (kind: PlanKind, ref: string, shot: string, prompt: string) =>
+    request<{ id: string }>(`/api/history/${kind}/${encodeURIComponent(ref)}/shots/${encodeURIComponent(shot)}/reconstruction`, {
+      method: "POST", json: { prompt } }),
+  rejectReconstruction: (kind: PlanKind, ref: string, shot: string) =>
+    request<DirectorPlan>(`/api/history/${kind}/${encodeURIComponent(ref)}/shots/${encodeURIComponent(shot)}/reconstruction`, { method: "DELETE" }),
   pickFootage: (kind: PlanKind, ref: string, shot: string, index: number) =>
     request<DirectorPlan>(`/api/plans/${kind}/${encodeURIComponent(ref)}/shots/${encodeURIComponent(shot)}/pick`, {
       method: "POST", json: { index }, timeout: 0 }),

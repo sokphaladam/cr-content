@@ -54,6 +54,7 @@ import { SceneCard, type DraftScene } from "./SceneCard";
 import { Timeline } from "./Timeline";
 import { DirectorPlanPanel } from "./DirectorPlanPanel";
 import { ResearchPanel } from "./ResearchPanel";
+import { HistoryGatePanel } from "./HistoryGatePanel";
 import { ClipInspector, GraphicsBin, useCatalog } from "./ClipInspector";
 import { SoundPanel } from "./SoundPanel";
 import { EditDirectorPanel } from "./EditDirectorPanel";
@@ -946,6 +947,7 @@ export function Storyboard({
     ),
     check: (
       <div className="p-3">
+        {channel === "hidden_history_files" && draft.id && <HistoryGatePanel draftId={draft.id} refreshKey={planStamp} />}
         <ShortsPreviewCheck
           script={toScript(draft)}
           draftId={draft.id ?? undefined}

@@ -36,7 +36,7 @@ FORMAT_WORDS = re.compile(r"\b(vertical|horizontal|portrait|landscape|9:16|16:9|
 # provenance (Hidden History Files spec 7.2-7.3): what kind of material each source gives, and which licences count
 # as stated. A source category alone doesn't prove rights: an item whose licence isn't stated is rights_unknown.
 STOCK = ("pexels", "pixabay", "mixkit", "unsplash")
-TYPE_OF = {"own": "own", "card": "graphic", "archive": "archival", "nasa": "archival", "met": "museum",
+TYPE_OF = {"own": "own", "card": "graphic", "reconstruction": "reconstruction", "archive": "archival", "nasa": "archival", "met": "museum",
            "commons": "photograph", "inaturalist": "photograph", **{k: "stock" for k in STOCK}}
 LICENSED = re.compile(r"\bcc0\b|\bcc[ -]by|public domain|nasa media|open access|made by the app|your own media", re.I)
 
@@ -200,8 +200,8 @@ def provenance(f: Footage) -> Footage:
     """Fill in what kind of material it is and whether its rights are stated (spec 7.3). Stock is never the actual
     historical subject; other material is "unknown" until a history check says whether it shows the real thing."""
     f.asset_type = f.asset_type or TYPE_OF.get(f.source, "photograph")
-    f.rights = "licensed" if f.source in (*STOCK, "own", "card") or LICENSED.search(f.licence or "") else "rights_unknown"
-    if not f.depicts and f.asset_type not in ("own", "graphic"):
+    f.rights = "licensed" if f.source in (*STOCK, "own", "card", "reconstruction") or LICENSED.search(f.licence or "") else "rights_unknown"
+    if not f.depicts and f.asset_type not in ("own", "graphic", "reconstruction"):
         f.depicts = "illustrative" if f.asset_type == "stock" else "unknown"
     return f
 
@@ -209,18 +209,25 @@ def provenance(f: Footage) -> Footage:
 def warnings_for(shot: Shot, fmt: str, history: bool = False) -> list[str]:
     """Plain-words problems with a shot's footage."""
     f, what = shot.footage, shot.subject or shot.visual_description or "this shot"
+    if f is None and history and shot.visual_origin == "reconstruction":
+        return [f"A reconstruction: draw it from the research (AI, on this computer, labelled on screen), or add your "
+                f"own picture named {shot.id}.jpg."]
     if f is None:
         tip = f" Try: {'; '.join(shot.alternatives)}." if shot.alternatives else ""
         return [f"No footage found that really shows {shot.action or what}.{tip} "
                 f"Pick an alternative, or add your own file named {shot.id}.mp4."]
     out = []
+    if history and shot.visual_origin == "reconstruction" and f.asset_type != "reconstruction":
+        out.append("A reconstruction shot showing found footage: draw the reconstruction, or change the shot's origin.")
+    if f.asset_type == "reconstruction" and f.kind == "video":
+        out.append("Your video stands for an AI reconstruction: make sure it carries an 'AI reconstruction' label.")
     if f.match == "subject_only":
         out.append(f"Shows {what}, but not the stated action ({shot.action}): mark it for review or add real footage.")
     elif f.match == "weak":
         out.append(f"May not show {what} ({f.subject_score}/10): {f.problem or 'check it'}")
     elif f.match == "unchecked":
         out.append("Not checked by Gemini (no key): make sure it shows the right subject.")
-    if f.source in ("own", "card"):
+    if f.source in ("own", "card", "reconstruction"):
         return out
     if f.rights == "rights_unknown":
         out.append(f"The source doesn't state a licence ({f.licence or 'none given'}): check {f.page or 'its page'} "
@@ -349,10 +356,18 @@ def find(plan: DirectorPlan, media: Path | None, cfg: dict, shot_ids: list[str] 
         if cancelled():
             return
         own = own_file(media, shot, firsts.get(shot.scene_id) == shot.id)
-        if own:
+        rebuilt = history and shot.visual_origin == "reconstruction"
+        if own and rebuilt:
+            from .history import reconstruct
+
+            shot.footage, shot.candidates = reconstruct.own(own, shot), []
+        elif own:
             shot.footage = Footage(source="own", kind="photo" if own.suffix.lower() in IMAGE_EXTS else "video",
                                    file=str(own), author="you", licence="your own media", match="own")
             shot.candidates = []
+        elif rebuilt:  # drawn on request (history/reconstruct.py), never searched: found footage isn't a reconstruction
+            if not (shot.footage and shot.footage.asset_type == "reconstruction"):
+                shot.footage, shot.candidates = None, []
         elif shot.shot_type == "graphic":
             try:
                 text = next((s.on_screen_text for s in out.scenes if s.id == shot.scene_id), "")

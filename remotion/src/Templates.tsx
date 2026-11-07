@@ -202,3 +202,67 @@ export const Process = ({ title, steps, accent, font }: ProcessProps) => {
     </AbsoluteFill>
   );
 };
+
+/* ---------- Timeline (Hidden History H6): dated events along a line, one after another ---------- */
+
+export type TimelineProps = { title: string; events: string; source: string; accent: string; font: string; seconds?: number };
+
+export const Timeline = ({ title, events, source, accent, font }: TimelineProps) => {
+  const frame = useCurrentFrame();
+  const { fps, durationInFrames } = useVideoConfig();
+  const family = useFont(font);
+  // "802: Jayavarman II crowned; 1177: Cham raid" -> [date, what]
+  const items = events.split(/[;\n]/).map((s) => s.trim()).filter(Boolean).slice(0, 5)
+    .map((s) => { const k = s.indexOf(":"); return k > 0 ? [s.slice(0, k).trim(), s.slice(k + 1).trim()] : [s, ""]; });
+  const every = Math.max(6, Math.floor((durationInFrames * 0.6) / Math.max(items.length, 1)));
+  const line = interpolate(frame, [0, every * Math.max(items.length - 1, 1) + 10], [0, 1], clamp);
+  return (
+    <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
+      <div style={{ width: 900, display: "flex", flexDirection: "column", gap: 22, position: "relative" }}>
+        {title && <div style={{ fontFamily: family, fontWeight: 900, fontSize: 60, color: "#fff", textTransform: "uppercase", ...stroke(10) }}>{title}</div>}
+        <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: 26 }}>
+          <div style={{ position: "absolute", left: 22, top: 20, width: 6, height: `calc(${line * 100}% - 40px)`, background: accent, borderRadius: 3 }} />
+          {items.map(([date, what], k) => {
+            const s = spring({ frame: frame - k * every, fps, config: { damping: 14, stiffness: 170 } });
+            return (
+              <div key={k} style={{ display: "flex", alignItems: "center", gap: 26, opacity: s, transform: `translateX(${(1 - s) * -50}px)` }}>
+                <div style={{ width: 50, height: 50, flexShrink: 0, borderRadius: "50%", background: accent, border: "6px solid #101419" }} />
+                <div style={{ background: "rgba(16,20,25,0.86)", padding: "12px 24px", borderRadius: 14, display: "flex", flexDirection: "column" }}>
+                  <span style={{ fontFamily: family, fontWeight: 900, fontSize: 50, color: accent, letterSpacing: 2 }}>{date}</span>
+                  {what && <span style={{ fontFamily: family, fontWeight: 700, fontSize: 40, color: "#F3EBDD", lineHeight: 1.15 }}>{what}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {source && <div style={{ fontFamily: family, fontSize: 26, color: "#F3EBDD", opacity: 0.85, ...stroke(4) }}>Source: {source}</div>}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+/* ---------- Document excerpt (H6): a short quoted passage with where it comes from ---------- */
+
+export type ExcerptProps = { quote: string; source: string; date: string; accent: string; font: string; seconds?: number };
+
+export const DocumentExcerpt = ({ quote, source, date, accent, font }: ExcerptProps) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const family = useFont(font);
+  const s = spring({ frame, fps, config: { damping: 16, stiffness: 140 } });
+  const shown = Math.round(interpolate(frame, [6, 6 + quote.length * 0.6], [0, quote.length], clamp));
+  return (
+    <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
+      <div style={{ width: 880, padding: "44px 52px", background: "#E9DFC8", color: "#1E1A14", borderRadius: 6, opacity: s,
+        transform: `translateY(${(1 - s) * 40}px) rotate(${(1 - s) * -2}deg)`, boxShadow: "0 18px 50px rgba(0,0,0,0.55)",
+        borderLeft: `14px solid ${accent}` }}>
+        <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 50, lineHeight: 1.3, fontStyle: "italic" }}>
+          “{quote.slice(0, shown)}<span style={{ opacity: 0 }}>{quote.slice(shown)}</span>”
+        </div>
+        <div style={{ marginTop: 26, fontFamily: family, fontWeight: 800, fontSize: 30, letterSpacing: 1, textTransform: "uppercase", color: "#4A3F2E" }}>
+          — {source}{date ? `, ${date}` : ""}
+        </div>
+      </div>
+    </AbsoluteFill>
+  );
+};

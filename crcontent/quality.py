@@ -531,6 +531,7 @@ def inspect_file(path: Path, profile: str, expect: dict, cancel: threading.Event
             _check(checks, "audio.peak", "audio", "pass", f"True peak {peak:.1f} dBTP")
         audio_checks(checks, found, rules, issue)
     covered = edit_checks(checks, path.parent) if profile == "short" else set()
+    covered |= history_checks(checks, path.parent, result)
     return _finish(result, [n for n in NOT_YET if n[0] not in covered])
 
 
@@ -590,6 +591,74 @@ def edit_checks(checks: list, folder: Path) -> set[str]:
                 _check(checks, "story.plan", "storytelling", "pass", "The story raises its questions and pays them off",
                        f"{len(plan.scenes)} beats checked in the draft's Director Plan.")
     return covered
+
+
+def history_checks(checks: list, folder: Path, result: dict) -> set[str]:
+    """Hidden History Files (spec 11, H7): the history check recorded at render (meta.json "history_gate") as report
+    rows: each claim the video states -> its sources, each shot's kind of material and rights, the creator's approvals.
+    Only for history renders; others get nothing here."""
+    try:
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    if meta.get("channel_profile_id") != "hidden_history_files":
+        return set()
+    g = meta.get("history_gate")
+    if not g:
+        _check(checks, "history.gate", "history", "fail", "Not rendered through the history check",
+               "Sources, rights and misleading pictures weren't checked for this render.", "critical",
+               "Resolve the History check in the draft and render again.")
+        result["history"] = {"claims": [], "shots": []}
+        return {"history"}
+    trace = g.get("trace") or {"claims": [], "shots": []}
+    result["history"] = trace
+    if g.get("status") == "ready":
+        _check(checks, "history.gate", "history", "pass", "History check passed at render",
+               f"Checked {g.get('checked_at', '')}; {len(g.get('approved', []))} item(s) approved by you.")
+    else:
+        _check(checks, "history.gate", "history", "fail", f"History check was {g.get('status', 'not ready')} at render",
+               "; ".join(it["title"] for it in g.get("open", [])), "critical", "Resolve it in the draft and render again.")
+    for a in g.get("approved", []):
+        _check(checks, f"history.approved.{a['key']}", "history", "pass", f"Approved by you: {a['title']}",
+               f"“{a.get('note', '')}” ({a.get('at', '')})")
+    for c in trace["claims"]:
+        src = ", ".join(x["title"] or x["url"] for x in c["sources"]) or "no source"
+        text = f"“{c['text']}” (scene {', '.join(map(str, c['scenes']))}) → {src}"
+        if c["status"] == "supported" and c["sources"]:
+            _check(checks, f"history.claim.{c['id']}", "history", "pass", f"Sourced claim: {c['text'][:70]}", text)
+        elif c["status"] in ("disputed", "uncertain"):
+            _check(checks, f"history.claim.{c['id']}", "history", "warning", f"{c['status'].capitalize()} claim: {c['text'][:70]}",
+                   text, "medium", "Make sure the narration qualifies it.")
+        else:
+            _check(checks, f"history.claim.{c['id']}", "history", "fail", f"Unsourced claim: {c['text'][:70]}", text, "critical",
+                   "Attach a source in the Research tab, or cut it, and render again.")
+    for s in trace["shots"]:
+        what = " · ".join(x for x in (s["material"], s["source"] or "no source", s["licence"]) if x)
+        if s["material"] == "none":
+            continue
+        if s["rights"] == "rights_unknown" and not s["rights_note"]:
+            _check(checks, f"history.rights.{s['id']}", "history", "fail", f"{s['id']}: licence not stated", what, "high",
+                   "Confirm its rights in the History check, or replace it.")
+        elif s["material"] == "AI reconstruction":
+            _check(checks, f"history.shot.{s['id']}", "history", "pass", f"{s['id']}: AI reconstruction, labelled", what)
+        elif s["origin"] in ("archive", "evidence") and s["depicts"] != "actual":
+            _check(checks, f"history.shot.{s['id']}", "history", "warning", f"{s['id']}: {s['material']} standing in for evidence",
+                   what, "medium", "Make sure it isn't presented as the real thing.")
+        else:
+            _check(checks, f"history.shot.{s['id']}", "history", "pass", f"{s['id']}: {s['material']}"
+                   + (f" (rights confirmed: {s['rights_note']})" if s["rights_note"] else ""), what)
+    return {"history"}
+
+
+def history_status(rep: dict) -> str:
+    """Spec 11.2 for a history render: blocked (a failed check: sources, rights, broken media), review_required (a
+    warning you haven't reviewed), ready. A history fail can't be dismissed away: source and rights doubts stay."""
+    open_ = [c for c in rep["checks"] if c["status"] in ("warning", "fail")
+             and ((c["category"] == "history" and c["status"] == "fail")
+                  or c.get("disposition", "unreviewed") in ("unreviewed", "fixed"))]
+    if any(c["status"] == "fail" for c in open_):
+        return "blocked"
+    return "review_required" if open_ else "ready"
 
 
 def visual_checks(checks: list, found: dict, rules: dict, total: float, issue) -> None:
@@ -930,6 +999,8 @@ def get_inspection(scope: str, name: str, file: str = ""):
         rights.check(scope, name, fresh, _check)
         rep["checks"] += [{**c, "stage": "render"} for c in fresh]
         _recount(rep)
+    if "history" in rep:
+        rep["history_status"] = history_status(rep)
     rep["base"] = base  # evidence frames: <API><base>/<evidence>
     return {"report": rep, "job": job}
 
