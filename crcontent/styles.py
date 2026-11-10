@@ -25,6 +25,12 @@ FONTS: dict[str, dict[str, str]] = {
         "Bauhaus 93": "BAUHS93.TTF",
         "Rockwell Extra Bold": "ROCKEB.TTF",
         "Showcard Gothic": "SHOWG.TTF",
+        # the channel profiles' brand faces (Google Fonts; listed only when installed)
+        "Inter": "Inter-Bold.ttf",
+        "Montserrat": "Montserrat-Bold.ttf",
+        "Anton": "Anton-Regular.ttf",
+        "Bebas Neue": "BebasNeue-Regular.ttf",
+        "Cormorant Garamond": "CormorantGaramond-Bold.ttf",
     },
     "km": {
         "Khmer OS Battambang": "KhmerOSbattambang.ttf",
@@ -109,6 +115,12 @@ class LyricStyle(BaseModel):
 def _hex(value: str, default: str) -> str:
     v = (value or "").strip().lstrip("#")
     return f"#{v.upper()}" if len(v) == 6 and all(c in "0123456789abcdefABCDEF" for c in v) else default
+
+
+def is_light(hex_color: str) -> bool:
+    """Relative luminance above the middle: dark text reads on it."""
+    v = _hex(hex_color, "#FFFFFF").lstrip("#")
+    return 0.2126 * int(v[0:2], 16) + 0.7152 * int(v[2:4], 16) + 0.0722 * int(v[4:6], 16) > 140
 
 
 def ass_color(hex_color: str, alpha: int = 0) -> str:
@@ -284,6 +296,10 @@ class CaptionStyle(BaseModel):
     outline: str = "outline"
     case: str = "as_is"
     words: int = 0  # words shown together; 0 = the language's default
+    headline_font: str = ""  # "" = the caption font
+    headline_color: str = "#FFFFFF"
+    headline_background: str = "#000000"  # drawn ~90% opaque behind regular scene headlines
+    hook_fill: str = "#FFFFFF"  # the opening hook's card; its text is dark or light to contrast with it
 
     def clean(self, lang: str) -> "CaptionStyle":
         """Unknown values back to the defaults, positions inside the frame, a font installed for this language."""
@@ -296,8 +312,11 @@ class CaptionStyle(BaseModel):
         s.words = min(max(int(s.words), 0), 6)
         s.color, s.highlight = _hex(s.color, "#F8FAFC"), _hex(s.highlight, "#FACC15")
         s.keyword = _hex(s.keyword, "#38BDF8")
+        s.headline_color, s.headline_background = _hex(s.headline_color, "#FFFFFF"), _hex(s.headline_background, "#000000")
+        s.hook_fill = _hex(s.hook_fill, "#FFFFFF")
         fonts = available_fonts(lang)
         s.font = s.font if s.font in fonts else ""
+        s.headline_font = s.headline_font if s.headline_font in fonts else ""
         return s
 
     def font_file(self, lang: str) -> str:

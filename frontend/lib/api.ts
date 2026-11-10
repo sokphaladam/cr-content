@@ -60,6 +60,11 @@ export interface ChannelProfile {
   visual_style: VisualStyle;
   palette: Record<string, string>;
   voice_defaults: string;
+  music_mood: string;
+  sound_design_defaults: string[];
+  caption_defaults: Partial<CaptionStyle>; // the look a new project starts from; {} = the general captions
+  caption_font_preferences: string[]; // first installed one wins
+  headline_font_preferences: string[];
 }
 
 /** The Director Plan of a Script-to-Video project (crcontent/director_plan.py). */
@@ -294,6 +299,10 @@ export interface CaptionStyle {
   outline: "outline" | "shadow" | "box" | "glow";
   case: "as_is" | "upper" | "lower";
   words: number; // shown together; 0 = the language's default
+  headline_font: string; // "" = the caption font
+  headline_color: string;
+  headline_background: string; // ~90% opaque behind regular headlines
+  hook_fill: string; // the opening hook's card
 }
 
 export const DEFAULT_CAPTIONS: CaptionStyle = {
@@ -308,6 +317,10 @@ export const DEFAULT_CAPTIONS: CaptionStyle = {
   outline: "outline",
   case: "as_is",
   words: 0,
+  headline_font: "",
+  headline_color: "#FFFFFF",
+  headline_background: "#000000",
+  hook_fill: "#FFFFFF",
 };
 
 /** A word in a scene's voiceover: times in seconds; `at` = its [start, end) in the narration text (null if not found). */

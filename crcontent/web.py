@@ -1514,6 +1514,8 @@ def script_video(req: ScriptVideoRequest):
                                      [s.model_dump() for s in script.scenes])
     plan.project.target_seconds = req.target_seconds
     tag(plan)
+    if profile:  # a new project starts in its channel's look; a general one keeps the general captions
+        script.captions = profiles.theme_captions(profile, lang)
     if req.format == "long":  # the job directs it, so the plan shows up in its progress log
         return _start_long(director_plan.longform_markdown(plan), plan, _choice(req)) | {"method": method, "profile_note": profile_note}
     problems: list[str] = []

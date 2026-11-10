@@ -167,6 +167,24 @@ export function ScriptVideoForm({
             ))}
             {profile ? profile.description : "Your own defaults, as before channel profiles."}
           </p>
+          {profile?.caption_defaults?.color && (
+            <div className="grid gap-1.5 rounded-md bg-[#1f2937] p-3 text-sm">
+              <span
+                className="mx-auto px-2 font-bold uppercase"
+                style={{ background: profile.caption_defaults.headline_background, color: profile.caption_defaults.headline_color, fontFamily: profile.headline_font_preferences.map((f) => `"${f}", `).join("") + "sans-serif" }}
+              >
+                Scene headline
+              </span>
+              <span className="text-center font-bold" style={{ fontFamily: profile.caption_font_preferences.map((f) => `"${f}", `).join("") + "sans-serif" }}>
+                <span style={{ color: profile.caption_defaults.color }}>Normal </span>
+                <span style={{ color: profile.caption_defaults.highlight }}>spoken </span>
+                <span style={{ color: profile.caption_defaults.keyword }}>keyword</span>
+              </span>
+              <span className="text-center text-xs text-white/70">
+                Headline {profile.headline_font_preferences[0]} · captions {profile.caption_font_preferences[0]} · sound: {profile.sound_design_defaults.join(", ") || profile.music_mood}
+              </span>
+            </div>
+          )}
         </Field>
       )}
       {profileId === "hidden_history_files" && (

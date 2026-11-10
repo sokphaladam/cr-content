@@ -942,7 +942,7 @@ export function Storyboard({
     ) : null,
     captions: (
       <div className="p-3">
-        <CaptionPanel style={draft.captions} onChange={(patch) => setDraft((d) => ({ ...d, captions: { ...d.captions, ...patch } }))} options={options} lang={draft.lang} />
+        <CaptionPanel style={draft.captions} onChange={(patch) => setDraft((d) => ({ ...d, captions: { ...d.captions, ...patch } }))} options={options} lang={draft.lang} channel={channel} />
       </div>
     ),
     check: (

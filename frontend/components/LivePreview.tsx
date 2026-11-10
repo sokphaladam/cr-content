@@ -2,7 +2,7 @@
 
 import { Pause, Play, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { API_BASE, api, DEFAULT_CAPTIONS, fileUrl, keyword, type CaptionStyle, type Clip, type Lang, type Options, type Scene, type TextOverlay, type TrackName, type TrackState } from "@/lib/api";
+import { API_BASE, api, DEFAULT_CAPTIONS, fileUrl, keyword, type CaptionStyle, type ChannelProfile, type Clip, type Lang, type Options, type Scene, type TextOverlay, type TrackName, type TrackState } from "@/lib/api";
 import { audible, trackOf } from "@/lib/clips";
 import type { GraphicStill } from "@/lib/api";
 import { isImagePath } from "@/lib/format";
@@ -16,6 +16,12 @@ const SIZE = { s: 0.8, m: 1, l: 1.25 } as const;
 const OVERLAY_SIZE = { s: 0.6, m: 0.85, l: 1.2 } as const;
 const cq = (px: number) => `${(px / 1080) * 100}cqw`;
 const fontOf = (style: CaptionStyle, lang: Lang) => (style.font ? `"${style.font}"` : lang === "km" ? "var(--font-khmer)" : "Arial, Helvetica, sans-serif");
+const headlineFontOf = (style: CaptionStyle, lang: Lang) => (style.headline_font ? `"${style.headline_font}"` : fontOf(style, lang));
+/** Dark ink on a light card, light ink on a dark one (styles.is_light). */
+export function isLight(hex: string) {
+  const v = parseInt(hex.replace("#", ""), 16);
+  return 0.2126 * ((v >> 16) & 255) + 0.7152 * ((v >> 8) & 255) + 0.0722 * (v & 255) > 140;
+}
 const cased = (text: string, style: CaptionStyle, lang: Lang) =>
   lang === "km" ? text : style.case === "upper" ? text.toUpperCase() : style.case === "lower" ? text.toLowerCase() : text;
 
@@ -211,6 +217,7 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
   const offset = pos.t - cutBefore(seg.cuts, pos.t);
   const px = LANG_CAPTION[lang].size * SIZE[style.size];
   const font = fontOf(style, lang);
+  const headFont = headlineFontOf(style, lang);
   const headline = scene.on_screen_text.trim(); // emoji included: the render draws them in colour
   const caption = captionAt(seg, pos.t, style.words || LANG_CAPTION[lang].words, !playing);
   const keys = new Set(scene.keywords ?? []);
@@ -290,16 +297,18 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
           className="absolute left-1/2 w-max max-w-[85%] -translate-x-1/2"
           style={{ top: `${style.headline_y * 100}%` }}
         >
-          {/* the opening scene's headline is the hook: bigger, dark on a white box (the render's Hook style) */}
+          {/* the opening scene's headline is the hook: bigger, on a card in hook_fill (the render's Hook style) */}
           <span
             lang={lang}
             style={
               seg.index === 0
-                ? { fontFamily: font, fontSize: cq(px * 0.8 * 1.3), padding: `${cq(px * 1.04 * 0.12)} ${cq(px * 1.04 * 0.3)}` }
-                : { fontFamily: font, fontSize: cq(px * 0.8), padding: `${cq(px * 0.8 * 0.15)} ${cq(px * 0.8 * 0.35)}` }
+                ? { fontFamily: headFont, fontSize: cq(px * 0.8 * 1.3), padding: `${cq(px * 1.04 * 0.12)} ${cq(px * 1.04 * 0.3)}`,
+                    background: style.hook_fill, color: isLight(style.hook_fill) ? "#141414" : "#F8FAFC" }
+                : { fontFamily: headFont, fontSize: cq(px * 0.8), padding: `${cq(px * 0.8 * 0.15)} ${cq(px * 0.8 * 0.35)}`,
+                    background: `${style.headline_background}E6`, color: style.headline_color }
             }
             className={`block text-center leading-tight font-bold uppercase ${
-              seg.index === 0 ? "animate-[caption-pop_120ms_ease-out] bg-white text-[#141414]" : "bg-black/90"
+              seg.index === 0 ? "animate-[caption-pop_120ms_ease-out]" : ""
             }`}
           >
             {headline}
@@ -551,16 +560,33 @@ export function LiveControls({ timeline, music, edit }: { timeline: DraftTimelin
 const OUTLINE_LABELS: Record<CaptionStyle["outline"], string> = { outline: "Outline", box: "Box", shadow: "Shadow", glow: "Glow" };
 
 /** Caption look for the whole video: a preset, then font, size, colours, outline, case and words per caption. */
-export function CaptionPanel({ style, onChange, options, lang }: { style: CaptionStyle; onChange: (patch: Partial<CaptionStyle>) => void; options: Options; lang: Lang }) {
+/** A channel profile's caption look with its first installed fonts (profiles.theme_captions). */
+export function themeCaptions(profile: ChannelProfile, fonts: string[]): Partial<CaptionStyle> {
+  const pick = (prefs: string[]) => prefs.find((f) => fonts.includes(f)) ?? "";
+  return { ...profile.caption_defaults, font: pick(profile.caption_font_preferences), headline_font: pick(profile.headline_font_preferences) };
+}
+
+/** `channel`: the project's channel profile id; offers to re-apply its look (only on a deliberate click). */
+export function CaptionPanel({ style, onChange, options, lang, channel = "" }: { style: CaptionStyle; onChange: (patch: Partial<CaptionStyle>) => void; options: Options; lang: Lang; channel?: string }) {
   const presets = options.captions?.presets ?? {};
   const fonts = options.styles?.fonts[lang] ?? [];
   const words = style.words || LANG_CAPTION[lang].words;
+  const [profiles, setProfiles] = useState<ChannelProfile[]>([]);
+  useEffect(() => {
+    if (channel) api.profiles().then(setProfiles, () => setProfiles([]));
+  }, [channel]);
+  const profile = channel ? profiles.find((p) => p.id === channel) : undefined;
   return (
     <section aria-labelledby="caption-style" className="grid gap-3 card p-3.5">
       <div className="flex items-center justify-between">
         <h3 id="caption-style" className="m-0 font-display text-md font-bold">
           Captions
         </h3>
+        {profile && (
+          <Button size="sm" variant="ghost" className="ml-auto" title="Replaces the caption and headline look with the channel's; your words, footage and timing stay" onClick={() => onChange(themeCaptions(profile, fonts))}>
+            Apply {profile.display_name} style
+          </Button>
+        )}
         <IconButton label="Put captions and headlines back in place" onClick={() => onChange({ y: DEFAULT_CAPTIONS.y, headline_y: DEFAULT_CAPTIONS.headline_y })}>
           <RotateCcw className="size-3.5" />
         </IconButton>
@@ -601,6 +627,17 @@ export function CaptionPanel({ style, onChange, options, lang }: { style: Captio
             {Object.entries(OUTLINE_LABELS).map(([v, l]) => (
               <option key={v} value={v}>
                 {l}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-1">
+          <span className="field-label">Headline font</span>
+          <select className="field-input h-8 py-0 text-sm" value={style.headline_font} onChange={(e) => onChange({ headline_font: e.target.value })}>
+            <option value="">Same as captions</option>
+            {fonts.map((f) => (
+              <option key={f} value={f}>
+                {f}
               </option>
             ))}
           </select>
@@ -649,6 +686,9 @@ export function CaptionPanel({ style, onChange, options, lang }: { style: Captio
             ["color", "Text"],
             ["highlight", "Spoken word"],
             ["keyword", "Keywords"],
+            ["headline_color", "Headline"],
+            ["headline_background", "Headline box"],
+            ["hook_fill", "Hook card"],
           ] as const
         ).map(([key, label]) => (
           <label key={key} className="flex items-center gap-1.5 text-sm font-semibold">
@@ -656,6 +696,17 @@ export function CaptionPanel({ style, onChange, options, lang }: { style: Captio
             {label}
           </label>
         ))}
+      </div>
+      {/* the four roles side by side, as the render draws them */}
+      <div aria-hidden className="grid gap-1.5 rounded bg-[#1f2937] p-2 text-center text-sm font-bold">
+        <span className="mx-auto px-2 uppercase" style={{ fontFamily: headlineFontOf(style, lang), background: style.headline_background, color: style.headline_color }}>
+          Headline
+        </span>
+        <span style={{ fontFamily: fontOf(style, lang) }}>
+          <span style={{ color: style.color }}>Normal </span>
+          <span style={{ color: style.highlight }}>spoken </span>
+          <span style={{ color: style.keyword }}>keyword</span>
+        </span>
       </div>
     </section>
   );

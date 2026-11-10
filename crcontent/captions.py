@@ -84,9 +84,11 @@ def caption_styles(profile: LangProfile, style: "CaptionStyle", size: tuple[int,
     else:
         border, outline, shadow, out_c, back_c = 1, round(px * 8.5 / 92), 4, "&H00000000&", "&H66000000&"
     head = round(px * 0.8)
+    head_font = style.headline_font or font
+    head_c = ass_color(style.headline_color)
     # margins: the wrap width; the right one keeps clear of the platforms' like / comment buttons (~120 px)
     return (f"Style: Caption,{font},{px},{base},{base},{out_c},{back_c},-1,0,0,0,100,100,0,0,{border},{outline},{shadow},5,110,120,0,1\n"
-            f"Style: Headline,{font},{head},&H00FFFFFF&,&H00FFFFFF&,&HFF000000&,&H1A000000&,-1,0,0,0,100,100,0,0,4,{round(head * 0.35)},0,8,80,80,0,1")
+            f"Style: Headline,{head_font},{head},{head_c},{head_c},&HFF000000&,{ass_color(style.headline_background, 0x1A)},-1,0,0,0,100,100,0,0,4,{round(head * 0.35)},0,8,80,80,0,1")
 
 
 def build_ass(scenes: list[tuple], profile: LangProfile, style: "CaptionStyle | None" = None,
@@ -94,7 +96,7 @@ def build_ass(scenes: list[tuple], profile: LangProfile, style: "CaptionStyle | 
     """scenes: (scene_start, scene_end, words with times relative to scene_start, on_screen_text[, keywords]).
     Drawn in `style` (styles.CaptionStyle): the spoken word in its highlight colour, keywords (voiceover.keyword()
     form) in its keyword colour, the rest in its text colour. `extra`: more Dialogue lines (text overlays)."""
-    from .styles import CaptionStyle, ass_color
+    from .styles import CaptionStyle, ass_color, is_light
     from .voiceover import keyword
 
     style = (style or CaptionStyle()).clean(profile.code)
@@ -106,6 +108,7 @@ def build_ass(scenes: list[tuple], profile: LangProfile, style: "CaptionStyle | 
     # the opening scene's headline is the hook: bigger than other headlines, dark on a white box, so it reads in the
     # feed at a glance on any footage
     hook_px = round(profile.font_size * {"s": 0.8, "m": 1.0, "l": 1.25}[style.size] * 0.8 * 1.3)
+    hook_ink = ass_color("#141414" if is_light(style.hook_fill) else "#F8FAFC")
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {WIDTH}
@@ -117,7 +120,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {caption_styles(profile, style)}
 Style: Overlay,{style.font or profile.font_name},{profile.font_size},&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,{round(profile.font_size * 6 / 92)},2,5,40,40,0,1
-Style: Hook,{style.font or profile.font_name},{hook_px},&H00141414&,&H00141414&,&H00FFFFFF&,&H00FFFFFF&,-1,0,0,0,100,100,0,0,3,{round(hook_px * 0.22)},0,8,70,70,0,1
+Style: Hook,{style.headline_font or style.font or profile.font_name},{hook_px},{hook_ink},{hook_ink},&H00FFFFFF&,&H00FFFFFF&,-1,0,0,0,100,100,0,0,3,{round(hook_px * 0.22)},0,8,70,70,0,1
 Style: OverlayBox,{style.font or profile.font_name},{profile.font_size},&H00FFFFFF&,&H00FFFFFF&,&H33000000&,&H33000000&,-1,0,0,0,100,100,0,0,3,{round(profile.font_size * 14 / 92)},0,5,40,40,0,1
 
 [Events]
@@ -131,7 +134,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         keywords = rest[0] if rest else set()
         if headline and si == 0:  # the hook pops in on the very first frame
             lines += _hook_events(_esc(_case(headline, "upper", profile.code)), scene_start, scene_end, head_y,
-                                  style.font or profile.font_name, hook_px, profile.code)
+                                  style.headline_font or style.font or profile.font_name, hook_px, profile.code,
+                                  fill=style.hook_fill)
         elif headline:
             lines.append(f"Dialogue: 1,{_ts(scene_start)},{_ts(scene_end)},Headline,,0,0,0,,"
                          f"{{\\an8\\pos({WIDTH // 2},{head_y})}}{_esc(headline.upper())}")
@@ -164,11 +168,13 @@ HOOK_TOP = 130  # the box never starts above this: the platforms' top bar
 
 
 def _hook_events(text: str, start: float, end: float, top: int, family: str, px: int, lang: str,
-                 left: int = HOOK_SIDE, right: int = WIDTH - HOOK_SIDE) -> list[str]:
-    """The hook: dark words on one tidy white rounded card (instead of the ragged per-line boxes BorderStyle 3
+                 left: int = HOOK_SIDE, right: int = WIDTH - HOOK_SIDE, fill: str = "#FFFFFF") -> list[str]:
+    """The hook: dark (light on a dark `fill`) words on one tidy rounded card in `fill` (instead of the ragged per-line boxes BorderStyle 3
     draws), the same padding on every side, at most 2 lines (3 only when even a smaller size can't fit 2), a soft
     shadow under the card. Top edge at `top`; fades in over its first 0.15 s. The card stays between x = `left` and
     `right` (Shorts keep it off the right side's buttons), centred between them."""
+    from .styles import ass_color
+
     words = text.split()
     pad_x, pad_y = round(px * 0.42), round(px * 0.26)
     room = right - left - 2 * pad_x  # widest a line of text may be
@@ -199,7 +205,7 @@ def _hook_events(text: str, start: float, end: float, top: int, family: str, px:
     return [f"Dialogue: 2,{t0},{t1},Hook,,0,0,0,,{{\\an5\\pos({cx},{cy + round(size * 0.07)}){pop}\\bord0\\shad0"
             f"\\blur{round(size * 0.18)}\\1c&H000000&\\1a&H90&\\p1}}{card}",
             f"Dialogue: 3,{t0},{t1},Hook,,0,0,0,,{{\\an5\\pos({cx},{cy}){pop}\\bord0\\shad0\\blur0.6"
-            f"\\1c&HFFFFFF&\\p1}}{card}",
+            f"\\1c&H{ass_color(fill)[4:]}\\p1}}{card}",
             f"Dialogue: 4,{t0},{t1},Hook,,0,0,0,,{{\\an5\\pos({cx},{cy}){pop}\\fs{size}\\bord0\\shad0{q}}}"
             + r"\N".join(rows)]
 
