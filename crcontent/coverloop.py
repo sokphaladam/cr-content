@@ -7,6 +7,7 @@ loop.json = {"mode": "picture" | "animated", "prompt": "..."}; no file = animate
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -78,9 +79,11 @@ def still(file: Path, at: float = 0.35) -> Image.Image | None:
 
 def state(folder: Path, suggested: str) -> dict:
     """What the page shows about the animated cover."""
-    m = meta(folder)
+    m, src = meta(folder), source(folder)
     return {"loop": LOOP if (Path(folder) / LOOP).exists() else "", "cover_mode": mode(folder),
-            "loop_prompt": m.get("prompt") or suggested, "loop_seconds": SECONDS,
+            "loop_prompt": m.get("prompt") or suggested,
+            "loop_seconds": src["video"].get("duration", SECONDS) if src else SECONDS,   # an import loops on its own length
+            "animation_source": src, "loop_previous": (Path(folder) / PREVIOUS).exists(),
             "loop_effects": [e for e in m.get("effects", DEFAULT_EFFECTS) if e in EFFECTS],
             "effect_choices": _effect_labels(), "loop_motion": m.get("motion", "parallax"),
             "loop_intensity": m.get("intensity", INTENSITY), "loop_depth": m.get("depth", True),
@@ -676,6 +679,145 @@ def remove(folder: Path) -> None:
     (Path(folder) / STILL).unlink(missing_ok=True)
     (Path(folder) / "loop.preview.mp4").unlink(missing_ok=True)   # living.PREVIEW
     save_meta(folder, mode="picture")
+
+
+# ---------- an animation made in Anim Studio: its "Package for CR Content" ZIP (manifest.json + a silent MP4), checked
+# in full before it replaces the loop. The contract is anim-studio's packages/spec/src/package.ts. ----------
+
+SOURCE = "animation-source.json"            # the package the loop in use came from
+PREVIOUS = "loop.prev.mp4"                  # the loop the last import replaced, for rollback
+PREVIOUS_SOURCE = "animation-source.prev.json"
+PACKAGE_SCHEMA, PACKAGE_VERSION = "anim-studio.package", 1
+MAX_IMPORT = 2 << 30                        # bytes, zipped and unzipped
+
+
+def source(folder: Path) -> dict | None:
+    """The Anim Studio package the loop came from; None when there is none, or the loop was since made another way."""
+    try:
+        data = json.loads((Path(folder) / SOURCE).read_text(encoding="utf-8"))
+        st = (Path(folder) / LOOP).stat()
+    except (OSError, ValueError):
+        return None
+    return data if (data.get("bytes"), data.get("mtime_ns")) == (st.st_size, st.st_mtime_ns) else None
+
+
+def _safe(name: str) -> bool:
+    """A path inside a package: relative, forward slashes, no "..", nothing absolute (PackagePath in the contract)."""
+    return (bool(re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", name)) and not name.startswith("/")
+            and all(part not in ("", ".", "..") for part in name.split("/")))
+
+
+def _probe(file: Path) -> dict:
+    """What a clip really is, in the manifest's own names (from ffprobe, not from what the manifest claims)."""
+    from . import quality
+
+    try:
+        streams = quality.probe(file).get("streams", [])
+    except FileNotFoundError:
+        raise RuntimeError("FFprobe isn't installed, so the animation can't be checked.")
+    except ValueError:
+        raise ValueError("The package's video can't be read (a damaged file?). Export it from Anim Studio again.")
+    video = [s for s in streams if s.get("codec_type") == "video"]
+    if not video:
+        raise ValueError("The package's video has no video stream. Export it from Anim Studio again.")
+    s = video[0]
+    return {"codec": s.get("codec_name"), "pixelFormat": s.get("pix_fmt"), "colorSpace": s.get("color_space", "unknown"),
+            "width": s.get("width"), "height": s.get("height"), "fps": round(quality._rate(s.get("avg_frame_rate")), 3),
+            "frames": int(s.get("nb_frames") or 0), "audio": any(x.get("codec_type") == "audio" for x in streams)}
+
+
+def import_package(folder: Path, stream) -> None:
+    """An Anim Studio package (`stream`: the ZIP as a binary file) as the loop. Everything is checked on a copy beside
+    the loop first, so a bad package leaves the loop in use untouched; the loop it replaces is kept for rollback().
+    ValueError says what is wrong with the package."""
+    import hashlib
+    import zipfile
+    from datetime import datetime, timezone
+
+    folder = Path(folder)
+    pack, clip = folder / "loop.import.zip", folder / "loop.import.mp4"
+    again = " In Anim Studio, export it again as \"Package for CR Content\"."
+    try:
+        size = 0
+        with open(pack, "wb") as out:
+            while chunk := stream.read(1 << 20):
+                size += len(chunk)
+                if size > MAX_IMPORT:
+                    raise ValueError(f"That package is over {MAX_IMPORT >> 20} MB, too big to import.")
+                out.write(chunk)
+        try:
+            with zipfile.ZipFile(pack) as z:
+                # only the manifest and the video are ever read, and to fixed names: no entry's path is written to
+                bad = [i.filename for i in z.infolist()
+                       if not _safe(i.filename) or (i.external_attr >> 16) & 0o170000 == 0o120000]   # a symlink
+                if bad:
+                    raise ValueError(f"The package has an unsafe file path ({bad[0][:80]!r}), so nothing was imported.")
+                if sum(i.file_size for i in z.infolist()) > MAX_IMPORT:
+                    raise ValueError(f"That package unpacks to over {MAX_IMPORT >> 20} MB, too big to import.")
+                if "manifest.json" not in z.namelist():
+                    raise ValueError("The package has no manifest.json." + again)
+                try:
+                    m = json.loads(z.read("manifest.json"))
+                except ValueError:
+                    raise ValueError("The package's manifest.json isn't valid JSON." + again)
+                v = m.get("video") if isinstance(m, dict) else None
+                if not isinstance(v, dict) or m.get("schema") != PACKAGE_SCHEMA:
+                    raise ValueError("That ZIP isn't an Anim Studio package." + again)
+                if m.get("version") != PACKAGE_VERSION:
+                    raise ValueError(f"That package is version {m.get('version')}; this CR Content reads version "
+                                     f"{PACKAGE_VERSION}. Update CR Content.")
+                listed = {f.get("path"): f for f in m.get("files") or [] if isinstance(f, dict)}
+                want = listed.get(v.get("file"))
+                if not want or v["file"] not in z.namelist():
+                    raise ValueError("The package's manifest names a video that isn't in the package." + again)
+                digest = hashlib.sha256()
+                with z.open(v["file"]) as src, open(clip, "wb") as out:
+                    while chunk := src.read(1 << 20):
+                        digest.update(chunk)
+                        out.write(chunk)
+        except zipfile.BadZipFile:
+            raise ValueError("That file isn't a readable ZIP package (a damaged download?)." + again)
+        if digest.hexdigest() != want.get("sha256"):
+            raise ValueError("Checksum mismatch: the package's video isn't the one its manifest describes." + again)
+        got = _probe(clip)
+        expect = {**v, "codec": "h264", "pixelFormat": "yuv420p", "audio": False}   # what the contract allows
+        same = lambda k: (isinstance(expect.get(k), (int, float)) and abs(got[k] - expect[k]) <= 0.01) if k == "fps" \
+            else got[k] == expect.get(k)
+        wrong = [f"{k} is {got[k]}, expected {expect.get(k)}" for k in got if not same(k)]
+        if wrong:
+            raise ValueError("The package's video doesn't match its manifest: " + "; ".join(wrong) + "." + again)
+        joins = seam(clip)   # measured: the manifest's loop flag is not proof of a seamless loop
+        if (folder / LOOP).exists():
+            was = source(folder)   # read before the loop moves
+            os.replace(folder / LOOP, folder / PREVIOUS)
+            if was:
+                (folder / PREVIOUS_SOURCE).write_text(json.dumps(was), encoding="utf-8")
+            else:
+                (folder / PREVIOUS_SOURCE).unlink(missing_ok=True)
+        os.replace(clip, folder / LOOP)
+        st = (folder / LOOP).stat()
+        (folder / SOURCE).write_text(json.dumps({
+            "schema": m["schema"], "version": m["version"], "title": m.get("title", ""), "scene_id": m.get("sceneId"),
+            "exported_at": m.get("exportedAt"), "video": v, "sha256": digest.hexdigest(), "seam": joins,
+            "imported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "bytes": st.st_size, "mtime_ns": st.st_mtime_ns}), encoding="utf-8")
+        save_meta(folder, mode="animated", seam=joins)
+    finally:
+        pack.unlink(missing_ok=True)
+        clip.unlink(missing_ok=True)
+
+
+def rollback(folder: Path) -> None:
+    """The loop the last import replaced, in use again; FileNotFoundError when there is none."""
+    folder = Path(folder)
+    if not (folder / PREVIOUS).exists():
+        raise FileNotFoundError("There is no earlier animated cover to go back to.")
+    os.replace(folder / PREVIOUS, folder / LOOP)   # a rename keeps its mtime, so its own source still matches it
+    if (folder / PREVIOUS_SOURCE).exists():
+        os.replace(folder / PREVIOUS_SOURCE, folder / SOURCE)
+    else:
+        (folder / SOURCE).unlink(missing_ok=True)
+    save_meta(folder, mode="animated", seam=(source(folder) or {}).get("seam"))
 
 
 def others(folders, here: Path, title) -> list[dict]:

@@ -868,6 +868,65 @@ def story_review(req: StoryRequest):
     return result
 
 
+SUGGEST_FIELDS = ("narration", "on_screen_text", "visual_query")
+SUGGEST_SCHEMA = {
+    "type": "object",
+    "properties": {"options": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"scene": {"type": "integer"}, "field": {"type": "string", "enum": list(SUGGEST_FIELDS)},
+                       "text": {"type": "string"}, "why": {"type": "string"}},
+        "required": ["scene", "field", "text", "why"], "additionalProperties": False}}},
+    "required": ["options"], "additionalProperties": False,
+}
+SUGGEST_SYSTEM = """You fix one issue found in the script of a short vertical video before it is rendered.
+Give up to 3 alternative fixes, best first. Each changes ONE field of ONE scene (scene = its 1-based number):
+- narration: the voiceover line, rewritten in full, about the same length, in the script's language;
+- on_screen_text: the headline shown on screen (short; "" removes it);
+- visual_query: a stock-footage search (English, a few concrete words) for new footage, e.g. a moving video clip.
+Keep every fact the script states; never invent names, dates or numbers that aren't in it. why: one short sentence."""
+
+
+class SuggestRequest(BaseModel):
+    script: VideoScript
+    lang: str = "en"
+    issue: dict  # the QualityCheck: title, description, recommendation, scene
+
+
+@router.post("/api/inspect/preview/short/suggest")
+def suggest_fix(req: SuggestRequest):
+    """AI-written fixes for one pre-render issue: whole replacement values for a scene's field, for the user to pick."""
+    from fastapi import HTTPException
+
+    from .config import LLM_MODEL
+    from .script import make_client
+    from .visuals import IMAGE_EXTS
+
+    sc = req.script
+    if not sc.scenes:
+        raise HTTPException(400, "The script has no scenes.")
+    i = req.issue
+    text = {"title": sc.title, "language": LANGS.get(req.lang, LANGS["en"]).name,
+            "issue": {k: i.get(k) for k in ("title", "description", "recommendation")},
+            "issue_scene": i["scene"] + 1 if isinstance(i.get("scene"), int) else None,
+            "scenes": [{"n": n + 1, "narration": x.narration, "visual_query": x.visual_query,
+                        "on_screen_text": x.on_screen_text,
+                        "picture": "still" if x.media and Path(x.media).suffix.lower() in IMAGE_EXTS else "video"}
+                       for n, x in enumerate(sc.scenes)]}
+    try:
+        response = make_client().beta.messages.create(
+            model=LLM_MODEL, max_tokens=1500, system=SUGGEST_SYSTEM,
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": SUGGEST_SCHEMA}},
+            messages=[{"role": "user", "content": json.dumps(text, ensure_ascii=False)}])
+        options = json.loads(next(b.text for b in response.content if b.type == "text"))["options"]
+    except Exception as e:
+        raise HTTPException(502, f"No suggestion: {e}")
+    # trust boundary: only fields we offer, scenes that exist, and a real change
+    return [{"scene": o["scene"] - 1, "field": o["field"], "text": o["text"].strip(), "why": o["why"][:200]}
+            for o in options[:3]
+            if o["field"] in SUGGEST_FIELDS and 0 < o["scene"] <= len(sc.scenes)
+            and o["text"].strip() != getattr(sc.scenes[o["scene"] - 1], o["field"]).strip()]
+
+
 FOOTAGE_PASS = 7  # shorts.match.PASS: footage that shows what's said
 FOOTAGE_SCHEMA = {
     "type": "object",

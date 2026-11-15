@@ -34,7 +34,7 @@ from .importer import import_script
 from .script import VideoScript, generate_script, suggest_queries, suggest_topics, translate_script
 from .song import elevenlabs_key
 from .styles import caption_catalog, catalog as style_catalog
-from .tts import list_voices, synthesize
+from .tts import is_voice, list_voices, synthesize
 from .visuals import IMAGE_EXTS, VIDEO_EXTS, FootagePicker, download_stock, project_path, search, stock_source
 
 addons.activate()  # the desktop app's AI add-on (torch, diffusers, Whisper), when it's installed
@@ -515,7 +515,7 @@ def speak(req: SpeakRequest):
         raise HTTPException(400, "Write some narration first, then listen.")
     if len(text) > MAX_PREVIEW_CHARS:
         text = text[:MAX_PREVIEW_CHARS]
-    if not req.voice or "Neural" not in req.voice:
+    if not is_voice(req.voice):
         raise HTTPException(400, "Pick a voice first.")
     key = hashlib.sha1(f"{req.voice}|{req.rate}|{text}".encode("utf-8")).hexdigest()[:20]
     out = SPEAK_CACHE / f"{key}.mp3"
@@ -542,7 +542,7 @@ class VoiceoverRequest(BaseModel):
 def make_voiceover(req: VoiceoverRequest):
     """The draft's voiceover for the transcript editor: each scene's audio (cached, and reused by the render) with
     its word timings. Silent scenes come back as null."""
-    if not req.voice or "Neural" not in req.voice:
+    if not is_voice(req.voice):
         raise HTTPException(400, "Pick a voice first.")
     if len(req.scenes) > 60 or any(len(t) > 3000 for t in req.scenes):
         raise HTTPException(400, "The script is too long for the transcript.")
@@ -2767,6 +2767,24 @@ def upload_cover_loop(name: str, video: UploadFile = File(...)):
 
     folder = _song_dir(name)
     lyricvideo._loop_call(folder, lambda: coverloop.upload(folder, video.filename or "", video.file))
+    return _cover_loop_view(folder)
+
+
+@app.post("/api/videos/{name}/cover-loop/import")
+def import_cover_loop(name: str, package: UploadFile = File(...)):
+    from . import coverloop
+
+    folder = _song_dir(name)
+    lyricvideo._loop_call(folder, lambda: coverloop.import_package(folder, package.file))
+    return _cover_loop_view(folder)
+
+
+@app.post("/api/videos/{name}/cover-loop/rollback")
+def rollback_cover_loop(name: str):
+    from . import coverloop
+
+    folder = _song_dir(name)
+    lyricvideo._loop_call(folder, lambda: coverloop.rollback(folder))
     return _cover_loop_view(folder)
 
 

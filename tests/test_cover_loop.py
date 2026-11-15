@@ -332,3 +332,110 @@ def test_nod_turns_the_head_about_the_neck_and_write_moves_the_hand():
     hand = (slice(100, 140), slice(140, 180))
     assert np.abs(write(0.25).astype(int)[hand] - base[hand]).mean() > 1
     assert np.abs(write(0).astype(int) - write(12.0).astype(int)).max() == 0
+
+
+# ---------- importing an Anim Studio package (coverloop.import_package) ----------
+
+needs_ffmpeg = pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="needs FFmpeg")
+
+
+def _clip(path, audio=False):
+    """A 1-second 64x36 24 fps H.264 clip tagged bt709, as Anim Studio exports one."""
+    import subprocess
+
+    sound = ["-f", "lavfi", "-i", "sine=duration=1"] if audio else []
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x36:rate=24:duration=1", *sound,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-colorspace", "bt709", *([] if audio else ["-an"]),
+                    str(path)], check=True)
+    return path.read_bytes()
+
+
+def _package(tmp_path, video, name="pack.zip", extra=(), **changes):
+    """The ZIP Anim Studio makes for `video` (its manifest's video fields overridden by `changes`), opened for reading."""
+    import hashlib
+    import json
+    import zipfile
+
+    manifest = {"schema": "anim-studio.package", "version": 1, "title": "Night room", "sceneId": "s1",
+                "exportedAt": "2026-11-16T00:00:00.000Z", "scene": "scene.spec.json", "report": "quality-report.json",
+                "video": {"file": "animation.mp4", "codec": "h264", "pixelFormat": "yuv420p", "colorSpace": "bt709",
+                          "width": 64, "height": 36, "fps": 24, "frames": 24, "duration": 1, "audio": False,
+                          "loop": True, "loopValidated": True, **changes},
+                "files": [{"path": "animation.mp4", "sha256": hashlib.sha256(video).hexdigest(), "bytes": len(video)}]}
+    with zipfile.ZipFile(tmp_path / name, "w") as z:
+        z.writestr("manifest.json", json.dumps(manifest))
+        z.writestr("animation.mp4", video)
+        for entry in extra:
+            z.writestr(entry, b"x")
+    return open(tmp_path / name, "rb")
+
+
+@needs_ffmpeg
+def test_a_package_becomes_the_loop_and_a_reimport_can_be_rolled_back(tmp_path):
+    from crcontent import coverloop
+
+    song = tmp_path / "song"
+    song.mkdir()
+    first = _clip(tmp_path / "a.mp4")
+    with _package(tmp_path, first) as f:
+        coverloop.import_package(song, f)
+    assert (song / coverloop.LOOP).read_bytes() == first
+    state = coverloop.state(song, "")
+    assert state["cover_mode"] == "animated" and state["loop_seconds"] == 1 and not state["loop_previous"]
+    assert state["animation_source"]["title"] == "Night room" and state["animation_source"]["scene_id"] == "s1"
+    assert not list(song.glob("loop.import.*"))
+
+    second = first + b"\0"   # a second version of the animation (a trailing byte: another checksum, still a video)
+    with _package(tmp_path, second) as f:
+        coverloop.import_package(song, f)
+    assert (song / coverloop.LOOP).read_bytes() == second and coverloop.state(song, "")["loop_previous"]
+    coverloop.rollback(song)
+    assert (song / coverloop.LOOP).read_bytes() == first and not (song / coverloop.PREVIOUS).exists()
+    assert coverloop.source(song)["bytes"] == len(first)   # the first import's own record is back with it
+    with pytest.raises(FileNotFoundError):
+        coverloop.rollback(song)
+
+    (song / coverloop.LOOP).write_bytes(b"made another way")   # no longer the loop that came from Anim Studio
+    assert coverloop.source(song) is None and coverloop.state(song, "")["animation_source"] is None
+
+
+@needs_ffmpeg
+def test_a_bad_package_never_replaces_the_loop(tmp_path, monkeypatch):
+    import io
+
+    from crcontent import coverloop
+
+    song = tmp_path / "song"
+    song.mkdir()
+    (song / coverloop.LOOP).write_bytes(b"the loop in use")
+    video = _clip(tmp_path / "a.mp4")
+
+    def rejected(stream, words):
+        with stream, pytest.raises(ValueError, match=words):
+            coverloop.import_package(song, stream)
+        assert (song / coverloop.LOOP).read_bytes() == b"the loop in use"
+        assert not list(song.glob("loop.import.*")) and not (song / coverloop.SOURCE).exists()
+
+    rejected(io.BytesIO(b"not a zip"), "ZIP")
+    rejected(_package(tmp_path, video, extra=["../evil.txt"]), "unsafe")
+    rejected(_package(tmp_path, video, extra=["/abs.txt"]), "unsafe")
+    rejected(_package(tmp_path, video, width=1920), "width is 64")
+    rejected(_package(tmp_path, _clip(tmp_path / "loud.mp4", audio=True)), "audio is True")
+    rejected(_package(tmp_path, b"garbage"), "can't be read")
+
+    import json
+    import zipfile
+    with zipfile.ZipFile(tmp_path / "tampered.zip", "w") as z:   # the video swapped after the manifest was written
+        with zipfile.ZipFile(tmp_path / "pack.zip") as good:
+            z.writestr("manifest.json", good.read("manifest.json"))
+        z.writestr("animation.mp4", video)
+    rejected(open(tmp_path / "tampered.zip", "rb"), "Checksum mismatch")
+    with zipfile.ZipFile(tmp_path / "bare.zip", "w") as z:
+        z.writestr("animation.mp4", video)
+    rejected(open(tmp_path / "bare.zip", "rb"), "no manifest")
+    with zipfile.ZipFile(tmp_path / "other.zip", "w") as z:
+        z.writestr("manifest.json", json.dumps({"schema": "something.else", "video": {}}))
+    rejected(open(tmp_path / "other.zip", "rb"), "isn't an Anim Studio package")
+
+    monkeypatch.setattr(coverloop, "MAX_IMPORT", 100)
+    rejected(_package(tmp_path, video), "too big")

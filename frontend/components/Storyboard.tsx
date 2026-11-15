@@ -962,6 +962,20 @@ export function Storyboard({
             if (c.start !== undefined) timeline.seekTime(c.start);
           }}
           onApply={(c) => setDraft((d) => applyFix(d, c, keptScenes))}
+          fixIn={(c) => {
+            if (c.category === "captions" && c.scene === undefined)
+              return { label: "open Captions", go: () => { setRightTab("captions"); if (!wide) setNarrowTab("captions"); } };
+            // hook / opening findings carry no scene: the hook is scene 1
+            const i = c.scene ?? (/^(story\.hook|history\.hook|pacing\.opening|ai\.story\.hook)/.test(c.id) ? 0 : undefined);
+            const scene = i !== undefined ? keptScenes[i] : undefined;
+            return scene && { label: `edit scene ${i! + 1}`, go: () => activate(scene.uid) };
+          }}
+          onUseSuggestion={(o) => {
+            const uid = keptScenes[o.scene]?.uid;
+            // a new footage search only takes effect with automatic footage ("" = picked at render)
+            const patch = o.field === "visual_query" ? { visual_query: o.text, media: "" } : { [o.field]: o.text };
+            setDraft((d) => ({ ...d, scenes: d.scenes.map((s) => (s.uid === uid ? { ...s, ...patch } : s)) }));
+          }}
         />
       </div>
     ),

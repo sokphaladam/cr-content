@@ -571,6 +571,26 @@ def upload_loop(slug: str, video: UploadFile = File(...)):
     return _pictures(folder)
 
 
+@router.post("/api/lyricvideo/{slug}/loop/import")
+def import_loop(slug: str, package: UploadFile = File(...)):
+    """An Anim Studio "Package for CR Content" ZIP as the animated cover, checked before it replaces the loop."""
+    from . import coverloop
+
+    folder = _folder(slug)
+    _loop_call(folder, lambda: coverloop.import_package(folder, package.file))
+    return _pictures(folder)
+
+
+@router.post("/api/lyricvideo/{slug}/loop/rollback")
+def rollback_loop(slug: str):
+    """The animated cover the last import replaced, in use again."""
+    from . import coverloop
+
+    folder = _folder(slug)
+    _loop_call(folder, lambda: coverloop.rollback(folder))
+    return _pictures(folder)
+
+
 @router.post("/api/lyricvideo/{slug}/loop/from/{source}")
 def copy_loop(slug: str, source: str):
     """Use another song's animated cover for this one: no Gemini request, and one room becomes the channel's look."""

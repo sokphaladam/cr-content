@@ -60,6 +60,8 @@ export interface ChannelProfile {
   visual_style: VisualStyle;
   palette: Record<string, string>;
   voice_defaults: string;
+  voice: string; // the voice a new project starts with; "" = the language default
+  voice_rate: string;
   music_mood: string;
   sound_design_defaults: string[];
   caption_defaults: Partial<CaptionStyle>; // the look a new project starts from; {} = the general captions
@@ -1282,6 +1284,9 @@ export interface CoverLoop {
   cover_mode: CoverMode; // which cover the video holds and the thumbnail is made from
   loop_prompt: string; // what the animated cover shows (the suggestion until you edit it)
   loop_seconds: number;
+  /** The Anim Studio package the loop came from (null = made another way). */
+  animation_source: { title: string; imported_at: string; video: { width: number; height: number; fps: number; loopValidated: boolean } } | null;
+  loop_previous: boolean; // an import replaced a loop that can be brought back
   loop_effects: string[]; // what moves in a GPU loop
   effect_choices: Record<string, string>; // effect -> its label
   loop_motion: LoopMotion; // what the last GPU loop moved
@@ -1355,6 +1360,7 @@ export interface QualityCheck {
   reopened?: boolean; // marked fixed, but a later check still found it
 }
 
+export type FixSuggestion = { scene: number; field: "narration" | "on_screen_text" | "visual_query"; text: string; why: string };
 export type Disposition = "unreviewed" | "reviewed" | "dismissed" | "fixed";
 
 /** Traceability for a history video (crcontent/history/gate.py trace). */
@@ -1609,6 +1615,9 @@ export const api = {
     request<QualityReport>("/api/inspect/preview/short", { method: "POST", json: body }),
   storyReview: (body: { script: VideoScript; lang: Lang }) =>
     request<QualityReport>("/api/inspect/preview/short/story", { method: "POST", json: body, timeout: 0 }),
+  /** AI-written fixes for one pre-render issue: each replaces one field of one kept scene (`scene` is 0-based). */
+  suggestFix: (body: { script: VideoScript; lang: Lang; issue: QualityCheck }) =>
+    request<FixSuggestion[]>("/api/inspect/preview/short/suggest", { method: "POST", json: body, timeout: 0 }),
   /** Optional AI check: three frames of each scene's footage against its narration (Gemini). */
   footageReview: (body: { script: VideoScript; lengths: number[] }) =>
     request<QualityReport>("/api/inspect/preview/short/footage", { method: "POST", json: body, timeout: 0 }),
@@ -1665,6 +1674,19 @@ export const api = {
     body.append("video", file);
     return request<LyricPictures>(`/api/lyricvideo/${slug}/loop/upload`, { method: "POST", body, timeout: 300_000 });
   },
+  /** An Anim Studio "Package for CR Content" ZIP as the animated cover (checked before it replaces the loop). */
+  importLyricLoop: (slug: string, file: File) => {
+    const body = new FormData();
+    body.append("package", file);
+    return request<LyricPictures>(`/api/lyricvideo/${slug}/loop/import`, { method: "POST", body, timeout: 600_000 });
+  },
+  rollbackLyricLoop: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/loop/rollback`, { method: "POST" }),
+  importCoverLoop: (name: string, file: File) => {
+    const body = new FormData();
+    body.append("package", file);
+    return request<CoverLoop>(`/api/videos/${encodeURIComponent(name)}/cover-loop/import`, { method: "POST", body, timeout: 600_000 });
+  },
+  rollbackCoverLoop: (name: string) => request<CoverLoop>(`/api/videos/${encodeURIComponent(name)}/cover-loop/rollback`, { method: "POST" }),
   /** A short clip of a section's picture going through its camera move (`move` tries one that is not saved). */
   lyricMotionClip: (slug: string, id: string, move?: string) =>
     request<{ file: string }>(`/api/lyricvideo/${slug}/pictures/${id}/motion-clip${move !== undefined ? `?move=${encodeURIComponent(move)}` : ""}`, { method: "POST", timeout: 120_000 }),

@@ -2,7 +2,7 @@
 
 import { ClipboardCheck, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
-import { api, type Lang, type QualityCheck, type QualityReport, type VideoScript } from "@/lib/api";
+import { api, type Lang, type FixSuggestion, type QualityCheck, type QualityReport, type VideoScript } from "@/lib/api";
 import { QualityReportView } from "./QualityInspector";
 import { Button, useToast } from "./ui";
 
@@ -24,7 +24,7 @@ function Header({ children }: { children: React.ReactNode }) {
  *  A full report isn't replaced by quick ones: it's marked outdated when the project changes. */
 const DISMISS = [{ value: "dismissed" as const, label: "Dismiss" }];
 
-export function ShortsPreviewCheck({ script, draftId, planStamp = "", lang, music, lengths, total, onIssue, onApply }: {
+export function ShortsPreviewCheck({ script, draftId, planStamp = "", lang, music, lengths, total, onIssue, onApply, fixIn, onUseSuggestion }: {
   script: VideoScript;
   draftId?: string; // its Director Plan feeds the story-beat checks
   planStamp?: string; // changes when that plan changes, so the report is re-made or marked outdated
@@ -34,6 +34,8 @@ export function ShortsPreviewCheck({ script, draftId, planStamp = "", lang, musi
   total: number;
   onIssue: (c: QualityCheck) => void;
   onApply?: (c: QualityCheck) => void;
+  fixIn?: (c: QualityCheck) => { label: string; go: () => void } | undefined;
+  onUseSuggestion?: (s: FixSuggestion) => void;
 }) {
   const toast = useToast();
   const [report, setReport] = useState<QualityReport | null>(null);
@@ -95,12 +97,15 @@ export function ShortsPreviewCheck({ script, draftId, planStamp = "", lang, musi
             })
           }
           onApply={onApply}
+          fixIn={fixIn}
+          suggest={(c) => api.suggestFix({ script, lang, issue: c })}
+          onUseSuggestion={onUseSuggestion}
         />
       ) : (
         <p className="m-0 text-sm text-ink-soft">Checking…</p>
       )}
-      <StoryReview script={script} lang={lang} total={total} onIssue={onIssue} />
-      <FootageReview script={script} lengths={lengths} total={total} onIssue={onIssue} />
+      <StoryReview script={script} lang={lang} total={total} onIssue={onIssue} fixIn={fixIn} />
+      <FootageReview script={script} lengths={lengths} total={total} onIssue={onIssue} fixIn={fixIn} />
     </section>
   );
 }
@@ -147,7 +152,7 @@ export function SongPreviewCheck({ slug, stamp, duration, onSeek }: {
 }
 
 /** Optional, AI-assisted editorial review of the script. Sends text only, and only when you ask. */
-function StoryReview({ script, lang, total, onIssue }: { script: VideoScript; lang: Lang; total: number; onIssue: (c: QualityCheck) => void }) {
+function StoryReview({ script, lang, total, onIssue, fixIn }: { script: VideoScript; lang: Lang; total: number; onIssue: (c: QualityCheck) => void; fixIn?: (c: QualityCheck) => { label: string; go: () => void } | undefined }) {
   const toast = useToast();
   const [report, setReport] = useState<QualityReport | null>(null);
   const [madeFrom, setMadeFrom] = useState("");
@@ -178,13 +183,13 @@ function StoryReview({ script, lang, total, onIssue }: { script: VideoScript; la
         Sends the script text (title, narration, footage searches, headlines) to Gemini with your API key. No video, pictures
         or audio. You get advice on the hook, payoff, structure and ending, not a prediction of views.
       </p>
-      {report && <QualityReportView key={report.created} report={{ ...report, outdated: madeFrom !== key }} total={total} onSelect={onIssue} />}
+      {report && <QualityReportView key={report.created} report={{ ...report, outdated: madeFrom !== key }} total={total} onSelect={onIssue} fixIn={fixIn} />}
     </div>
   );
 }
 
 /** Optional, AI-assisted check that each scene's footage shows what its narration says. Sends frames, only when you ask. */
-function FootageReview({ script, lengths, total, onIssue }: { script: VideoScript; lengths: number[]; total: number; onIssue: (c: QualityCheck) => void }) {
+function FootageReview({ script, lengths, total, onIssue, fixIn }: { script: VideoScript; lengths: number[]; total: number; onIssue: (c: QualityCheck) => void; fixIn?: (c: QualityCheck) => { label: string; go: () => void } | undefined }) {
   const toast = useToast();
   const [report, setReport] = useState<QualityReport | null>(null);
   const [madeFrom, setMadeFrom] = useState("");
@@ -215,7 +220,7 @@ function FootageReview({ script, lengths, total, onIssue }: { script: VideoScrip
         Sends three frames of each scene&apos;s footage (the part shown) and its voiceover text to Gemini with your API key.
         Cutaways and footage picked at render aren&apos;t checked. Answers are kept, so checking again only asks about changed scenes.
       </p>
-      {report && <QualityReportView key={report.created} report={{ ...report, outdated: madeFrom !== key }} total={total} onSelect={onIssue} />}
+      {report && <QualityReportView key={report.created} report={{ ...report, outdated: madeFrom !== key }} total={total} onSelect={onIssue} fixIn={fixIn} />}
     </div>
   );
 }

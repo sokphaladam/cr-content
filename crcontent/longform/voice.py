@@ -108,7 +108,7 @@ def _elevenlabs(text: str, cfg: dict) -> tuple[Path, list[Word]]:
     if mp3.exists() and words_file.exists():
         return mp3, [Word(**w) for w in json.loads(words_file.read_text(encoding="utf-8"))]
     r = requests.post(ELEVENLABS_TTS.format(voice=el["voice_id"]), params={"output_format": "mp3_44100_128"},
-                      headers={"xi-api-key": key}, json={"text": text, "model_id": el["model"]}, timeout=120)
+                      headers={"xi-api-key": key}, json={"text": text, "model_id": el["model"], "voice_settings": el.get("voice_settings")}, timeout=120)
     if r.status_code != 200:
         raise RuntimeError(f"ElevenLabs voice failed ({r.status_code}): {r.text[:300]}")
     data = r.json()

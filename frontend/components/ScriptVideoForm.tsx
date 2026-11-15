@@ -75,6 +75,8 @@ export function ScriptVideoForm({
     setStyle(p ? p.visual_style : "cinematic_documentary");
     setTarget(p?.format_defaults.target_seconds ? clock(p.format_defaults.target_seconds) : "");
     if (p) setFormat(p.format_defaults.format);
+    setVoice(p?.voice ?? ""); // the channel's narrator; a language it doesn't speak falls back to the default
+    setRate(p?.voice_rate ?? "");
     localStorage.setItem(PROFILE_KEY, p ? p.id : "");
   }
 
@@ -181,7 +183,7 @@ export function ScriptVideoForm({
                 <span style={{ color: profile.caption_defaults.keyword }}>keyword</span>
               </span>
               <span className="text-center text-xs text-white/70">
-                Headline {profile.headline_font_preferences[0]} · captions {profile.caption_font_preferences[0]} · sound: {profile.sound_design_defaults.join(", ") || profile.music_mood}
+                Headline {profile.headline_font_preferences[0]} · captions {profile.caption_font_preferences[0]} · voice: {profile.voice ? `${voiceName(profile.voice)} (${profile.voice_defaults})` : profile.voice_defaults} · sound: {profile.sound_design_defaults.join(", ") || profile.music_mood}
               </span>
             </div>
           )}

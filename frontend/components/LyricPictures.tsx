@@ -170,6 +170,8 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
         refresh: () => api.lyricPictures(slug),
         draw: (again) => api.drawLyricLoop(slug, again),
         upload: (f) => api.uploadLyricLoop(slug, f),
+        importPackage: (f) => api.importLyricLoop(slug, f),
+        rollback: () => api.rollbackLyricLoop(slug),
         reuse: (from) => api.copyLyricLoop(slug, from),
         remove: () => api.removeLyricLoop(slug),
       }} />

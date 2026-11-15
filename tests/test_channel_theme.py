@@ -63,3 +63,11 @@ def test_new_projects_take_their_channel_theme(client):  # noqa: F811
         r = client.post("/api/script-video", json={"text": PASTED, "format": "short", "channel_profile_id": pid})
         assert r.status_code == 200, r.text
         assert drafts.load(r.json()["id"]).script.captions.highlight == highlight
+
+
+def test_profile_voices_are_real_voices():
+    from crcontent.config import LANGS
+    from crcontent.profiles import PROFILES
+
+    for p in PROFILES.values():
+        assert not p.voice or p.voice in LANGS[p.voice.split("-")[0]].voices, p.id

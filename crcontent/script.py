@@ -224,6 +224,9 @@ What makes these videos perform:
   you know", a greeting or background.
 - Then explain: every later scene delivers one concrete, specific reason or detail. Numbers, names, vivid details.
 - Short spoken sentences. It is heard, not read. No filler: every line earns its second.
+- Write it the way a real person talks to a friend, not like an article: contractions (it's, you'd, don't),
+  everyday words, mixed sentence lengths, the odd fragment or question ("Weird, right?"). Punctuation is the
+  voice's breathing: commas and full stops where a speaker would pause, no long lists or nested clauses.
 - Make it loop. The last scene ends with a line that leads straight back into the opening, so the end runs into the
   start without a seam: e.g. the last line asks the question that the first line answers, or is a half sentence the
   first line completes ("...and that's exactly why" -> "If your cat sleeps like THIS..."). No sign-off, no "follow

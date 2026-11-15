@@ -1,8 +1,8 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, CircleDashed, ShieldCheck, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, ShieldCheck, Sparkles, XCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { API_BASE, api, type Disposition, type InspectTarget, type Job, type QualityCheck, type QualityReport } from "@/lib/api";
+import { API_BASE, api, type Disposition, type FixSuggestion, type InspectTarget, type Job, type QualityCheck, type QualityReport } from "@/lib/api";
 import { HistoryTraceView } from "./HistoryGatePanel";
 import { Button, useToast } from "./ui";
 
@@ -50,12 +50,15 @@ const MARKS: { value: Disposition; label: string }[] = [
   { value: "fixed", label: "Fixed" },
 ];
 
-export function QualityReportView({ report, total, onSelect, onReview, onApply, marks = MARKS }: {
+export function QualityReportView({ report, total, onSelect, onReview, onApply, fixIn, suggest, onUseSuggestion, marks = MARKS }: {
   report: QualityReport;
   total: number;
   onSelect: (c: QualityCheck) => void;
   onReview?: (c: QualityCheck, d: Disposition) => void; // mark an issue
   onApply?: (c: QualityCheck) => void; // preview reports: apply the issue's safe fix (the editor's undo reverts it)
+  fixIn?: (c: QualityCheck) => { label: string; go: () => void } | undefined; // no safe fix: where to fix it by hand
+  suggest?: (c: QualityCheck) => Promise<FixSuggestion[]>; // AI-written fixes to pick from
+  onUseSuggestion?: (s: FixSuggestion) => void;
   marks?: typeof MARKS;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
@@ -160,6 +163,13 @@ export function QualityReportView({ report, total, onSelect, onReview, onApply, 
               <Button size="sm" variant="secondary" onClick={() => onApply(pick)}>Apply: {pick.fix.label}</Button>
               <span className="text-2xs text-ink-soft">Undo (Ctrl+Z) reverts it.</span>
             </div>
+          )}
+          {fixIn && !pick.fix && (pick.status === "warning" || pick.status === "fail") && (() => {
+            const place = fixIn(pick);
+            return place && <Button size="sm" variant="secondary" className="w-fit" onClick={place.go}>Fix it: {place.label}</Button>;
+          })()}
+          {suggest && onUseSuggestion && !pick.fix && !report.outdated && (pick.status === "warning" || pick.status === "fail") && (
+            <Suggestions key={pick.id} check={pick} suggest={suggest} onUse={onUseSuggestion} />
           )}
         </div>
       )}
@@ -385,6 +395,41 @@ function History({ target, current }: { target: InspectTarget; current: string }
           <QualityReportView key={open.created} report={open} total={open.media?.duration || 0} onSelect={() => {}} />
         </div>
       )}
+    </div>
+  );
+}
+
+const FIELD = { narration: "narration", on_screen_text: "headline", visual_query: "new footage search" };
+
+/** Ask the AI for fixes to one issue, then apply the one you pick (one undoable edit). */
+function Suggestions({ check, suggest, onUse }: { check: QualityCheck; suggest: (c: QualityCheck) => Promise<FixSuggestion[]>; onUse: (s: FixSuggestion) => void }) {
+  const toast = useToast();
+  const [options, setOptions] = useState<FixSuggestion[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function ask() {
+    setBusy(true);
+    try {
+      setOptions(await suggest(check));
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="grid gap-1.5">
+      <Button size="sm" variant="secondary" className="w-fit" icon={<Sparkles className="size-3.5" />} loading={busy} onClick={ask}>
+        {options ? "Suggest again" : "Suggest a fix (AI)"}
+      </Button>
+      {options?.length === 0 && <p className="m-0 text-2xs text-ink-soft">No change to suggest: fix it by hand.</p>}
+      {options?.map((o, n) => (
+        <div key={n} className="grid gap-1 rounded bg-sunken p-2">
+          <p className="m-0 text-2xs text-ink-soft">Scene {o.scene + 1} · {FIELD[o.field]} · {o.why}</p>
+          <p className="m-0 text-sm whitespace-pre-wrap">{o.text || <em>(remove it)</em>}</p>
+          <Button size="sm" variant="primary" className="w-fit" onClick={() => onUse(o)}>Use this</Button>
+        </div>
+      ))}
+      {!!options?.length && <span className="text-2xs text-ink-soft">AI-written: read it first. Undo (Ctrl+Z) reverts it; a new narration needs voicing again.</span>}
     </div>
   );
 }

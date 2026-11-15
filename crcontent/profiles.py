@@ -31,6 +31,8 @@ class ChannelProfile(BaseModel):
     caption_style: str = ""
     font_preferences: list[str] = []  # first installed one wins; the app's fonts are the fallback
     voice_defaults: str = ""          # direction for the voice, not a voice id
+    voice: str = ""                   # the voice a new project starts with (config.LANGS ids); "" = the language default
+    voice_rate: str = ""              # its speed ("+5%"); "" = the format default
     music_mood: str = ""
     sound_design_defaults: list[str] = []
     story_rules: list[str] = []
@@ -57,7 +59,8 @@ PROFILES: dict[str, ChannelProfile] = {p.id: p for p in (
         caption_font_preferences=["Inter", "Montserrat"],
         headline_font_preferences=["Anton", "Bebas Neue", "Montserrat"],
         sound_design_defaults=["crisp natural ambience", "subtle impacts on meaningful actions", "restrained whooshes"],
-        voice_defaults="warm, curious, quick", music_mood="curious, light",
+        voice_defaults="warm, curious, quick", voice="en-US-Puck-Gemini", voice_rate="+5%",
+        music_mood="curious, light",
         story_rules=["hook with the animal doing the surprising thing", "one fact per beat", "natural loop to the start"],
         footage_priority=["user_media", "species_footage", "licensed_stock"],
     ),
@@ -74,6 +77,7 @@ PROFILES: dict[str, ChannelProfile] = {p.id: p for p in (
         headline_font_preferences=["Bebas Neue", "Anton", "Cormorant Garamond", "Montserrat"],
         font_preferences=["Bebas Neue", "Anton", "Inter", "Montserrat", "Cormorant Garamond"],
         voice_defaults="measured, curious, authoritative; not horror-trailer delivery",
+        voice="en-US-Charon-Gemini", voice_rate="+0%",
         music_mood="low restrained ambience", sound_design_defaults=["impacts only on real story beats"],
         story_rules=["hook (0-3s): surprising evidence, consequence or specific question; no channel intro",
                      "context (3-10s): who, where and when",

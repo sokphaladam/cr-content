@@ -194,6 +194,8 @@ function SongCover({ name, on, children: picture }: { name: string; on: boolean;
               refresh: () => api.coverLoop(name),
               draw: (again) => api.drawCoverLoop(name, again),
               upload: (f) => api.uploadCoverLoop(name, f),
+              importPackage: (f) => api.importCoverLoop(name, f),
+              rollback: () => api.rollbackCoverLoop(name),
               reuse: (from) => api.reuseCoverLoop(name, from),
               remove: () => api.removeCoverLoop(name),
             }} />

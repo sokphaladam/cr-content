@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import locations
+from .tts import GEMINI_VOICES
 
 CODE_DIR = Path(__file__).resolve().parent.parent
 # Everything the app writes (drafts, uploads, cache, assets, .env...) lives under ROOT, the data folder chosen in
@@ -56,7 +57,10 @@ LANGS: dict[str, LangProfile] = {
     "en": LangProfile(
         code="en",
         name="English",
-        voices=("en-US-AndrewNeural", "en-US-AvaNeural", "en-US-BrianNeural", "en-US-EmmaNeural"),
+        # Multilingual voices first: conversational prosody, far less flat than the classic Neural ones
+        voices=("en-US-AndrewMultilingualNeural", "en-US-AvaMultilingualNeural", "en-US-BrianMultilingualNeural",
+                "en-US-EmmaMultilingualNeural", "en-US-AndrewNeural", "en-US-AvaNeural", "en-US-BrianNeural",
+                "en-US-EmmaNeural") + tuple(f"en-US-{v}-Gemini" for v in GEMINI_VOICES),
         font_file="arialbd.ttf",
         font_name="Arial",
         font_size=92,

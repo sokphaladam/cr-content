@@ -34,6 +34,8 @@ export type CoverLoopCalls<T> = {
   refresh: () => Promise<T>; // the editor's state again, once the job is done
   draw: (again: boolean) => Promise<T>; // Gemini's animated drawing (one request)
   upload: (file: File) => Promise<T>;
+  importPackage: (file: File) => Promise<T>; // an Anim Studio package ZIP
+  rollback: () => Promise<T>; // the loop the last import replaced
   reuse: (from: string) => Promise<T>;
   remove: () => Promise<T>;
 };
@@ -128,6 +130,12 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
           <div className={`text-xs ${state.loop_seam.ok ? "text-ink-soft" : "text-amber-600"}`}
             title={`End-to-start change ${state.loop_seam.jump} vs typical step ${state.loop_seam.step}`}>
             {state.loop_seam.ok ? "Loop seam: smooth" : "Loop seam: visible jump where it repeats. Make it again."}
+          </div>
+        )}
+        {src && state.animation_source && (
+          <div className="text-xs text-ink-soft">
+            From Anim Studio: {state.animation_source.title || "untitled"}, {state.animation_source.video.width}×{state.animation_source.video.height} at {state.animation_source.video.fps} fps, imported {new Date(state.animation_source.imported_at).toLocaleString()}
+            {!state.animation_source.video.loopValidated && <span className="text-amber-600"> Its loop check did not pass in Anim Studio.</span>}
           </div>
         )}
         {src && state.loop_motion === "character" && state.loop_changed != null && state.loop_changed > state.loop_change_max && (
@@ -256,6 +264,13 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
             <input type="file" hidden accept=".mp4,.webm,.mov,video/*" disabled={off}
               onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void run(() => calls.upload(f)); }} />
           </label>
+          <label className={`${buttonClass("secondary", "sm")} cursor-pointer`} title="The ZIP that Anim Studio exports as “Package for CR Content”. It is checked before it replaces this loop.">
+            <Upload className="size-3.5" aria-hidden /> Import from Anim Studio
+            <input type="file" hidden accept=".zip,application/zip" disabled={off}
+              onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void run(() => calls.importPackage(f), "Checking the Anim Studio package."); }} />
+          </label>
+          {state.loop_previous && <Button size="sm" variant="ghost" disabled={off} title="Bring back the animated cover the last import replaced"
+            onClick={() => void run(() => calls.rollback())}>Undo import</Button>}
           <Button size="sm" variant="ghost" icon={<Copy className="size-3.5" />} onClick={() => copy(text)}>Copy prompt</Button>
           {state.loop && <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} disabled={off}
             onClick={() => void run(() => calls.remove())}>Remove</Button>}

@@ -17,8 +17,11 @@ DEFAULTS: dict = {
         # edge (free Microsoft voices), elevenlabs (ELEVENLABS_API_KEY), or files: your own recordings,
         # media/<script>/scene-XX.wav (or .mp3 / .m4a / .flac), matched by scene number
         "engine": "edge",
-        "edge": {"en": "en-US-AndrewNeural", "km": "km-KH-PisethNeural", "rate": "+0%"},
-        "elevenlabs": {"voice_id": "JBFqnCBsd6RMkjVDRZzb", "model": "eleven_multilingual_v2"},
+        "edge": {"en": "en-US-AndrewMultilingualNeural", "km": "km-KH-PisethNeural", "rate": "+0%"},
+        "elevenlabs": {"voice_id": "JBFqnCBsd6RMkjVDRZzb", "model": "eleven_multilingual_v2",
+                       # lower stability + some style = livelier, less monotone read
+                       "voice_settings": {"stability": 0.4, "similarity_boost": 0.75, "style": 0.3,
+                                          "use_speaker_boost": True}},
     },
     "timing": {"pad_seconds": 0.4},  # silence after each scene's voiceover
     "footage": {

@@ -81,6 +81,8 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()  # the frozen engine.exe starts motion.py's frame renderers as copies of itself
     if len(sys.argv) > 2 and sys.argv[1] == "-m":  # `engine.exe -m demucs ...`: the frozen engine has no python to run -m with
         import runpy
+        from crcontent import addons
+        addons.activate()  # demucs lives in the AI add-on, which this fresh process hasn't put on its path yet
         sys.argv = sys.argv[2:]
         runpy.run_module(sys.argv[0], run_name="__main__", alter_sys=True)
         sys.exit(0)
