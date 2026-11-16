@@ -1197,7 +1197,7 @@ export interface LyricSongDetail {
   slug: string;
   title: string;
   analyzed: boolean;
-  song: Record<"title" | "genre" | "mood_phrase" | "scene_theme" | "subscribe_line" | "plan" | "generated_on" | "playlist" | "lyric_style" | "mood_grade" | "beat_pulse" | "pulse_parts" | "pulse_when" | "neon_intro" | "now_playing", string>;
+  song: Record<"title" | "genre" | "mood_phrase" | "scene_theme" | "subscribe_line" | "plan" | "generated_on" | "playlist" | "lyric_style" | "mood_grade" | "beat_pulse" | "pulse_parts" | "pulse_when" | "neon_intro" | "now_playing" | "presentation", string>;
   sections: { tag: string; kind: string; start: number; end: number }[]; // the sung sections, in seconds
   styles: Record<string, string>; // lyric style key -> label
   grades: Record<string, string>; // mood grade key -> label
@@ -1287,6 +1287,7 @@ export interface CoverLoop {
   /** The Anim Studio package the loop came from (null = made another way). */
   animation_source: { title: string; imported_at: string; video: { width: number; height: number; fps: number; loopValidated: boolean } } | null;
   loop_previous: boolean; // an import replaced a loop that can be brought back
+  loop_pictures_over?: boolean; // section pictures cover an imported Anim Studio scene (songs only)
   loop_effects: string[]; // what moves in a GPU loop
   effect_choices: Record<string, string>; // effect -> its label
   loop_motion: LoopMotion; // what the last GPU loop moved
@@ -1323,9 +1324,9 @@ export const songFileUrl = (slug: string, file: string, bust = "") =>
   `${API_BASE}/songs/${encodeURIComponent(slug)}/${file}${bust ? `?v=${bust}` : ""}`;
 
 /** One frame of the lyric video at `t` seconds in this lyric style and mood grade (nothing is saved). */
-export interface LyricLook { style: string; grade: string; neon: boolean; playing: boolean; pulse: string; parts: string; when: string }
+export interface LyricLook { style: string; grade: string; neon: boolean; playing: boolean; pulse: string; parts: string; when: string; mode: string }
 export const lyricPreviewUrl = (slug: string, t: number, o: LyricLook, bust = "") =>
-  `${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/preview?${new URLSearchParams({ t: String(t), style: o.style, grade: o.grade, neon: o.neon ? "1" : "", playing: o.playing ? "1" : "", pulse: o.pulse, parts: o.parts, when: o.when, v: bust })}`;
+  `${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/preview?${new URLSearchParams({ t: String(t), style: o.style, grade: o.grade, neon: o.neon ? "1" : "", playing: o.playing ? "1" : "", pulse: o.pulse, parts: o.parts, when: o.when, mode: o.mode, v: bust })}`;
 
 /** The thumbnail as the render will make it from the cover in use. */
 export const lyricThumbUrl = (slug: string, bust = "") =>
@@ -1333,7 +1334,7 @@ export const lyricThumbUrl = (slug: string, bust = "") =>
 
 /** The lyric video playing live from `t` (a motion-JPEG stream for an <img>), in this look. */
 export const lyricStreamUrl = (slug: string, t: number, o: LyricLook) =>
-  `${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/preview/stream?${new URLSearchParams({ t: String(t), style: o.style, grade: o.grade, neon: o.neon ? "1" : "", playing: o.playing ? "1" : "", pulse: o.pulse, parts: o.parts, when: o.when })}`;
+  `${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/preview/stream?${new URLSearchParams({ t: String(t), style: o.style, grade: o.grade, neon: o.neon ? "1" : "", playing: o.playing ? "1" : "", pulse: o.pulse, parts: o.parts, when: o.when, mode: o.mode })}`;
 
 /** Video Quality Inspector (crcontent/quality.py): one check on the rendered file. */
 export interface QualityCheck {
@@ -1388,6 +1389,7 @@ export interface QualityReport {
   media?: { duration: number; width?: number; height?: number; fps?: number };
   checks: QualityCheck[];
   outdated?: boolean; // the file / project changed since this report
+  scene_changed?: boolean; // a music video: the song's Anim Studio scene changed after the render
   base?: string; // render: URL path of the video's folder (evidence frames)
   resolved?: { id: string; title: string }[]; // render: marked fixed, and a later check no longer finds them
   archived?: boolean; // an earlier report from the history (read-only)
@@ -1664,7 +1666,7 @@ export const api = {
   removeLyricBackground: (slug: string) => request<LyricSongDetail>(`/api/lyricvideo/${slug}/background`, { method: "DELETE" }),
   lyricPictures: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/pictures`),
   editLyricPictures: (slug: string, prompts: Record<string, string>, motions: Record<string, string> = {},
-    cover: { cover_mode?: "picture" | "animated"; loop_prompt?: string; loop_movement?: string; loop_regions?: LivingRegion[] } = {}) =>
+    cover: { cover_mode?: "picture" | "animated"; loop_prompt?: string; loop_movement?: string; loop_regions?: LivingRegion[]; loop_pictures_over?: boolean } = {}) =>
     request<LyricPictures>(`/api/lyricvideo/${slug}/pictures`, { method: "PUT", json: { prompts, motions, ...cover } }),
   /** A quick small preview of a living loop of the song's cover (the regions are saved too). */
   previewLyricLoop: (slug: string, regions: LivingRegion[]) =>

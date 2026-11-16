@@ -207,3 +207,32 @@ def test_character_motion_repeats_one_take_into_the_loop(tmp_path, monkeypatch):
     # one GPU loop at a time
     monkeypatch.setattr(coverloop, "_gpu", type("Busy", (), {"acquire": lambda self, blocking=True: False})())
     assert c.post("/api/lyricvideo/s/loop/gpu", json={"motion": "character", "use_cover": True}).status_code == 409
+
+
+def test_music_analysis_for_anim_studio(tmp_path, monkeypatch):
+    """The stored analysis in Anim Studio's MusicAnimationData shape; refused (400) until the song is analyzed."""
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from crcontent import web
+
+    song = _song(tmp_path, monkeypatch)
+    c = TestClient(web.app)
+    r = c.get("/api/lyricvideo/s/music-analysis")
+    assert r.status_code == 400 and "Analyze" in r.json()["detail"]
+
+    data = json.loads((song / "song.json").read_text())
+    data.update(duration=30.0, bpm=96, beat_times=[1.5, 0.5, 1.5, 2.1, 99.0],   # unsorted, repeated, past the end
+                sections=[*data["sections"], {"tag": "Chorus", "kind": "chorus", "start": 10, "end": 20, "energy": 1.4},
+                          {"tag": "Outro", "kind": "outro"}])                     # unsung: no times
+    (song / "song.json").write_text(json.dumps(data))
+    r = c.get("/api/lyricvideo/s/music-analysis")
+    m = r.json()
+    assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+    assert m["schema"] == "cr-content.music-analysis" and m["songId"] == "s" and len(m["sha256"]) == 64
+    assert (m["duration"], m["bpm"], m["beats"], m["beatsPerBar"]) == (30.0, 96, [0.5, 1.5, 2.1], 4)
+    assert m["sections"] == [{"start": 1, "end": 9, "type": "verse", "energy": 0.5},
+                             {"start": 10, "end": 20, "type": "chorus", "energy": 1.0}]
+    assert m["chorus"] == [{"start": 10, "end": 20}]
+    assert c.get("/api/lyricvideo/s/music-analysis").json()["analysisId"] == m["analysisId"]   # stable

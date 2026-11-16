@@ -532,7 +532,78 @@ def inspect_file(path: Path, profile: str, expect: dict, cancel: threading.Event
         audio_checks(checks, found, rules, issue)
     covered = edit_checks(checks, path.parent) if profile == "short" else set()
     covered |= history_checks(checks, path.parent, result)
+    if profile == "lyric":
+        animation_checks(checks, path, result)
     return _finish(result, [n for n in NOT_YET if n[0] not in covered])
+
+
+def _sources(video: Path) -> dict | None:
+    """What a lyric render was made from (neonmekong.lyricvideo.render writes it); None for older renders."""
+    try:
+        return json.loads((video.parent / f"{video.stem}.sources.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _scene_now(video: Path) -> str | None:
+    """The checksum of the Anim Studio scene the song uses now (None: none in use)."""
+    from . import coverloop
+
+    folder = video.parent.parent   # <song>/out/<video>
+    return (coverloop.source(folder) or {}).get("sha256") if coverloop.active(folder) else None
+
+
+def scene_changed(rep: dict, video: Path) -> bool:
+    """The song's Anim Studio scene is no longer the one this report's render was made from."""
+    return "animation" in rep and (rep["animation"] or {}).get("sha256") != _scene_now(video)
+
+
+def animation_checks(checks: list, path: Path, result: dict) -> None:
+    """Music video (roadmap M15): the song in once, and the scene the render used, with its source and loop seam."""
+    try:
+        n = sum(s.get("codec_type") == "audio" for s in probe(path).get("streams", []))
+    except (FileNotFoundError, ValueError):
+        n = None
+    if n is not None and n > 1:
+        _check(checks, "stream.audio_count", "audio", "fail", f"{n} audio streams",
+               "The song should be in the video once; players may pick the wrong track.", "high", "Render it again.")
+    elif n == 1:
+        _check(checks, "stream.audio_count", "audio", "pass", "One audio stream (the song, muxed once)")
+    src = _sources(path)
+    if src is None:
+        _check(checks, "source.animation", "visual", "not_checked", "Animation source unknown",
+               "Rendered before renders recorded their source. Render again to see it here.")
+        return
+    a = src.get("animation")
+    result["animation"] = a
+    if not src.get("loop"):
+        _check(checks, "source.animation", "visual", "pass", "Still cover (no animated loop)")
+        return
+    if not a:
+        _check(checks, "source.animation", "visual", "pass", f"Animated cover, loops every {src['loop_seconds']}s",
+               "Made in CR Content, not imported from Anim Studio.")
+        return
+    v = a.get("video") or {}
+    _check(checks, "source.animation", "visual", "pass", f"Anim Studio scene: {a.get('title') or 'untitled'}",
+           f"{v.get('width')}×{v.get('height')} at {v.get('fps')} fps, loops every {src['loop_seconds']}s from 0:00, "
+           f"package v{a.get('version')}, SHA-256 {a.get('sha256', '')[:12]}…, exported {a.get('exported_at')}, "
+           f"imported {a.get('imported_at')}. Section pictures shown: {src.get('pictures', 0)}.")
+    seam = a.get("seam")
+    if seam is None:
+        _check(checks, "source.seam", "visual", "not_checked", "Loop seam", "Not measured at import.")
+    elif seam.get("ok"):
+        _check(checks, "source.seam", "visual", "pass", "Loop seam smooth (measured at import)",
+               f"End-to-start change {seam.get('jump')} vs typical step {seam.get('step')}.")
+    else:
+        _check(checks, "source.seam", "visual", "warning", "Loop seam: visible jump each time the scene repeats",
+               f"End-to-start change {seam.get('jump')} vs typical step {seam.get('step')} (measured at import), "
+               f"every {src['loop_seconds']}s.", "medium", "Fix the loop in Anim Studio and import it again.")
+    if not v.get("loopValidated", True):
+        _check(checks, "source.loop_validated", "visual", "warning", "Anim Studio's own loop check did not pass",
+               "", "low", "Check the loop in Anim Studio.")
+    if a.get("sha256") != _scene_now(path):
+        _check(checks, "source.current", "visual", "warning", "The song's animated scene changed after this render",
+               "This video still shows the earlier scene.", "medium", "Render the video again.")
 
 
 def edit_checks(checks: list, folder: Path) -> set[str]:
@@ -989,7 +1060,8 @@ def get_inspection(scope: str, name: str, file: str = ""):
         rep = json.loads(rp.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"report": None, "job": job}
-    rep["outdated"] = outdated(rep, path)
+    rep["scene_changed"] = scene_changed(rep, path)
+    rep["outdated"] = outdated(rep, path) or rep["scene_changed"]
     apply_reviews(rep, _reviews(rp))
     if scope in ("video", "song"):  # the rights rows follow the checklist, which can change without the file changing
         from . import rights

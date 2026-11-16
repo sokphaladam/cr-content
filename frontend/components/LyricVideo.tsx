@@ -289,7 +289,7 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
 
   if (!d || !form) return <div className="grid place-items-center p-10"><Spinner className="size-6" /></div>;
   const look = { style: form.lyric_style, grade: form.mood_grade, neon: !!form.neon_intro, playing: !!form.now_playing,
-    pulse: form.beat_pulse, parts: form.pulse_parts, when: form.pulse_when };
+    pulse: form.beat_pulse, parts: form.pulse_parts, when: form.pulse_when, mode: form.presentation };
   /** (Re)start the stream from second `t`; the song joins when its first frame arrives. */
   const playFrom = (t: number) => {
     synced.current = false;
@@ -304,7 +304,7 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
     setPlaying(false);
     setShown(at);
   };
-  const LOOK_KEYS = ["lyric_style", "mood_grade", "beat_pulse", "pulse_parts", "pulse_when", "neon_intro", "now_playing"];
+  const LOOK_KEYS = ["lyric_style", "mood_grade", "beat_pulse", "pulse_parts", "pulse_when", "neon_intro", "now_playing", "presentation"];
   const set = (k: keyof typeof form, v: string) => {
     setForm({ ...form, [k]: v });
     if (playing && LOOK_KEYS.includes(k)) playFrom(at); // a new look while playing: carry on from here in it
@@ -376,11 +376,18 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
             <h2 className="card-title">2. Style and mood</h2>
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,34rem)]">
               <div className="grid content-start gap-3">
-                <Field label="Lyric style" htmlFor="sv-style">
+                <Field label="Presentation" htmlFor="sv-mode">
+                  <select id="sv-mode" className="field-input" value={form.presentation || "lyrics"} onChange={(e) => set("presentation", e.target.value === "lyrics" ? "" : e.target.value)}>
+                    <option value="lyrics">Animated lyric video: the scene with the synced lyrics</option>
+                    <option value="visualizer">Pure music visualizer: the scene and title, no lyrics</option>
+                  </select>
+                </Field>
+
+                {form.presentation !== "visualizer" && <Field label="Lyric style" htmlFor="sv-style">
                   <select id="sv-style" className="field-input" value={form.lyric_style || "classic"} onChange={(e) => set("lyric_style", e.target.value)}>
                     {Object.entries(d.styles).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
                   </select>
-                </Field>
+                </Field>}
                 <Field label="Mood grade" htmlFor="sv-grade">
                   <select id="sv-grade" className="field-input" value={form.mood_grade || "neon"} onChange={(e) => set("mood_grade", e.target.value)}>
                     {Object.entries(d.grades).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
@@ -415,7 +422,7 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
                       </Field>
                     </>
                   )}
-                  <p className="m-0 text-sm text-ink-soft">On each beat the picture brightens and pushes in a little, and chorus lines glow. Subtle is calm; Strong suits club and rock songs.</p>
+                  <p className="m-0 text-sm text-ink-soft">On each beat the picture brightens and pushes in a little, and chorus lines glow. Subtle is calm; Strong suits club and rock songs. If your Anim Studio scene already moves on the beat, set Strength to Off so it doesn&apos;t pulse twice.</p>
                 </fieldset>
                 {d.suggestion && (() => {
                   const sg = d.suggestion;
@@ -438,7 +445,7 @@ function SongView({ slug, job, onJob, onChanged }: { slug: string; job: string |
                 </p>
               </div>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img key={playing ? `play|${run}` : `${form.lyric_style}|${form.mood_grade}|${form.beat_pulse}|${form.pulse_parts}|${form.pulse_when}|${form.neon_intro}|${form.now_playing}|${shown}|${picBust}`}
+              <img key={playing ? `play|${run}` : `${form.lyric_style}|${form.mood_grade}|${form.beat_pulse}|${form.pulse_parts}|${form.pulse_when}|${form.neon_intro}|${form.now_playing}|${form.presentation}|${shown}|${picBust}`}
                 src={playing ? lyricStreamUrl(slug, from, look) : previewSrc} alt={playing ? "The lyric video playing" : "Preview frame of the lyric video"}
                 onLoad={() => {
                   // the stream's first frame is up: the song starts with it, and the playhead follows the song

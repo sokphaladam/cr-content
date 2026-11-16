@@ -77,7 +77,8 @@ export function QualityReportView({ report, total, onSelect, onReview, onApply, 
     <>
       {report.outdated && !report.archived && (
         <p className="m-0 rounded-md bg-warn/10 p-2 text-sm font-semibold text-warn">
-          Outdated: the {report.stage === "render" ? "video" : "project"} changed since this report. Check it again.
+          {report.scene_changed ? "Outdated: the song's animated scene changed after this render. Render the video again."
+            : <>Outdated: the {report.stage === "render" ? "video" : "project"} changed since this report. Check it again.</>}
         </p>
       )}
       <div className={`grid gap-1 ${report.outdated ? "opacity-60" : ""}`}>

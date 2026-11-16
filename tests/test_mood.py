@@ -53,3 +53,19 @@ def test_the_scene_beats_only_where_the_song_says():
     assert beat({"pulse_when": "chorus"}, 1.0) == (0.0, 0.0, 0.0, 0.0) and beat({"pulse_when": "chorus"}, 11.0)[0] > 0
     light, push, glow, _ = beat({"pulse_parts": "zoom"}, 1.0)
     assert light == 0.0 and push > 0 and glow == 0.0
+
+
+def test_the_beat_follows_section_loudness_and_never_flashes_by_default():
+    from neonmekong import lyricvideo as lv
+    from neonmekong import mood
+    base = {"title": "T", "pulse_when": "sections", "sections": [{"kind": "verse", "start": 0, "end": 10, "energy": 0.2},
+                                                                 {"kind": "chorus", "start": 10, "end": 20, "energy": 1.0}]}
+    v = lv.Variant("full", None, [], [1.0, 11.0, 25.0], None, 30.0)
+    s = lv.Scene(base, v, [], (320, 180), 15)
+    verse, chorus, outside = s._beat(1.0)[0], s._beat(11.0)[0], s._beat(25.0)[0]
+    assert 0 < outside < verse < chorus == mood.PULSE_AMOUNT["subtle"][0]
+    assert s._beat(11.0) == lv.Scene(base, v, [], (320, 180), 15)._beat(11.0)   # deterministic
+    # default settings: no frame is more than 5% brighter than the one before it (no harsh flashing)
+    d = lv.Scene({"title": "T"}, v, [], (320, 180), 15)
+    lights = [d._beat(i / 30)[0] for i in range(0, 900)]
+    assert max(abs(a - b) for a, b in zip(lights, lights[1:])) <= 0.05

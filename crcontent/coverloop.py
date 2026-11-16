@@ -64,6 +64,11 @@ def active(folder: Path) -> Path | None:
     return file if file.exists() and meta(folder).get("mode", "animated") == "animated" else None
 
 
+def scene_only(folder: Path) -> bool:
+    """An Anim Studio scene is in use and the section pictures were not asked to cover it: one scene all song."""
+    return bool(active(folder) and source(folder) and not meta(folder).get("pictures_over"))
+
+
 def still(file: Path, at: float = 0.35) -> Image.Image | None:
     """One frame of the loop (`at` of the way through): the thumbnail, and the still behind an animated cover."""
     import cv2
@@ -84,6 +89,7 @@ def state(folder: Path, suggested: str) -> dict:
             "loop_prompt": m.get("prompt") or suggested,
             "loop_seconds": src["video"].get("duration", SECONDS) if src else SECONDS,   # an import loops on its own length
             "animation_source": src, "loop_previous": (Path(folder) / PREVIOUS).exists(),
+            "loop_pictures_over": bool(m.get("pictures_over")),
             "loop_effects": [e for e in m.get("effects", DEFAULT_EFFECTS) if e in EFFECTS],
             "effect_choices": _effect_labels(), "loop_motion": m.get("motion", "parallax"),
             "loop_intensity": m.get("intensity", INTENSITY), "loop_depth": m.get("depth", True),
@@ -111,8 +117,8 @@ def _effect_labels() -> dict[str, str]:
 
 
 def edit(folder: Path, cover_mode: str | None = None, prompt: str | None = None, movement: str | None = None,
-         regions: list | None = None) -> None:
-    """ValueError for an unknown mode or a bad living region."""
+         regions: list | None = None, pictures_over: bool | None = None) -> None:
+    """ValueError for an unknown mode or a bad living region. `pictures_over`: section pictures cover an imported scene."""
     if cover_mode is not None and cover_mode not in MODES:
         raise ValueError("The cover is a picture or animated.")
     changes = {}
@@ -126,6 +132,8 @@ def edit(folder: Path, cover_mode: str | None = None, prompt: str | None = None,
         from . import living
 
         changes["regions"] = living.clean(regions)
+    if pictures_over is not None:
+        changes["pictures_over"] = bool(pictures_over)
     if changes:
         save_meta(folder, **changes)
 
@@ -818,6 +826,32 @@ def rollback(folder: Path) -> None:
     else:
         (folder / SOURCE).unlink(missing_ok=True)
     save_meta(folder, mode="animated", seam=(source(folder) or {}).get("seam"))
+
+
+ANALYSIS_SCHEMA, ANALYSIS_VERSION = "cr-content.music-analysis", 1
+
+
+def music_analysis(data: dict, song_id: str) -> dict:
+    """The song's stored analysis (song.json) as Anim Studio's MusicAnimationData (packages/spec schema.ts), plus our
+    own id/checksum fields it ignores. Timing only, song-local seconds; never the audio. ValueError: not analyzed."""
+    import hashlib
+
+    duration, bpm = data.get("duration"), data.get("bpm")
+    if not (isinstance(duration, (int, float)) and duration > 0 and isinstance(bpm, (int, float)) and 20 <= bpm <= 300):
+        raise ValueError("This song hasn't been analyzed yet (no tempo or length). Run Analyze first.")
+    beats = []
+    for b in sorted(float(b) for b in data.get("beat_times") or [] if isinstance(b, (int, float)) and 0 <= b <= duration):
+        if not beats or b > beats[-1]:   # the contract needs strictly rising beats
+            beats.append(b)
+    sections = [{"start": s["start"], "end": s["end"], "type": s.get("kind") or s.get("tag") or "section",
+                 "energy": min(1.0, max(0.0, float(s.get("energy", 0.5))))}
+                for s in data.get("sections") or [] if isinstance(s.get("start"), (int, float))
+                and isinstance(s.get("end"), (int, float)) and 0 <= s["start"] < s["end"]]
+    body = {"duration": duration, "bpm": bpm, "beats": beats, "beatsPerBar": 4, "sections": sections,
+            "chorus": [{"start": s["start"], "end": s["end"]} for s in sections if s["type"] == "chorus"]}
+    digest = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+    return {"schema": ANALYSIS_SCHEMA, "version": ANALYSIS_VERSION, "songId": song_id, "analysisId": digest[:16],
+            "sha256": digest, "title": data.get("title", ""), "language": data.get("language", ""), **body}
 
 
 def others(folders, here: Path, title) -> list[dict]:

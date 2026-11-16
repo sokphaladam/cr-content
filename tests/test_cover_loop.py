@@ -439,3 +439,52 @@ def test_a_bad_package_never_replaces_the_loop(tmp_path, monkeypatch):
 
     monkeypatch.setattr(coverloop, "MAX_IMPORT", 100)
     rejected(_package(tmp_path, video), "too big")
+
+
+@needs_ffmpeg
+def test_an_imported_scene_plays_alone_unless_pictures_are_asked_over_it(tmp_path):
+    from crcontent import coverloop
+
+    song = tmp_path / "song"
+    song.mkdir()
+    assert not coverloop.scene_only(song)   # no loop at all
+    coverloop.import_package(song, _package(tmp_path, _clip(tmp_path / "a.mp4")))
+    assert coverloop.scene_only(song) and not coverloop.state(song, "")["loop_pictures_over"]
+    coverloop.edit(song, pictures_over=True)
+    assert not coverloop.scene_only(song) and coverloop.state(song, "")["loop_pictures_over"]
+    coverloop.edit(song, pictures_over=False, cover_mode="picture")   # the still cover in use: not the scene
+    assert not coverloop.scene_only(song)
+
+
+@needs_ffmpeg
+def test_the_report_names_the_scene_a_render_used_and_flags_a_newer_one(tmp_path):
+    import json
+
+    from crcontent import coverloop, quality
+
+    song = tmp_path / "song"
+    (song / "out").mkdir(parents=True)
+    first = _clip(tmp_path / "a.mp4")
+    coverloop.import_package(song, _package(tmp_path, first))
+    video = song / "out" / "lyric_full.mp4"
+    _clip(video, audio=True)
+    (song / "out" / "lyric_full.sources.json").write_text(json.dumps(
+        {"loop": True, "loop_seconds": 1.0, "animation": coverloop.source(song), "lyrics": True, "pictures": 0}))
+
+    checks, result = [], {}
+    quality.animation_checks(checks, video, result)
+    rows = {c["detector"]: c for c in checks}
+    assert rows["stream.audio_count"]["status"] == "pass"
+    assert rows["source.animation"]["status"] == "pass" and "Night room" in rows["source.animation"]["title"]
+    assert "source.current" not in rows and not quality.scene_changed(result, video)
+
+    coverloop.import_package(song, _package(tmp_path, first + b"\0", name="v2.zip"))   # a newer version imported
+    assert quality.scene_changed(result, video)
+    checks = []
+    quality.animation_checks(checks, video, {})
+    assert {c["detector"]: c for c in checks}["source.current"]["status"] == "warning"
+
+    (song / "out" / "lyric_full.sources.json").unlink()   # a render from before sources were recorded
+    checks = []
+    quality.animation_checks(checks, video, {})
+    assert {c["detector"]: c for c in checks}["source.animation"]["status"] == "not_checked"

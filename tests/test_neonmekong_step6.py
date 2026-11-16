@@ -92,3 +92,45 @@ def test_frames_differ_over_time_and_chorus_lines_flagged(tmp_path):
     a, b = scene.frame(1.0), scene.frame(22.0)
     assert a.shape == (540, 960, 3) and (a != b).mean() > 0.2
     assert scene.frame(22.0).tobytes() == b.tobytes()   # deterministic
+
+
+def test_presentation_and_imported_scene_choose_what_the_video_shows(tmp_path, monkeypatch):
+    """Pure visualizer: no lyrics, in the preview (`over`) as in the render. An imported Anim Studio scene keeps
+    the section pictures off it unless asked."""
+    from PIL import Image
+
+    from crcontent import coverloop
+    from neonmekong import pictures
+
+    song = _song(tmp_path)
+    assert lv.build_scene(song, "full", draft=True).show_lyrics
+    assert not lv.build_scene(song, "full", draft=True, over={"presentation": "visualizer"}).show_lyrics
+
+    pic = tmp_path / "p.png"
+    Image.new("RGB", (64, 36), "red").save(pic)
+    monkeypatch.setattr(pictures, "spans", lambda folder, dur: [(5.0, 10.0, pic, "")])
+    monkeypatch.setattr(coverloop, "scene_only", lambda folder: False)
+    assert len(lv.build_scene(song, "full", draft=True).pics) == 1
+    monkeypatch.setattr(coverloop, "scene_only", lambda folder: True)
+    assert lv.build_scene(song, "full", draft=True).pics == []
+
+
+def test_a_failed_render_keeps_the_last_video_and_a_good_one_records_its_source(tmp_path, monkeypatch):
+    song = _song(tmp_path)
+    out = song / "out" / "lyric_full.mp4"
+    out.parent.mkdir(exist_ok=True)
+    out.write_bytes(b"last good video")
+
+    def broken(scene, target, *a, **k):
+        target.write_bytes(b"half")
+        raise RuntimeError("ffmpeg failed")
+    monkeypatch.setattr(lv, "encode", broken)
+    with pytest.raises(RuntimeError):
+        lv.render(song, "full", seconds=1, draft=True)
+    assert out.read_bytes() == b"last good video" and not list(out.parent.glob("*.part.mp4"))
+
+    monkeypatch.setattr(lv, "encode", lambda scene, target, *a, **k: target.write_bytes(b"new video"))
+    lv.render(song, "full", seconds=1, draft=True)
+    assert out.read_bytes() == b"new video" and list(out.parent.glob("lyric_full.mp4.bak-*"))
+    src = json.loads((out.parent / "lyric_full.sources.json").read_text())
+    assert src["loop"] is False and src["animation"] is None and src["lyrics"] is True

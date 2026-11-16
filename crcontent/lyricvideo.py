@@ -24,7 +24,7 @@ router = APIRouter()
 SONGS_DIR = ROOT / "songs"   # in the data folder chosen in Settings > Storage, so it moves with the library
 AUDIO_EXTS = {".mp3", ".wav"}
 EDITABLE = ("title", "genre", "mood_phrase", "scene_theme", "subscribe_line", "plan", "generated_on", "playlist",
-            "lyric_style", "mood_grade", "beat_pulse", "pulse_parts", "pulse_when", "neon_intro", "now_playing")
+            "lyric_style", "mood_grade", "beat_pulse", "pulse_parts", "pulse_when", "neon_intro", "now_playing", "presentation")
 OUTPUTS = ("thumbnail.jpg", "lyric_full.mp4", "short_chorus.mp4", "short_thumbnail.jpg", "instrumental.mp4")
 STEPS = ("analyze", "text", "checklist", "thumbnail", "video", "short", "instrumental")
 
@@ -258,18 +258,18 @@ def edit_song(slug: str, req: SongEdit):
 
 
 def _preview_over(style: str, grade: str, neon: bool, playing: bool, pulse: str = "", parts: str = "",
-                  when: str = "") -> dict:
+                  when: str = "", mode: str = "") -> dict:
     from neonmekong import mood
 
     return {"lyric_style": mood.pick(style, mood.LYRIC_STYLES, mood.DEFAULT_STYLE),
             "mood_grade": mood.pick(grade, mood.GRADES, mood.DEFAULT_GRADE),
             "neon_intro": "1" if neon else "", "now_playing": "1" if playing else "",
-            "beat_pulse": pulse, "pulse_parts": parts, "pulse_when": when}
+            "beat_pulse": pulse, "pulse_parts": parts, "pulse_when": when, "presentation": mode}
 
 
 @router.get("/api/lyricvideo/{slug}/preview/stream")
 def preview_stream(slug: str, t: float = 0.0, style: str = "", grade: str = "", neon: bool = False,
-                   playing: bool = False, fps: int = 20, pulse: str = "", parts: str = "", when: str = ""):
+                   playing: bool = False, fps: int = 20, pulse: str = "", parts: str = "", when: str = "", mode: str = ""):
     """The lyric video playing live from second `t`, as a motion-JPEG stream (an <img> shows it), drawn in real time at
     draft size. Frames follow the clock: a slow computer skips frames instead of falling behind the song's audio,
     which the page plays alongside. Ends with the song; closing the page's image stops it."""
@@ -282,7 +282,7 @@ def preview_stream(slug: str, t: float = 0.0, style: str = "", grade: str = "", 
     if not _detail(folder)["analyzed"]:
         raise HTTPException(400, "The song hasn't been read yet.")
     try:
-        scene = lyricvideo.build_scene(folder, "full", draft=True, over=_preview_over(style, grade, neon, playing, pulse, parts, when))
+        scene = lyricvideo.build_scene(folder, "full", draft=True, over=_preview_over(style, grade, neon, playing, pulse, parts, when, mode))
     except (OSError, ValueError, KeyError) as e:
         raise HTTPException(400, str(e))
     end = scene.v.duration
@@ -309,7 +309,7 @@ def preview_stream(slug: str, t: float = 0.0, style: str = "", grade: str = "", 
 
 @router.get("/api/lyricvideo/{slug}/preview")
 def preview_frame(slug: str, t: float = 0.0, style: str = "", grade: str = "", neon: bool = False,
-                  playing: bool = False, pulse: str = "", parts: str = "", when: str = ""):
+                  playing: bool = False, pulse: str = "", parts: str = "", when: str = "", mode: str = ""):
     """One frame of the lyric video at `t` seconds with this lyric style and mood grade (not saved)."""
     import cv2
     from fastapi.responses import Response
@@ -319,7 +319,7 @@ def preview_frame(slug: str, t: float = 0.0, style: str = "", grade: str = "", n
     folder = _folder(slug)
     if not _detail(folder)["analyzed"]:
         raise HTTPException(400, "The song hasn't been read yet.")
-    over = _preview_over(style, grade, neon, playing, pulse, parts, when)
+    over = _preview_over(style, grade, neon, playing, pulse, parts, when, mode)
     try:
         scene = lyricvideo.build_scene(folder, "full", draft=True, over=over)
         frame = scene.frame(min(max(t, 0.0), max(scene.v.duration - 0.1, 0.0)))
@@ -367,6 +367,7 @@ class PicturesEdit(BaseModel):
     loop_prompt: str | None = None  # what the animated cover shows ("" = the suggestion again)
     loop_movement: str | None = None  # how a character loop moves ("" = the suggestion again)
     loop_regions: list[dict] | None = None  # the parts of the cover a living loop moves (living.clean)
+    loop_pictures_over: bool | None = None  # section pictures cover an imported Anim Studio scene
 
 
 @router.put("/api/lyricvideo/{slug}/pictures")
@@ -382,7 +383,7 @@ def edit_pictures(slug: str, req: PicturesEdit):
     from . import coverloop
 
     try:
-        coverloop.edit(folder, req.cover_mode, req.loop_prompt, req.loop_movement, req.loop_regions)
+        coverloop.edit(folder, req.cover_mode, req.loop_prompt, req.loop_movement, req.loop_regions, req.loop_pictures_over)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if "cover" in req.motions:
@@ -589,6 +590,23 @@ def rollback_loop(slug: str):
     folder = _folder(slug)
     _loop_call(folder, lambda: coverloop.rollback(folder))
     return _pictures(folder)
+
+
+@router.get("/api/lyricvideo/{slug}/music-analysis")
+def music_analysis(slug: str):
+    """The song's tempo, beats and sections as music-analysis.json for Anim Studio (no audio, no new analysis)."""
+    from fastapi.responses import JSONResponse
+    from neonmekong import songjson
+    from . import coverloop
+
+    folder = _folder(slug)
+    try:
+        body = coverloop.music_analysis(songjson.load(folder / "song.json"), slug)
+    except FileNotFoundError:
+        raise HTTPException(400, "This song hasn't been analyzed yet. Run Analyze first.")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return JSONResponse(body, headers={"Content-Disposition": f'attachment; filename="{slug}.music-analysis.json"'})
 
 
 @router.post("/api/lyricvideo/{slug}/loop/from/{source}")

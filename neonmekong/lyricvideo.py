@@ -8,6 +8,7 @@ clean space for the end screen in the last 20 seconds.
 import bisect
 import json
 import math
+import os
 import random
 import re
 import subprocess
@@ -291,7 +292,8 @@ class Scene:
         self.pics = []
         plan = pictures.load(Path(folder)) if folder else {}
         self.cover_move = plan.get("cover_motion") if plan.get("cover_motion") in pictures.MOTIONS else ""
-        if folder:
+        from crcontent import coverloop
+        if folder and not coverloop.scene_only(Path(folder)):   # an imported scene stays the one picture
             for a, b, file, move in pictures.spans(Path(folder), float(data.get("duration") or v.duration)):
                 with Image.open(file) as im:
                     self.pics.append((a, b, crisp(np.asarray(thumbnail.cover_crop(im, bw, bh))[..., ::-1].copy()), move))
@@ -300,6 +302,8 @@ class Scene:
         self.pulse_light, self.pulse_zoom, self.pulse_parts, self.pulse_when = mood.pulse_settings(data)
         self.chorus_spans = [(float(s["start"]), float(s["end"])) for s in (data.get("sections") or [])
                              if s.get("kind") == "chorus" and "start" in s and "end" in s]
+        self.energy_spans = [(float(s["start"]), float(s["end"]), min(max(float(s.get("energy", 0.5)), 0.0), 1.0))
+                             for s in (data.get("sections") or []) if "start" in s and "end" in s]
         # the neon title and the now-playing card (overlays.py), when the song asks for them
         span = overlays.intro_span(v.lines[0]["start"] if v.lines else None) if data.get("neon_intro") else None
         self.neon = overlays.NeonTitle(sys.modules[__name__], data["title"], span, pal, size) if span else None
@@ -439,6 +443,10 @@ class Scene:
         if self.pulse_when == "chorus":
             st = self.v.song_time(t)
             p = p if any(a <= st < b for a, b in self.chorus_spans) else 0.0
+        elif self.pulse_when == "sections":   # the section's measured loudness (song.json), not the clock
+            st = self.v.song_time(t)
+            e = next((e for a, b, e in self.energy_spans if a <= st < b), 0.0)
+            p *= mood.QUIET_FLOOR + (1 - mood.QUIET_FLOOR) * e
         return (self.pulse_light * p if "light" in self.pulse_parts else 0.0,
                 self.pulse_zoom * p if "zoom" in self.pulse_parts else 0.0,
                 p if "glow" in self.pulse_parts else 0.0,
@@ -612,6 +620,7 @@ def build_scene(folder: Path, option: str, draft: bool = False, show_lyrics: boo
     v = variant(folder, data, option)
     if audio:
         v = replace(v, audio=audio)
+    show_lyrics = show_lyrics and data.get("presentation") != "visualizer"   # pure music visualizer: no lyrics
     return Scene(data, v, chorus_lines, DRAFT if draft else FULL, 15 if draft else FPS, show_lyrics)
 
 
@@ -622,7 +631,18 @@ def render(folder: Path, option: str, seconds: float | None = None, draft: bool 
     v = scene.v
     out = folder / "out" / (name or f"lyric_{option}.mp4")
     out.parent.mkdir(parents=True, exist_ok=True)
-    songjson.move_aside(out)  # large file: moved aside instead of copied
     log(f"  {option}: {scene.W}x{scene.H} @{scene.fps}fps, {min(v.duration, seconds or v.duration):.1f}s -> {out.name}")
-    encode(scene, out, seconds, draft, log)
+    part = out.with_name(out.stem + ".part.mp4")   # a failed or cancelled render leaves the last good video in place
+    try:
+        encode(scene, part, seconds, draft, log)
+        songjson.move_aside(out)  # large file: moved aside instead of copied
+        os.replace(part, out)
+    finally:
+        part.unlink(missing_ok=True)
+    from crcontent import coverloop
+    src = coverloop.source(folder) if scene.loop else None
+    # what this render was made from: the quality report shows it, and flags the render once the scene changes
+    (out.parent / f"{out.stem}.sources.json").write_text(json.dumps({
+        "loop": bool(scene.loop), "loop_seconds": round(scene.loop.count / scene.loop.fps, 3) if scene.loop else None,
+        "animation": src, "lyrics": scene.show_lyrics, "pictures": len(scene.pics)}), encoding="utf-8")
     return out

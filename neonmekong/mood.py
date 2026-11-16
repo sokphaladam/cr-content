@@ -47,7 +47,9 @@ STYLE_WORDS = {
 PULSE_LEVELS = {"off": "Off (no beat effect)", "subtle": "Subtle", "medium": "Medium", "strong": "Strong (club)"}
 PULSE_AMOUNT = {"off": (0.0, 0.0), "subtle": (0.035, 0.006), "medium": (0.07, 0.012), "strong": (0.12, 0.02)}  # light, zoom
 PULSE_PARTS = {"light": "Brightness", "zoom": "Push-in zoom", "glow": "Lyric glow"}
-PULSE_WHEN = {"always": "Every beat", "chorus": "Chorus only"}
+PULSE_WHEN = {"always": "Every beat", "chorus": "Chorus only",
+              "sections": "Follows the song (calm verses, strongest in loud sections)"}
+QUIET_FLOOR = 0.35   # "sections": the share of the beat effect left in the quietest part
 DEFAULT_PULSE = "subtle"
 PULSE_WORDS = {
     "off": ("ambient", "lullaby", "sleep", "meditat", "piano", "acoustic", "ballad"),

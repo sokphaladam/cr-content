@@ -2,7 +2,7 @@
 
 import { Clapperboard, Copy, ImageIcon, Paintbrush, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, lyricThumbUrl, songFileUrl, type ArtStyle, type CoverMode, type LyricDrawStatus, type LyricPicture, type LyricPictures } from "@/lib/api";
+import { API_BASE, api, lyricThumbUrl, songFileUrl, type ArtStyle, type CoverMode, type LyricDrawStatus, type LyricPicture, type LyricPictures } from "@/lib/api";
 import { AnimatedCover, CoverSwitch } from "./AnimatedCover";
 import { ArtStylePicker, artBlocker, useArtStatus } from "./ArtControls";
 import { Button, Spinner, buttonClass, useToast } from "./ui";
@@ -160,6 +160,7 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
     <AnimatedCover state={plan} src={plan.loop ? songFileUrl(slug, plan.loop, bust) : ""} onSaved={saved} videoPrompt={plan.video_prompt} disabled={!!busy} hasPicture={!!plan.cover}
       picture={plan.cover ? songFileUrl(slug, plan.cover, bust) : ""}
       previewUrl={(file) => songFileUrl(slug, file, String(Date.now()))}
+      musicAnalysisUrl={`${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/music-analysis`}
       calls={{
         saveRegions: (loop_regions) => api.editLyricPictures(slug, {}, {}, { loop_regions }),
         preview: async (regions) => { const r = await api.previewLyricLoop(slug, regions); return [r, r.preview] as const; },
@@ -301,6 +302,14 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
             </figcaption>
           </figure>
         </div>
+        {mode === "animated" && plan.loop && plan.animation_source && (
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" className="size-4 accent-cobalt" checked={!!plan.loop_pictures_over} disabled={!!busy}
+              onChange={(e) => void api.editLyricPictures(slug, {}, {}, { loop_pictures_over: e.target.checked }).then(saved).catch((err: Error) => toast(err.message, "error"))} />
+            Show the section pictures over the Anim Studio scene
+            <span className="text-ink-soft">(off: the scene plays the whole song)</span>
+          </label>
+        )}
         {mode === "animated" && !plan.loop && (
           <p className="m-0 text-sm text-ink-soft">No animated cover yet: until you draw or upload one, the video uses the {plan.cover ? "cover picture" : "drawn neon city"}.</p>
         )}

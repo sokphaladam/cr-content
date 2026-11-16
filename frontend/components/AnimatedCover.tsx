@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, Cpu, Film, ImageIcon, Sparkles, Trash2, Upload } from "lucide-react";
+import { Copy, Cpu, Download, Film, ImageIcon, Sparkles, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CoverLoop, CoverMode, GpuLoopJob, LivingRegion, LoopMotion } from "@/lib/api";
 import { LivingRegions } from "./LivingRegions";
@@ -45,7 +45,7 @@ export type CoverLoopCalls<T> = {
  * brought to life (free), drawn by Gemini as moving artwork (one request), your own clip, or reused from another song
  * (both editors' songs). Laid out like a picture's card.
  */
-export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disabled, hasPicture = false, picture = "", previewUrl }: {
+export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disabled, hasPicture = false, picture = "", previewUrl, musicAnalysisUrl }: {
   state: CoverLoop;
   src: string; // the loop's url ("" = none yet)
   calls: CoverLoopCalls<T>;
@@ -55,6 +55,7 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
   hasPicture?: boolean; // the song has a cover picture that can be brought to life
   picture?: string; // the cover picture's url (the living editor draws on it)
   previewUrl?: (file: string) => string; // a file in the song folder as a url
+  musicAnalysisUrl?: string; // the song's beats/sections for Anim Studio (songs only)
 }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -269,6 +270,9 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
             <input type="file" hidden accept=".zip,application/zip" disabled={off}
               onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void run(() => calls.importPackage(f), "Checking the Anim Studio package."); }} />
           </label>
+          {musicAnalysisUrl && <a className={buttonClass("ghost", "sm")} href={musicAnalysisUrl} download
+            title="The song's tempo, beats and sections (no audio). In Anim Studio: Motion › Music › import, to sync motion to this song.">
+            <Download className="size-3.5" aria-hidden /> Music for Anim Studio</a>}
           {state.loop_previous && <Button size="sm" variant="ghost" disabled={off} title="Bring back the animated cover the last import replaced"
             onClick={() => void run(() => calls.rollback())}>Undo import</Button>}
           <Button size="sm" variant="ghost" icon={<Copy className="size-3.5" />} onClick={() => copy(text)}>Copy prompt</Button>

@@ -12,7 +12,7 @@ FIELDS = {
     "title": "", "slug": "", "genre": "", "mood_phrase": "", "scene_theme": "", "style_prompt": "",
     "bpm": None, "beat_times": [], "chorus": {"start": None, "end": None}, "sections": [],
     "palette": [], "subscribe_line": "", "plan": "", "generated_on": "", "playlist": "",
-    "vocal_start": None, "audio": "", "lyric_style": "", "mood_grade": "", "beat_pulse": "", "pulse_parts": "", "pulse_when": "", "neon_intro": "", "now_playing": "",
+    "vocal_start": None, "audio": "", "lyric_style": "", "mood_grade": "", "beat_pulse": "", "pulse_parts": "", "pulse_when": "", "neon_intro": "", "now_playing": "", "presentation": "",
 }
 
 
