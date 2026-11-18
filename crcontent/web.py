@@ -1,5 +1,6 @@
 """Local web app: FastAPI backend wrapping the pipeline, serving the UI in /web."""
 import hashlib
+import html
 import json
 import os
 import re
@@ -15,13 +16,13 @@ from pathlib import Path
 
 from . import llm
 import requests
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import addons, art, campaigns, director_plan, drafts, locations, profiles, lyricvideo, music, packaging, publish, quality, quality_preview, rights, schedule, sheet, voiceover
+from . import addons, art, campaigns, cloud, director_plan, drafts, locations, profiles, lyricvideo, music, packaging, publish, quality, quality_preview, rights, schedule, sheet, voiceover
 from .history.models import ResearchBrief as ResearchBriefModel
 from .config import ASSETS_DIR, CACHE_DIR, CODE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT, SCENE_PAD_SEC, frame_size
 from .lyrics import SongScript, generate_song, suggest_video_ideas
@@ -65,7 +66,9 @@ async def report_errors(request, call_next):
 # The Next.js UI (frontend/, port 3000, or the desktop app's webview) calls this API directly.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1):3000|https?://tauri\.localhost|tauri://localhost)$",
+    # the dev UI's port: 3000, or the free one `npm run dev` picked (scripts/dev.mjs)
+    allow_origin_regex=rf"^(https?://(localhost|127\.0\.0\.1):{int(os.getenv('CRCONTENT_UI_PORT') or 3000)}"
+                       r"|https?://tauri\.localhost|tauri://localhost)$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -3732,6 +3735,59 @@ def save_settings_keys(req: KeysRequest):
     return settings_keys()
 
 
+# ---------- Account (Google sign-in, library synced to the cloud: crcontent/cloud.py) ----------
+
+def _account_view() -> dict:
+    return {"configured": cloud.configured(), "user": cloud.user(), "sync": cloud.status}
+
+
+@app.get("/api/account")
+def account():
+    return _account_view()
+
+
+@app.post("/api/account/google")
+def account_google(request: Request):
+    # Google lets a desktop app come back to any port on 127.0.0.1: this engine's own one
+    try:
+        url = cloud.start_sign_in(f"http://127.0.0.1:{request.url.port}/api/auth/google/callback")
+    except cloud.CloudError as e:
+        raise HTTPException(400, str(e))
+    return {"url": url}
+
+
+@app.get("/api/auth/google/callback", response_class=HTMLResponse)
+def account_google_callback(state: str = "", code: str = "", error: str = ""):
+    try:
+        if not code:
+            raise cloud.CloudError(f"Sign-in was cancelled{f' ({error})' if error else ''}.")
+        who = cloud.finish_sign_in(state, code)
+        cloud.sync_in_background()  # bring this computer's library up to date right away
+        text = f"Signed in as {who['email']}. Your library is syncing: you can close this tab and go back to Shorts Studio."
+    except Exception as e:
+        text = f"Not signed in: {e}"
+    return ("<!doctype html><meta charset=utf-8><title>Shorts Studio</title>"
+            "<body style='font:16px system-ui;margin:15vh auto;max-width:520px;padding:0 16px'>"
+            f"<p>{html.escape(text)}</p>")
+
+
+@app.post("/api/account/sign-out")
+def account_sign_out():
+    cloud.sign_out()
+    return _account_view()
+
+
+@app.post("/api/account/sync")
+def account_sync():
+    with jobs_lock:
+        if any(j["status"] in ("queued", "running") for j in jobs.values()):
+            raise HTTPException(409, "A video is being made. Sync when it's done.")
+    if not cloud.user():
+        raise HTTPException(401, "Sign in with Google first.")
+    cloud.sync_in_background()
+    return _account_view()
+
+
 # ---------- Settings (where the library is kept: crcontent/locations.py) ----------
 
 RESTART_CODE = 3  # same as app.py: under `app.py --reload` the parent process starts the new engine
@@ -3956,6 +4012,8 @@ def _run_scheduled_comment(item: dict, folder: Path) -> None:
 
 
 schedule.start(lambda item: uploader.submit(_run_scheduled, item))
+if cloud.configured() and cloud.user():
+    cloud.sync_in_background()  # pick up what was done on another computer since this one last ran
 
 
 def _schedule_view(item: dict) -> dict:

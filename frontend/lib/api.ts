@@ -1044,6 +1044,13 @@ export interface LyricsTiming {
   timing: "" | "exact" | "whisper" | "even" | "edited"; // exact: from the song generator's own word timings
 }
 
+/** Google sign-in and the library synced to the cloud (crcontent/cloud.py). */
+export interface Account {
+  configured: boolean; // CLOUD_URL and GOOGLE_CLIENT_ID are set
+  user: { email: string; name: string; picture: string } | null;
+  sync: { running: boolean; last: string; error: string; summary: string };
+}
+
 /** Where the library lives (crcontent/locations.py). */
 export interface Locations {
   data: string;
@@ -1753,6 +1760,10 @@ export const api = {
   saveJourney: (journey: string) => request<{ journey: string }>("/api/settings/journey", { method: "PUT", json: { journey } }),
   serviceKeys: () => request<ServiceKeys>("/api/settings/keys"),
   locations: () => request<Locations>("/api/settings/locations"),
+  account: () => request<Account>("/api/account"),
+  signInWithGoogle: () => request<{ url: string }>("/api/account/google", { method: "POST" }),
+  signOut: () => request<Account>("/api/account/sign-out", { method: "POST" }),
+  syncNow: () => request<Account>("/api/account/sync", { method: "POST" }),
   // moving a big library to another drive takes a while: no time limit
   moveLocations: (data: string, videos: string) =>
     request<Locations & { left_behind: number; restarting: boolean }>("/api/settings/locations", { method: "PUT", json: { data, videos }, timeout: 0 }),
