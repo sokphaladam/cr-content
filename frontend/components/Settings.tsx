@@ -5,7 +5,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useAppearance } from "@/lib/appearance";
 import { checkNow, install, setAutoCheck, startUpdates, useAutoCheck, useUpdates } from "@/lib/updates";
 import { AddonProgress, DownloadProgress, useArtStatus } from "./ArtControls";
-import { api, ART_STYLES, getAutostart, isMac, pickFolder, setAutostart, type CleanupGroup, type GeminiUsage, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
+import { api, ART_STYLES, type Account, getAutostart, isMac, pickFolder, setAutostart, type CleanupGroup, type GeminiUsage, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
 import { Button, IconButton, Segmented, useToast } from "./ui";
 
 export const PLATFORM_NAMES: Record<Platform, string> = { youtube: "YouTube", tiktok: "TikTok", facebook: "Facebook", instagram: "Instagram" };
@@ -259,6 +259,7 @@ function ServiceRow({ service, state, onSaved }: { service: (typeof SERVICES)[nu
 /* ---------- Section menu (follows the scroll) ---------- */
 
 const SECTIONS = [
+  { id: "account", label: "Account" },
   { id: "services", label: "Services" },
   { id: "channels", label: "Channels" },
   { id: "journey", label: "Your journey" },
@@ -305,6 +306,89 @@ function SectionNav() {
         );
       })}
     </nav>
+  );
+}
+
+/* ---------- Account (Google sign-in, cloud sync) ---------- */
+
+function AccountRows() {
+  const toast = useToast();
+  const [acc, setAcc] = useState<Account | null>(null);
+  const [error, setError] = useState("");
+  const [waiting, setWaiting] = useState(false); // the browser is on Google's sign-in page
+
+  useEffect(() => {
+    api.account().then(setAcc).catch((e) => setError((e as Error).message));
+  }, []);
+  // check back while signing in or syncing
+  const busy = waiting || !!acc?.sync.running;
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => {
+      api
+        .account()
+        .then((a) => {
+          setAcc(a);
+          if (a.user) setWaiting(false);
+        })
+        .catch(() => {});
+    }, 2000);
+    return () => clearInterval(t);
+  }, [busy]);
+
+  if (!acc) return <p className={`m-0 p-4 text-base ${error ? "text-danger" : "text-ink-soft"}`}>{error || "Checking account…"}</p>;
+  if (!acc.configured) {
+    return <p className="m-0 p-4 text-base text-ink-soft">Cloud sync isn&apos;t set up on this computer: add CLOUD_URL and GOOGLE_CLIENT_ID to .env in the data folder.</p>;
+  }
+
+  async function act(fn: () => Promise<Account>) {
+    try {
+      setAcc(await fn());
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
+
+  if (!acc.user) {
+    return (
+      <SettingRow title="Not signed in" hint={waiting ? "Finish signing in in your browser…" : "Sign in to keep your drafts, uploads and videos on every computer you use."}>
+        <Button
+          size="sm"
+          variant="primary"
+          loading={waiting}
+          onClick={async () => {
+            try {
+              await api.signInWithGoogle();
+              setWaiting(true);
+            } catch (e) {
+              toast((e as Error).message, "error");
+            }
+          }}
+        >
+          Sign in with Google
+        </Button>
+      </SettingRow>
+    );
+  }
+
+  const s = acc.sync;
+  const last = s.last ? new Date(s.last).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+  return (
+    <>
+      <SettingRow title={acc.user.name || acc.user.email} hint={acc.user.name ? acc.user.email : undefined}>
+        <Button size="sm" icon={<LogOut className="size-3.5" />} onClick={() => void act(api.signOut)}>
+          Sign out
+        </Button>
+      </SettingRow>
+      <SettingRow
+        title="Sync"
+        hint={s.running ? "Syncing…" : s.error ? s.error : last ? `${s.summary}. Last synced ${last}.` : "Not synced yet."}
+      >
+        <Button size="sm" loading={s.running} onClick={() => void act(api.syncNow)}>
+          Sync now
+        </Button>
+      </SettingRow>
+    </>
   );
 }
 
@@ -1381,6 +1465,9 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
             <p className="page-intro m-0 mt-1">Keys and accounts are saved on this computer only.</p>
             {error && <p className="m-0 mt-3 text-base text-danger">{error}</p>}
           </header>
+          <Section id="account" title="Account" intro="Sign in with Google to use your library on any computer. API keys and connected channels stay on each computer.">
+            <AccountRows />
+          </Section>
           <Section id="services" title="Services" intro="The AI and media services the studio uses. Changes apply right away, no restart needed.">
             {SERVICES.map((s) => (
               <ServiceRow
