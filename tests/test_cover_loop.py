@@ -350,6 +350,9 @@ def _clip(path, audio=False):
     return path.read_bytes()
 
 
+EDITABLE = {"scene.spec.json": b'{"version": 1}', "quality-report.json": b'{"ok": true}'}   # the editable part
+
+
 def _package(tmp_path, video, name="pack.zip", extra=(), **changes):
     """The ZIP Anim Studio makes for `video` (its manifest's video fields overridden by `changes`), opened for reading."""
     import hashlib
@@ -361,10 +364,13 @@ def _package(tmp_path, video, name="pack.zip", extra=(), **changes):
                 "video": {"file": "animation.mp4", "codec": "h264", "pixelFormat": "yuv420p", "colorSpace": "bt709",
                           "width": 64, "height": 36, "fps": 24, "frames": 24, "duration": 1, "audio": False,
                           "loop": True, "loopValidated": True, **changes},
-                "files": [{"path": "animation.mp4", "sha256": hashlib.sha256(video).hexdigest(), "bytes": len(video)}]}
+                "files": [{"path": n, "sha256": hashlib.sha256(d).hexdigest(), "bytes": len(d)}
+                          for n, d in (("animation.mp4", video), *EDITABLE.items())]}
     with zipfile.ZipFile(tmp_path / name, "w") as z:
         z.writestr("manifest.json", json.dumps(manifest))
         z.writestr("animation.mp4", video)
+        for n, d in EDITABLE.items():
+            z.writestr(n, d)
         for entry in extra:
             z.writestr(entry, b"x")
     return open(tmp_path / name, "rb")
@@ -488,3 +494,83 @@ def test_the_report_names_the_scene_a_render_used_and_flags_a_newer_one(tmp_path
     checks = []
     quality.animation_checks(checks, video, {})
     assert {c["detector"]: c for c in checks}["source.animation"]["status"] == "not_checked"
+
+
+@needs_ffmpeg
+def test_every_package_file_is_checked_and_each_version_is_kept_whole(tmp_path, monkeypatch):
+    import hashlib
+    import io
+    import json
+    import zipfile
+
+    from crcontent import coverloop
+
+    song = tmp_path / "song"
+    song.mkdir()
+    video = _clip(tmp_path / "a.mp4")
+    for bad, words in ((["notes.txt"], "doesn't list"),):   # a file the manifest doesn't list
+        with pytest.raises(ValueError, match=words):
+            coverloop.import_package(song, _package(tmp_path, video, extra=bad))
+
+    def remade(change):   # the fixture's package with its manifest or files changed by `change`
+        with zipfile.ZipFile(_package(tmp_path, video)) as good:
+            files = {n: good.read(n) for n in good.namelist()}
+        m = json.loads(files["manifest.json"])
+        change(m, files)
+        files["manifest.json"] = json.dumps(m).encode()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for n, d in files.items():
+                z.writestr(n, d)
+        buf.seek(0)
+        return buf
+    with pytest.raises(ValueError, match="Checksum mismatch: the package's scene.spec.json"):
+        coverloop.import_package(song, remade(lambda m, f: f.update({"scene.spec.json": b"{}"})))
+    with pytest.raises(ValueError, match="unexpected kind of file"):
+        coverloop.import_package(song, remade(lambda m, f: (f.update({"run.exe": b"x"}), m["files"].append(
+            {"path": "run.exe", "sha256": hashlib.sha256(b"x").hexdigest(), "bytes": 1}))))
+    assert not (song / coverloop.LOOP).exists() and coverloop.versions(song) == []
+
+    monkeypatch.setattr(coverloop, "KEEP", 2)
+    clips = [video + b"\0" * i for i in range(3)]   # three versions of the animation
+    for i, c in enumerate(clips):
+        coverloop.import_package(song, _package(tmp_path, c, name=f"v{i}.zip"))
+    kept = coverloop.versions(song)
+    assert [v["id"] for v in kept] == [hashlib.sha256(c).hexdigest()[:12] for c in clips[:0:-1]]   # newest 2
+    assert kept[0]["in_use"] and kept[0]["editable"] and not kept[1]["in_use"]
+    with zipfile.ZipFile(coverloop.package_file(song, kept[1]["id"])) as z:   # whole: Anim Studio can open it again
+        assert z.read("scene.spec.json") == EDITABLE["scene.spec.json"]
+
+    coverloop.restore(song, kept[1]["id"])
+    assert (song / coverloop.LOOP).read_bytes() == clips[1]
+    assert [v["in_use"] for v in coverloop.versions(song)].count(True) == 1
+    with pytest.raises(FileNotFoundError):
+        coverloop.restore(song, "../../etc")
+
+
+@needs_ffmpeg
+def test_a_kept_version_downloads_and_restores_over_the_api(tmp_path, monkeypatch):
+    import hashlib
+
+    from fastapi.testclient import TestClient
+
+    from crcontent import coverloop, lyricvideo, web
+    from neonmekong import pictures
+
+    song = tmp_path / "s"
+    song.mkdir()
+    (song / "song.json").write_text('{"title": "T", "sections": []}')
+    (song / "lyrics.lrc").write_text("[00:02.00]hello\n")
+    (song / "suno.txt").write_text("x")
+    monkeypatch.setattr(lyricvideo, "SONGS_DIR", tmp_path)
+    monkeypatch.setattr(pictures, "ai_prompts", lambda *a, **k: None)
+    first = _clip(tmp_path / "a.mp4")
+    coverloop.import_package(song, _package(tmp_path, first))
+    coverloop.import_package(song, _package(tmp_path, first + b"\0", name="v2.zip"))
+    old = hashlib.sha256(first).hexdigest()[:12]
+    c = TestClient(web.app)
+    r = c.get(f"/api/lyricvideo/s/loop/versions/{old}.zip")
+    assert r.status_code == 200 and r.content[:2] == b"PK"
+    assert c.get("/api/lyricvideo/s/loop/versions/000000000000.zip").status_code == 404
+    p = c.post(f"/api/lyricvideo/s/loop/versions/{old}").json()
+    assert next(v for v in p["loop_versions"] if v["id"] == old)["in_use"] and (song / "loop.mp4").read_bytes() == first

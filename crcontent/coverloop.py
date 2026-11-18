@@ -4,6 +4,7 @@ cover is in use and what the loop shows.
 
 loop.json = {"mode": "picture" | "animated", "prompt": "..."}; no file = animated whenever a loop exists.
 """
+import contextlib
 import json
 import math
 import os
@@ -89,7 +90,7 @@ def state(folder: Path, suggested: str) -> dict:
             "loop_prompt": m.get("prompt") or suggested,
             "loop_seconds": src["video"].get("duration", SECONDS) if src else SECONDS,   # an import loops on its own length
             "animation_source": src, "loop_previous": (Path(folder) / PREVIOUS).exists(),
-            "loop_pictures_over": bool(m.get("pictures_over")),
+            "loop_pictures_over": bool(m.get("pictures_over")), "loop_versions": versions(folder),
             "loop_effects": [e for e in m.get("effects", DEFAULT_EFFECTS) if e in EFFECTS],
             "effect_choices": _effect_labels(), "loop_motion": m.get("motion", "parallax"),
             "loop_intensity": m.get("intensity", INTENSITY), "loop_depth": m.get("depth", True),
@@ -696,6 +697,8 @@ SOURCE = "animation-source.json"            # the package the loop in use came f
 PREVIOUS = "loop.prev.mp4"                  # the loop the last import replaced, for rollback
 PREVIOUS_SOURCE = "animation-source.prev.json"
 PACKAGE_SCHEMA, PACKAGE_VERSION = "anim-studio.package", 1
+KINDS = {".mp4", ".json", ".png", ".jpg", ".jpeg", ".webp"}   # what a package may hold
+VERSIONS, KEEP = "animation", 5          # every imported package, whole (Anim Studio can open it again)
 MAX_IMPORT = 2 << 30                        # bytes, zipped and unzipped
 
 
@@ -775,18 +778,35 @@ def import_package(folder: Path, stream) -> None:
                     raise ValueError(f"That package is version {m.get('version')}; this CR Content reads version "
                                      f"{PACKAGE_VERSION}. Update CR Content.")
                 listed = {f.get("path"): f for f in m.get("files") or [] if isinstance(f, dict)}
-                want = listed.get(v.get("file"))
-                if not want or v["file"] not in z.namelist():
+                if not str(v.get("file", "")).endswith(".mp4") or v.get("file") not in listed:
                     raise ValueError("The package's manifest names a video that isn't in the package." + again)
-                digest = hashlib.sha256()
-                with z.open(v["file"]) as src, open(clip, "wb") as out:
-                    while chunk := src.read(1 << 20):
-                        digest.update(chunk)
-                        out.write(chunk)
+                names = set(z.namelist())
+                extra = sorted(names - set(listed) - {"manifest.json"})
+                if extra:
+                    raise ValueError(f"The package holds a file its manifest doesn't list ({extra[0][:80]!r})." + again)
+                odd = [x for x in listed if not isinstance(x, str) or not _safe(x) or Path(x).suffix.lower() not in KINDS]
+                if odd:
+                    raise ValueError(f"The package lists an unexpected kind of file ({str(odd[0])[:80]!r}), so nothing "
+                                     f"was imported.")
+                for x in (m.get("scene"), m.get("report")):
+                    if x and x not in listed:
+                        raise ValueError(f"The package's manifest names {x} but doesn't list it." + again)
+                for x, f in listed.items():   # every file, not just the video: the package is kept whole for editing
+                    if x not in names:
+                        raise ValueError(f"The package is missing {x}." + again)
+                    digest, size = hashlib.sha256(), 0
+                    with z.open(x) as src, (open(clip, "wb") if x == v["file"] else contextlib.nullcontext()) as out:
+                        while chunk := src.read(1 << 20):
+                            digest.update(chunk)
+                            size += len(chunk)
+                            if out:
+                                out.write(chunk)
+                    if digest.hexdigest() != f.get("sha256") or size != f.get("bytes", size):
+                        raise ValueError(f"Checksum mismatch: the package's {x} isn't the one its manifest describes."
+                                         + again)
+                video_sha = listed[v["file"]]["sha256"]
         except zipfile.BadZipFile:
             raise ValueError("That file isn't a readable ZIP package (a damaged download?)." + again)
-        if digest.hexdigest() != want.get("sha256"):
-            raise ValueError("Checksum mismatch: the package's video isn't the one its manifest describes." + again)
         got = _probe(clip)
         expect = {**v, "codec": "h264", "pixelFormat": "yuv420p", "audio": False}   # what the contract allows
         same = lambda k: (isinstance(expect.get(k), (int, float)) and abs(got[k] - expect[k]) <= 0.01) if k == "fps" \
@@ -806,13 +826,68 @@ def import_package(folder: Path, stream) -> None:
         st = (folder / LOOP).stat()
         (folder / SOURCE).write_text(json.dumps({
             "schema": m["schema"], "version": m["version"], "title": m.get("title", ""), "scene_id": m.get("sceneId"),
-            "exported_at": m.get("exportedAt"), "video": v, "sha256": digest.hexdigest(), "seam": joins,
+            "exported_at": m.get("exportedAt"), "video": v, "sha256": video_sha, "package": video_sha[:12], "seam": joins,
             "imported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "bytes": st.st_size, "mtime_ns": st.st_mtime_ns}), encoding="utf-8")
         save_meta(folder, mode="animated", seam=joins)
+        keep = folder / VERSIONS
+        keep.mkdir(exist_ok=True)
+        rec = json.loads((folder / SOURCE).read_text(encoding="utf-8"))
+        (keep / f"{rec['package']}.json").write_text(json.dumps(
+            {**rec, "editable": bool(m.get("scene") and m.get("scene") in listed)}), encoding="utf-8")
+        if not (keep / f"{rec['package']}.zip").exists():   # a restore reads that very file (open on Windows)
+            # shortcut: the id is the video's checksum, so a re-export with only scene edits keeps the first ZIP;
+            # key on the whole package's checksum if that matters
+            os.replace(pack, keep / f"{rec['package']}.zip")
+        _prune(folder)
     finally:
         pack.unlink(missing_ok=True)
         clip.unlink(missing_ok=True)
+
+
+def _version_file(folder: Path, vid: str, ext: str) -> Path:
+    """animation/<vid>.<ext>; FileNotFoundError for a bad id or a version that's gone."""
+    file = Path(folder) / VERSIONS / f"{vid}.{ext}"
+    if not re.fullmatch(r"[0-9a-f]{12}", vid) or not file.is_file():
+        raise FileNotFoundError("That animation version isn't kept any more.")
+    return file
+
+
+def versions(folder: Path) -> list[dict]:
+    """The imported packages kept for this song, newest import first."""
+    now = (source(folder) or {}).get("package")
+    out = []
+    for f in (Path(folder) / VERSIONS).glob("*.json"):
+        try:
+            r = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (f.with_suffix(".zip")).is_file():
+            out.append({"id": f.stem, "title": r.get("title", ""), "exported_at": r.get("exported_at"),
+                        "imported_at": r.get("imported_at"), "editable": r.get("editable", False),
+                        "duration": (r.get("video") or {}).get("duration"), "in_use": f.stem == now,
+                        "_at": f.stat().st_mtime_ns})   # imported_at is to the second only
+    out.sort(key=lambda r: r.pop("_at"), reverse=True)
+    return out
+
+
+def package_file(folder: Path, vid: str) -> Path:
+    """A kept package ZIP, to open in Anim Studio again."""
+    return _version_file(folder, vid, "zip")
+
+
+def restore(folder: Path, vid: str) -> None:
+    """A kept version as the loop again: checked in full, like a new import."""
+    with open(_version_file(folder, vid, "zip"), "rb") as f:
+        import_package(folder, f)
+
+
+def _prune(folder: Path) -> None:
+    """Only the newest KEEP versions stay (each holds a full video); the one in use always stays."""
+    for r in versions(folder)[KEEP:]:
+        if not r["in_use"]:
+            for ext in ("zip", "json"):
+                (Path(folder) / VERSIONS / f"{r['id']}.{ext}").unlink(missing_ok=True)
 
 
 def rollback(folder: Path) -> None:

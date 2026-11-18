@@ -161,6 +161,7 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
       picture={plan.cover ? songFileUrl(slug, plan.cover, bust) : ""}
       previewUrl={(file) => songFileUrl(slug, file, String(Date.now()))}
       musicAnalysisUrl={`${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/music-analysis`}
+      versionUrl={(id) => `${API_BASE}/api/lyricvideo/${encodeURIComponent(slug)}/loop/versions/${id}.zip`}
       calls={{
         saveRegions: (loop_regions) => api.editLyricPictures(slug, {}, {}, { loop_regions }),
         preview: async (regions) => { const r = await api.previewLyricLoop(slug, regions); return [r, r.preview] as const; },
@@ -173,6 +174,7 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
         upload: (f) => api.uploadLyricLoop(slug, f),
         importPackage: (f) => api.importLyricLoop(slug, f),
         rollback: () => api.rollbackLyricLoop(slug),
+        restoreVersion: (id) => api.restoreLyricLoopVersion(slug, id),
         reuse: (from) => api.copyLyricLoop(slug, from),
         remove: () => api.removeLyricLoop(slug),
       }} />

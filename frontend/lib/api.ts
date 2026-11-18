@@ -1288,6 +1288,7 @@ export interface CoverLoop {
   animation_source: { title: string; imported_at: string; video: { width: number; height: number; fps: number; loopValidated: boolean } } | null;
   loop_previous: boolean; // an import replaced a loop that can be brought back
   loop_pictures_over?: boolean; // section pictures cover an imported Anim Studio scene (songs only)
+  loop_versions?: { id: string; title: string; exported_at: string | null; imported_at: string | null; editable: boolean; duration: number | null; in_use: boolean }[]; // kept Anim Studio packages, newest first
   loop_effects: string[]; // what moves in a GPU loop
   effect_choices: Record<string, string>; // effect -> its label
   loop_motion: LoopMotion; // what the last GPU loop moved
@@ -1682,6 +1683,7 @@ export const api = {
     body.append("package", file);
     return request<LyricPictures>(`/api/lyricvideo/${slug}/loop/import`, { method: "POST", body, timeout: 600_000 });
   },
+  restoreLyricLoopVersion: (slug: string, id: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/loop/versions/${id}`, { method: "POST", timeout: 300_000 }),
   rollbackLyricLoop: (slug: string) => request<LyricPictures>(`/api/lyricvideo/${slug}/loop/rollback`, { method: "POST" }),
   importCoverLoop: (name: string, file: File) => {
     const body = new FormData();

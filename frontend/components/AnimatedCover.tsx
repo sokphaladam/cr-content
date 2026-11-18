@@ -36,6 +36,7 @@ export type CoverLoopCalls<T> = {
   upload: (file: File) => Promise<T>;
   importPackage: (file: File) => Promise<T>; // an Anim Studio package ZIP
   rollback: () => Promise<T>; // the loop the last import replaced
+  restoreVersion?: (id: string) => Promise<T>; // a kept Anim Studio package as the loop again
   reuse: (from: string) => Promise<T>;
   remove: () => Promise<T>;
 };
@@ -45,7 +46,7 @@ export type CoverLoopCalls<T> = {
  * brought to life (free), drawn by Gemini as moving artwork (one request), your own clip, or reused from another song
  * (both editors' songs). Laid out like a picture's card.
  */
-export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disabled, hasPicture = false, picture = "", previewUrl, musicAnalysisUrl }: {
+export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disabled, hasPicture = false, picture = "", previewUrl, musicAnalysisUrl, versionUrl }: {
   state: CoverLoop;
   src: string; // the loop's url ("" = none yet)
   calls: CoverLoopCalls<T>;
@@ -56,6 +57,7 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
   picture?: string; // the cover picture's url (the living editor draws on it)
   previewUrl?: (file: string) => string; // a file in the song folder as a url
   musicAnalysisUrl?: string; // the song's beats/sections for Anim Studio (songs only)
+  versionUrl?: (id: string) => string; // a kept package's ZIP (songs only)
 }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -138,6 +140,24 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
             From Anim Studio: {state.animation_source.title || "untitled"}, {state.animation_source.video.width}×{state.animation_source.video.height} at {state.animation_source.video.fps} fps, imported {new Date(state.animation_source.imported_at).toLocaleString()}
             {!state.animation_source.video.loopValidated && <span className="text-amber-600"> Its loop check did not pass in Anim Studio.</span>}
           </div>
+        )}
+        {versionUrl && !!state.loop_versions?.length && (
+          <details className="text-xs">
+            <summary className="cursor-pointer text-ink-soft">Anim Studio versions ({state.loop_versions.length} kept)</summary>
+            <ul className="m-0 mt-1 grid list-none gap-1 p-0">
+              {state.loop_versions.map((v) => (
+                <li key={v.id} className="flex flex-wrap items-center gap-x-2">
+                  <span className={v.in_use ? "font-semibold" : ""}>{v.title || "untitled"}</span>
+                  <span className="text-ink-soft">{v.duration}s loop, imported {v.imported_at ? new Date(v.imported_at).toLocaleString() : "?"}{v.in_use ? " · in use" : ""}</span>
+                  {v.editable && <a className="text-cobalt underline" href={versionUrl(v.id)} download title="The whole package: open it in Anim Studio to edit the scene">Download</a>}
+                  {!v.in_use && calls.restoreVersion && (
+                    <button type="button" className="text-cobalt underline disabled:opacity-50" disabled={off}
+                      onClick={() => void run(() => calls.restoreVersion!(v.id), "Checking that version again.")}>Use this</button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
         {src && state.loop_motion === "character" && state.loop_changed != null && state.loop_changed > state.loop_change_max && (
           <div className="text-xs text-amber-600">

@@ -592,6 +592,29 @@ def rollback_loop(slug: str):
     return _pictures(folder)
 
 
+@router.get("/api/lyricvideo/{slug}/loop/versions/{vid}.zip")
+def loop_version_file(slug: str, vid: str):
+    """A kept Anim Studio package, whole, to open in Anim Studio again."""
+    from fastapi.responses import FileResponse
+    from . import coverloop
+
+    try:
+        file = coverloop.package_file(_folder(slug), vid)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    return FileResponse(file, media_type="application/zip", filename=f"{slug}-{vid}.zip")
+
+
+@router.post("/api/lyricvideo/{slug}/loop/versions/{vid}")
+def restore_loop_version(slug: str, vid: str):
+    """A kept Anim Studio version as the animated cover again (checked like a new import)."""
+    from . import coverloop
+
+    folder = _folder(slug)
+    _loop_call(folder, lambda: coverloop.restore(folder, vid))
+    return _pictures(folder)
+
+
 @router.get("/api/lyricvideo/{slug}/music-analysis")
 def music_analysis(slug: str):
     """The song's tempo, beats and sections as music-analysis.json for Anim Studio (no audio, no new analysis)."""
