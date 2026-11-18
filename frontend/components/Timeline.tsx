@@ -453,7 +453,7 @@ export function Timeline({
                       onKeyDown={(e) => e.key === "Enter" && onActive(s.uid)}
                       onPointerDown={(e) => begin(e, { kind: "scene", uid: s.uid, x: e.clientX, over: seg.index })}
                       className={`absolute top-0 h-full cursor-grab overflow-hidden rounded-md border-2 bg-[#222b3b] ${
-                        s.uid === activeUid ? "border-cobalt" : "border-panel"
+                        s.uid === activeUid ? "border-mark" : "border-panel"
                       } ${dragged ? "opacity-60" : ""}`}
                       style={{
                         left: seg.start * pps,

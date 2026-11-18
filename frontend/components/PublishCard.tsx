@@ -491,7 +491,7 @@ export function PublishCard({ detail, onOpenSettings }: { detail: VideoDetail; o
   return (
     <section aria-labelledby={`publish-${detail.name}`} className="mx-auto w-full max-w-[300px] card [&_.grid]:grid-cols-[minmax(0,1fr)] [&_select]:max-w-full [&_select]:min-w-0">
       <header className="flex items-center justify-between gap-2 px-3.5 pt-3 pb-2">
-        <h3 id={`publish-${detail.name}`} className="m-0 font-display text-md font-bold">
+        <h3 id={`publish-${detail.name}`} className="block-title">
           Upload
         </h3>
         {connected.length > 1 && (

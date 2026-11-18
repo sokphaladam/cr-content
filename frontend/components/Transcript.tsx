@@ -277,7 +277,7 @@ export function Transcript({
           const atPlayhead = pos.i === seg.index && (playing || pos.t > 0);
           return (
             <section key={s.uid} aria-label={`Scene ${seg.index + 1}`}>
-              <h3 className="m-0 mb-0.5 flex items-center gap-2 text-xs leading-5 font-semibold tracking-wide text-ink-soft uppercase">
+              <h3 className="group-label m-0 mb-0.5 flex items-center gap-2">
                 <button type="button" className="cursor-pointer bg-transparent p-0 uppercase hover:text-ink" onClick={() => onActive(s.uid)}>
                   Scene {seg.index + 1}
                 </button>

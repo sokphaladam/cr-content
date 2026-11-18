@@ -55,7 +55,7 @@ export function UpdateNotice() {
       {busy ? (
         <div className="grid gap-1">
           <div role="progressbar" aria-label="Downloading the update" aria-valuenow={Math.round(pct)} className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
-            <div className={`h-full rounded-full bg-cobalt transition-[width] ${u.progress?.total ? "" : "w-1/3 animate-pulse"}`} style={u.progress?.total ? { width: `${pct}%` } : undefined} />
+            <div className={`h-full rounded-full bg-mark transition-[width] ${u.progress?.total ? "" : "w-1/3 animate-pulse"}`} style={u.progress?.total ? { width: `${pct}%` } : undefined} />
           </div>
           <span className="text-sm text-ink-soft tabular-nums">
             {u.status === "installing"

@@ -372,7 +372,7 @@ export function LyricTimeline({
               const isSel = l.uid === selected;
               const singing = s <= now && now <= e;
               const tone = isSel
-                ? "border-cobalt bg-cobalt text-white"
+                ? "border-mark-deep bg-mark text-on-mark"
                 : l.check
                   ? "border-warn/70 bg-warn/20 text-ink"
                   : "border-cobalt/40 bg-cobalt/15 text-ink hover:border-cobalt/80";

@@ -11,7 +11,7 @@ const QUICK_DELAY_MS = 1200; // quick checks re-run this long after the last edi
 function Header({ children }: { children: React.ReactNode }) {
   return (
     <div className="grid gap-1">
-      <h3 className="m-0 flex items-center gap-1.5 text-base font-bold">
+      <h3 className="block-title flex items-center gap-1.5">
         <ClipboardCheck className="size-4 text-cobalt" aria-hidden /> Pre-render check
         <span className="rounded bg-sunken px-1.5 text-2xs font-semibold tracking-wide text-ink-soft uppercase">Project</span>
       </h3>

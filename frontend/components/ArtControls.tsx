@@ -52,7 +52,7 @@ export function DownloadProgress({ progress, label }: { progress: ArtStatus["sty
         aria-valuenow={pct}
         className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]"
       >
-        <div className="h-full rounded-full bg-cobalt transition-[width] duration-300 ease-linear" style={{ width: `${exact}%` }} />
+        <div className="h-full rounded-full bg-mark transition-[width] duration-300 ease-linear" style={{ width: `${exact}%` }} />
       </div>
       <span className="text-sm text-ink-soft tabular-nums">
         {gb(progress.done)} of {progress.total ? `${gb(progress.total)} GB · ${pct}%` : "about 7 GB"}
@@ -71,7 +71,7 @@ export function AddonProgress({ addon }: { addon: NonNullable<ArtStatus["addon"]
   return (
     <div className="grid w-full max-w-[420px] gap-1">
       <div role="progressbar" aria-label="Installing the AI add-on" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.floor(pct)} className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
-        <div className={`h-full rounded-full bg-cobalt transition-[width] duration-300 ease-linear ${addon.total ? "" : "w-1/3 animate-pulse"}`} style={addon.total ? { width: `${pct}%` } : undefined} />
+        <div className={`h-full rounded-full bg-mark transition-[width] duration-300 ease-linear ${addon.total ? "" : "w-1/3 animate-pulse"}`} style={addon.total ? { width: `${pct}%` } : undefined} />
       </div>
       <span className="text-sm text-ink-soft tabular-nums">
         {addon.stage || "Starting…"}
@@ -274,7 +274,7 @@ export function ScenePicture({
               aria-pressed={on}
               onClick={() => onChange({ effects: on ? effects.filter((x) => x !== e) : [...effects, e] })}
               className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded-full border px-2.5 text-sm font-semibold transition-colors ${
-                on ? "border-cobalt bg-cobalt/10 text-cobalt" : "border-line bg-panel text-ink-soft hover:border-line-strong hover:text-ink"
+                on ? "border-mark-deep bg-mark-soft text-ink" : "border-line bg-panel text-ink-soft hover:border-line-strong hover:text-ink"
               }`}
             >
               {on && <Sparkles className="size-3" aria-hidden />}

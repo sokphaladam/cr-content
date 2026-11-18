@@ -13,7 +13,8 @@ def test_profile_themes():
     h = profiles.theme_captions(HISTORY, "en")
     assert (h.color, h.highlight, h.keyword, h.headline_color, h.hook_fill) == \
         ("#D6C9AC", "#B99A60", "#76AFA7", "#F0E8D8", "#B99A60")
-    assert HISTORY.headline_font_preferences[0] == "Bebas Neue" and WILDLIFE.headline_font_preferences[0] == "Anton"
+    assert (HISTORY.headline_font_preferences[0], HISTORY.caption_font_preferences[0]) == ("Cinzel", "Inter")
+    assert (WILDLIFE.headline_font_preferences[0], WILDLIFE.caption_font_preferences[0]) == ("Anton", "Montserrat")
     assert profiles.theme_captions(None, "en") == CaptionStyle()
 
 

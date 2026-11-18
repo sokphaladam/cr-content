@@ -67,6 +67,7 @@ export interface ChannelProfile {
   caption_defaults: Partial<CaptionStyle>; // the look a new project starts from; {} = the general captions
   caption_font_preferences: string[]; // first installed one wins
   headline_font_preferences: string[];
+  emphasis_font_preferences: string[]; // the keyword words in captions
 }
 
 /** The Director Plan of a Script-to-Video project (crcontent/director_plan.py). */
@@ -302,6 +303,7 @@ export interface CaptionStyle {
   case: "as_is" | "upper" | "lower";
   words: number; // shown together; 0 = the language's default
   headline_font: string; // "" = the caption font
+  emphasis_font: string; // the keyword words' font; "" = the caption font
   headline_color: string;
   headline_background: string; // ~90% opaque behind regular headlines
   hook_fill: string; // the opening hook's card
@@ -320,6 +322,7 @@ export const DEFAULT_CAPTIONS: CaptionStyle = {
   case: "as_is",
   words: 0,
   headline_font: "",
+  emphasis_font: "",
   headline_color: "#FFFFFF",
   headline_background: "#000000",
   hook_fill: "#FFFFFF",
@@ -1051,6 +1054,14 @@ export interface Account {
   sync: { running: boolean; last: string; error: string; summary: string; stage: "" | "checking" | "syncing" | "stopping"; done: number; total: number }; // done/total: files in this stage
 }
 
+/** A caption font the app can download (crcontent/fonts.py). */
+export interface CaptionFont {
+  family: string;
+  installed: boolean; // in the app's fonts folder or the OS
+  used_by: string[]; // "Hidden History Files headline"
+  weight: string; // the cut captions use: "Medium", "ExtraBold"
+}
+
 /** Where the library lives (crcontent/locations.py). */
 export interface Locations {
   data: string;
@@ -1765,6 +1776,9 @@ export const api = {
   signOut: () => request<Account>("/api/account/sign-out", { method: "POST" }),
   syncNow: () => request<Account>("/api/account/sync", { method: "POST" }),
   stopSync: () => request<Account>("/api/account/sync/stop", { method: "POST" }),
+  fonts: () => request<CaptionFont[]>("/api/fonts"),
+  downloadFont: (family: string) => request<{ family: string; installed: boolean }>("/api/fonts/download", { method: "POST", json: { family }, timeout: 0 }),
+  fontFaces: () => request<{ family: string; url: string }[]>("/api/fonts/faces"),
   // moving a big library to another drive takes a while: no time limit
   moveLocations: (data: string, videos: string) =>
     request<Locations & { left_behind: number; restarting: boolean }>("/api/settings/locations", { method: "PUT", json: { data, videos }, timeout: 0 }),

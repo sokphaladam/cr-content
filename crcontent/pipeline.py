@@ -2202,8 +2202,11 @@ def make_video(topic: str | None = None, *, script_path: Path | None = None, lan
     style = script.captions.clean(lang)
     (work / "captions.ass").write_text(build_ass(caption_scenes, profile, style, overlays), encoding="utf-8")
     _install_font(profile, work / "fonts")
-    if style.font:
-        _install_font(profile, work / "fonts", style.font_file(lang))
+    # every face the captions name (caption, headline, emphasis): one kept only in the app's fonts folder would
+    # otherwise fall back to a plain font in the render
+    from .styles import FONTS
+    for family in {style.font, style.headline_font, style.emphasis_font} - {""}:
+        _install_font(profile, work / "fonts", FONTS.get(lang, FONTS["en"]).get(family, ""))
     # the timeline's graphics clips (M4), laid over the picture at the times the editor shows them
     from . import timeline
     from .shorts import motion

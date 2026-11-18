@@ -1,4 +1,4 @@
-// Appearance preferences (Settings → Appearance): theme and interface size, plus the dragged pane widths, kept in
+// Appearance preferences (Settings → Appearance): theme, interface size and click sparks, plus the dragged pane widths, kept in
 // this browser / app window. layout.tsx applies theme and size before the first paint (lib/appearanceScript.ts).
 "use client";
 
@@ -7,6 +7,8 @@ import { SIZE_KEY, THEME_KEY } from "./appearanceScript";
 
 export type Theme = "system" | "light" | "dark";
 export type UiSize = "compact" | "default" | "large";
+export type Effects = "on" | "off";
+const FX_KEY = "shorts-studio.fx";
 
 const CHANGE = "shorts-studio:pref";
 
@@ -44,6 +46,7 @@ function usePref(key: string, fallback: string) {
 export function useAppearance() {
   const theme = usePref(THEME_KEY, "system") as Theme;
   const size = usePref(SIZE_KEY, "default") as UiSize;
+  const effects = usePref(FX_KEY, "on") as Effects;
   const setTheme = useCallback((t: Theme) => {
     write(THEME_KEY, t);
     const dark = t === "dark" || (t === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -53,7 +56,8 @@ export function useAppearance() {
     write(SIZE_KEY, s);
     document.documentElement.dataset.size = s;
   }, []);
-  return { theme, setTheme, size, setSize };
+  const setEffects = useCallback((e: Effects) => write(FX_KEY, e), []);
+  return { theme, setTheme, size, setSize, effects, setEffects };
 }
 
 /** A pane width the user can drag, remembered between sessions. Mid-drag (done = false) only the live width changes;

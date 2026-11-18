@@ -116,7 +116,7 @@ export function HighlightsCard({ detail, onSelectVideo, onVideosChanged }: {
   return (
     <section aria-label="Smart Highlights" className="mx-auto grid w-full max-w-[300px] gap-3 card p-3.5">
       <div className="grid gap-1">
-        <h3 className="m-0 flex items-center gap-1.5 text-base font-bold">
+        <h3 className="block-title flex items-center gap-1.5">
           <Scissors className="size-4 text-cobalt" aria-hidden /> Smart Highlights
         </h3>
         <p className="m-0 text-sm text-ink-soft">
@@ -147,7 +147,7 @@ export function HighlightsCard({ detail, onSelectVideo, onVideosChanged }: {
       {running && (
         <div className="grid gap-1.5" aria-live="polite">
           <div role="progressbar" aria-label="Finding highlights" aria-valuemin={0} aria-valuemax={STEPS.length} aria-valuenow={step} className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
-            <div className="h-full rounded-full bg-cobalt transition-[width] duration-300 ease-linear" style={{ width: `${Math.max(4, (Math.max(step - 1, 0) / STEPS.length) * 100)}%` }} />
+            <div className="h-full rounded-full bg-mark transition-[width] duration-300 ease-linear" style={{ width: `${Math.max(4, (Math.max(step - 1, 0) / STEPS.length) * 100)}%` }} />
           </div>
           <span className="text-sm font-semibold">
             {job?.status === "queued" || step === 0 ? "Waiting for the renderer…" : `${step}/${STEPS.length} · ${STEPS[step - 1]}`}

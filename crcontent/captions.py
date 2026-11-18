@@ -65,7 +65,7 @@ def _balance(words: list[str], lines: int, width) -> list[str]:
 
 def caption_styles(profile: LangProfile, style: "CaptionStyle", size: tuple[int, int] = (WIDTH, HEIGHT)) -> str:
     """The Caption and Headline style lines for `style` (see styles.CaptionStyle)."""
-    from .styles import ass_color
+    from .styles import ass_color, ass_weight
 
     W, _ = size
     font = style.font or profile.font_name
@@ -87,8 +87,8 @@ def caption_styles(profile: LangProfile, style: "CaptionStyle", size: tuple[int,
     head_font = style.headline_font or font
     head_c = ass_color(style.headline_color)
     # margins: the wrap width; the right one keeps clear of the platforms' like / comment buttons (~120 px)
-    return (f"Style: Caption,{font},{px},{base},{base},{out_c},{back_c},-1,0,0,0,100,100,0,0,{border},{outline},{shadow},5,110,120,0,1\n"
-            f"Style: Headline,{head_font},{head},{head_c},{head_c},&HFF000000&,{ass_color(style.headline_background, 0x1A)},-1,0,0,0,100,100,0,0,4,{round(head * 0.35)},0,8,80,80,0,1")
+    return (f"Style: Caption,{font},{px},{base},{base},{out_c},{back_c},{ass_weight(font)},0,0,0,100,100,0,0,{border},{outline},{shadow},5,110,120,0,1\n"
+            f"Style: Headline,{head_font},{head},{head_c},{head_c},&HFF000000&,{ass_color(style.headline_background, 0x1A)},{ass_weight(head_font)},0,0,0,100,100,0,0,4,{round(head * 0.35)},0,8,80,80,0,1")
 
 
 def build_ass(scenes: list[tuple], profile: LangProfile, style: "CaptionStyle | None" = None,
@@ -96,7 +96,7 @@ def build_ass(scenes: list[tuple], profile: LangProfile, style: "CaptionStyle | 
     """scenes: (scene_start, scene_end, words with times relative to scene_start, on_screen_text[, keywords]).
     Drawn in `style` (styles.CaptionStyle): the spoken word in its highlight colour, keywords (voiceover.keyword()
     form) in its keyword colour, the rest in its text colour. `extra`: more Dialogue lines (text overlays)."""
-    from .styles import CaptionStyle, ass_color, is_light
+    from .styles import CaptionStyle, ass_color, ass_weight, is_light
     from .voiceover import keyword
 
     style = (style or CaptionStyle()).clean(profile.code)
@@ -120,7 +120,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {caption_styles(profile, style)}
 Style: Overlay,{style.font or profile.font_name},{profile.font_size},&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,{round(profile.font_size * 6 / 92)},2,5,40,40,0,1
-Style: Hook,{style.headline_font or style.font or profile.font_name},{hook_px},{hook_ink},{hook_ink},&H00FFFFFF&,&H00FFFFFF&,-1,0,0,0,100,100,0,0,3,{round(hook_px * 0.22)},0,8,70,70,0,1
+Style: Hook,{style.headline_font or style.font or profile.font_name},{hook_px},{hook_ink},{hook_ink},&H00FFFFFF&,&H00FFFFFF&,{ass_weight(style.headline_font or style.font or profile.font_name)},0,0,0,100,100,0,0,3,{round(hook_px * 0.22)},0,8,70,70,0,1
 Style: OverlayBox,{style.font or profile.font_name},{profile.font_size},&H00FFFFFF&,&H00FFFFFF&,&H33000000&,&H33000000&,-1,0,0,0,100,100,0,0,3,{round(profile.font_size * 14 / 92)},0,5,40,40,0,1
 
 [Events]
@@ -130,6 +130,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     cap_y = round(HEIGHT * style.y)
     head_y = round(HEIGHT * style.headline_y)
     n = style.words or profile.words_per_caption
+    base_font = style.font or profile.font_name
+    emph = style.emphasis_font if style.emphasis_font not in ("", base_font) else ""
     for si, (scene_start, scene_end, words, headline, *rest) in enumerate(scenes):
         keywords = rest[0] if rest else set()
         if headline and si == 0:  # the hook pops in on the very first frame
@@ -154,7 +156,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     # group's pop instead); the word after it is set back to 100% so the bump stays on that word
                     scale = (r"\fscx100\fscy100\t(0,60,\fscx106\fscy106)\t(60,160,0.6,\fscx100\fscy100)"
                              if wj == wi and wi > 0 else r"\fscx100\fscy100" if wj == wi + 1 and wi > 0 else "")
-                    parts.append(f"{{\\c{color}{scale}}}{_esc(_case(w.text, style.case, profile.code))}")
+                    # an emphasised word (a keyword) in the emphasis font; the word after it goes back to the caption font
+                    face = ""
+                    if emph:
+                        if keyword(w.text) in keywords:
+                            face = rf"\fn{emph}\b{ass_weight(emph)}"
+                        elif wj > 0 and keyword(group[wj - 1].text) in keywords:
+                            face = rf"\fn{base_font}\b{ass_weight(base_font)}"
+                    parts.append(f"{{\\c{color}{scale}{face}}}{_esc(_case(w.text, style.case, profile.code))}")
                 # each group pops in: 80% -> 108% -> 100% over 130 ms
                 pop = (r"{\fscx80\fscy80\t(0,80,0.7,\fscx108\fscy108)\t(80,130,\fscx100\fscy100)}"
                        if wi == 0 else "")

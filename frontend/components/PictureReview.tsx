@@ -64,7 +64,7 @@ export function PictureReview({
   return (
     <div className="fixed inset-0 z-50 grid place-items-center p-3" role="dialog" aria-modal="true" aria-label="Draw pictures one by one">
       <div className="absolute inset-0 bg-ink/50" onClick={() => !drawing && onClose()} />
-      <div className="relative flex max-h-[94vh] w-[min(560px,96vw)] flex-col overflow-hidden rounded-xl bg-paper shadow-2xl">
+      <div className="relative flex max-h-[94vh] w-[min(560px,96vw)] flex-col overflow-hidden rounded-xl bg-paper shadow-(--shadow-pop)">
         <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-line bg-panel px-3.5">
           <span className="font-display text-lg font-bold tabular-nums">
             Picture {index + 1} of {items.length} <span className="text-sm font-normal text-ink-soft">· {drawn} drawn</span>

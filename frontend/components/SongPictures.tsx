@@ -215,7 +215,7 @@ export function SongPictures({
         </p>
       )}
       {stale && (
-        <p className="m-0 rounded-md bg-amber-500/10 px-2 py-1.5 text-sm text-ink">
+        <p className="m-0 rounded-md bg-warn/10 px-2 py-1.5 text-sm text-ink">
           You changed the look, the number of pictures, the idea or its shot list since these were planned. Plan again to see the new pictures, otherwise Make video will plan
           them itself (one Gemini call) without you checking them.
         </p>
@@ -261,7 +261,7 @@ export function SongPictures({
           </div>
           {drawingAll && (
             <div role="progressbar" aria-label="Drawing the pictures" aria-valuemin={0} aria-valuemax={plan.slots.length} aria-valuenow={drawn} className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
-              <div className="h-full rounded-full bg-cobalt transition-[width] duration-300" style={{ width: `${(drawn / plan.slots.length) * 100}%` }} />
+              <div className="h-full rounded-full bg-mark transition-[width] duration-300" style={{ width: `${(drawn / plan.slots.length) * 100}%` }} />
             </div>
           )}
         </>

@@ -347,7 +347,7 @@ def sync_in_background() -> bool:
                 traceback.print_exc()
             status["error"] = str(e)
         finally:
-            status.update(running=False, last=datetime.now().isoformat(timespec="seconds"))
+            status.update(running=False, stage="", last=datetime.now().isoformat(timespec="seconds"))
 
     threading.Thread(target=run, daemon=True).start()
     return True

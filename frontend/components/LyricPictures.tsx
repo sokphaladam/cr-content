@@ -24,7 +24,7 @@ function DrawProgress({ st }: { st: LyricDrawStatus }) {
   return (
     <div role="progressbar" aria-label="Drawing" aria-valuemin={0} aria-valuemax={100} aria-valuenow={known ? Math.round(pct) : undefined} className="grid gap-1">
       <div className="h-2 overflow-hidden rounded-full bg-line">
-        <div className={`h-full rounded-full bg-cobalt transition-[width] duration-300 ${known ? "" : "w-1/3 animate-pulse"}`} style={known ? { width: `${pct}%` } : undefined} />
+        <div className={`h-full rounded-full bg-mark transition-[width] duration-300 ${known ? "" : "w-1/3 animate-pulse"}`} style={known ? { width: `${pct}%` } : undefined} />
       </div>
       <div className="text-xs text-ink-soft tabular-nums">{st.text || "Working…"}{known ? ` · ${Math.round(pct)}%` : ""}</div>
     </div>
@@ -291,7 +291,7 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
       )}
       <section className="grid gap-3" aria-labelledby="cover-title">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 id="cover-title" className="m-0 text-base font-semibold">Cover <span className="font-normal text-ink-soft">(background and thumbnail)</span></h3>
+          <h3 id="cover-title" className="block-title">Cover <span className="font-normal text-ink-soft">(background and thumbnail)</span></h3>
           <CoverSwitch mode={mode} onChange={setMode} disabled={!!busy} />
         </div>
         <div className="grid gap-3">
@@ -318,7 +318,7 @@ export function LyricPicturesCard({ slug, onTest, onChanged }: { slug: string; o
       </section>
       <section className="grid gap-2" aria-label="Camera motion">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="m-0 text-base font-semibold">Camera motion <span className="font-normal text-ink-soft">(how each picture moves behind the lyrics)</span></h3>
+          <h3 className="block-title">Camera motion <span className="font-normal text-ink-soft">(how each picture moves behind the lyrics)</span></h3>
           <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} disabled={!!busy}
             title="Set every move to what suits it (verses push in, choruses pull out, bridges pan)"
             onClick={() => void run("motion", async () => saved(await api.suggestLyricMotions(slug)))}>Suggest camera moves</Button>

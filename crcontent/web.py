@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import addons, art, campaigns, cloud, director_plan, drafts, locations, profiles, lyricvideo, music, packaging, publish, quality, quality_preview, rights, schedule, sheet, voiceover
+from . import addons, art, campaigns, cloud, director_plan, drafts, fonts, locations, profiles, lyricvideo, music, packaging, publish, quality, quality_preview, rights, schedule, sheet, voiceover
 from .history.models import ResearchBrief as ResearchBriefModel
 from .config import ASSETS_DIR, CACHE_DIR, CODE_DIR, DRAFTS_DIR, LANGS, OUTPUT_DIR, ROOT, SCENE_PAD_SEC, frame_size
 from .lyrics import SongScript, generate_song, suggest_video_ideas
@@ -34,7 +34,7 @@ from .render import duration, run as run_ffmpeg
 from .importer import import_script
 from .script import VideoScript, generate_script, suggest_queries, suggest_topics, translate_script
 from .song import elevenlabs_key
-from .styles import caption_catalog, catalog as style_catalog
+from .styles import FONTS, caption_catalog, catalog as style_catalog
 from .tts import is_voice, list_voices, synthesize
 from .visuals import IMAGE_EXTS, VIDEO_EXTS, FootagePicker, download_stock, project_path, search, stock_source
 
@@ -4296,6 +4296,28 @@ def delete_video(name: str):
     shutil.rmtree(_video_dir(name))
     schedule.forget_video(name)
     return {"deleted": name}
+
+
+@app.get("/api/fonts")
+def fonts_list():
+    return fonts.catalog()
+
+
+@app.post("/api/fonts/download")
+def fonts_download(req: dict):
+    try:
+        return fonts.download(str(req.get("family", "")))
+    except fonts.FontError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/fonts/faces")
+def font_faces():
+    """The caption fonts kept in the app's own fonts folder (not installed in the OS), so the live preview can load
+    them: [{family, url}]. Only families the captions know (styles.FONTS)."""
+    files = {file: name for faces in FONTS.values() for name, file in faces.items()}
+    folder = ASSETS_DIR / "fonts"
+    return [{"family": files[f.name], "url": f"/assets/fonts/{f.name}"} for f in sorted(folder.glob("*")) if f.name in files]
 
 
 lyricvideo.SONGS_DIR.mkdir(exist_ok=True)

@@ -26,11 +26,13 @@ FONTS: dict[str, dict[str, str]] = {
         "Rockwell Extra Bold": "ROCKEB.TTF",
         "Showcard Gothic": "SHOWG.TTF",
         # the channel profiles' brand faces (Google Fonts; listed only when installed)
-        "Inter": "Inter-Bold.ttf",
-        "Montserrat": "Montserrat-Bold.ttf",
+        "Inter": "Inter-Medium.ttf",
+        "Montserrat": "Montserrat-Medium.ttf",
         "Anton": "Anton-Regular.ttf",
         "Bebas Neue": "BebasNeue-Regular.ttf",
         "Cormorant Garamond": "CormorantGaramond-Bold.ttf",
+        "Cinzel": "Cinzel-ExtraBold.ttf",
+        "Oswald": "Oswald-Bold.ttf",
     },
     "km": {
         "Khmer OS Battambang": "KhmerOSbattambang.ttf",
@@ -57,6 +59,17 @@ MAC_FILES: dict[str, str] = {
     "verdanab.ttf": "Verdana Bold.ttf",
     "comicbd.ttf": "Comic Sans MS Bold.ttf",
 }
+
+
+# The weight each brand face is drawn at (its file is cut at this weight; see fonts.py). Any other font is drawn
+# bold, as before. libass takes the number as the style's weight, so it never thickens a face that has no bold.
+FONT_WEIGHTS = {"Inter": 500, "Montserrat": 500, "Cinzel": 800, "Oswald": 700, "Anton": 400, "Bebas Neue": 400,
+                "Cormorant Garamond": 700}
+
+
+def ass_weight(family: str) -> int:
+    """The Bold field / \b value for `family` in subtitles: its weight, or -1 (bold) for fonts not listed."""
+    return FONT_WEIGHTS.get(family, -1)
 
 
 def font_dirs() -> list[Path]:
@@ -297,6 +310,7 @@ class CaptionStyle(BaseModel):
     case: str = "as_is"
     words: int = 0  # words shown together; 0 = the language's default
     headline_font: str = ""  # "" = the caption font
+    emphasis_font: str = ""  # the keyword words' font; "" = the caption font
     headline_color: str = "#FFFFFF"
     headline_background: str = "#000000"  # drawn ~90% opaque behind regular scene headlines
     hook_fill: str = "#FFFFFF"  # the opening hook's card; its text is dark or light to contrast with it
@@ -317,6 +331,7 @@ class CaptionStyle(BaseModel):
         fonts = available_fonts(lang)
         s.font = s.font if s.font in fonts else ""
         s.headline_font = s.headline_font if s.headline_font in fonts else ""
+        s.emphasis_font = s.emphasis_font if s.emphasis_font in fonts else ""
         return s
 
     def font_file(self, lang: str) -> str:

@@ -841,7 +841,7 @@ export function Storyboard({
     media: (
       <>
         <MediaBin scenes={draft.scenes} activeUid={activeUid} activeItem={activeItem} onActive={activate} onSelectItem={selectItem} />
-        <h3 className="m-0 border-t border-line px-3 pt-3 text-xs font-semibold tracking-wide text-ink-soft uppercase">Graphics: click to add at the playhead</h3>
+        <h3 className="group-label m-0 border-t border-line px-3 pt-3">Graphics: click to add at the playhead</h3>
         <GraphicsBin lang={draft.lang} onAdd={addGraphic} />
       </>
     ),
@@ -1175,12 +1175,13 @@ function PanelTabs<T extends string>({
             role="tab"
             aria-selected={active}
             onClick={() => onChange(it.value)}
+            title={it.label}
             className={`-mb-px flex min-w-[40px] flex-1 cursor-pointer flex-col items-center gap-0.5 border-b-2 bg-transparent px-1 pt-2 pb-1.5 text-2xs font-semibold transition-colors ${
-              active ? "border-cobalt text-ink" : "border-transparent text-ink-soft hover:text-ink"
+              active ? "border-mark text-ink" : "border-transparent text-ink-soft hover:text-ink"
             }`}
           >
             {it.icon}
-            <span className="truncate">{it.label}</span>
+            <span className="max-w-full truncate">{it.label}</span>
           </button>
         );
       })}
@@ -1275,7 +1276,7 @@ function SceneBin({
                 onClick={() => onActive(s.uid)}
                 aria-current={active ? "true" : undefined}
                 className={`flex w-full cursor-pointer items-start gap-2.5 rounded-lg border p-1.5 text-left transition-colors ${
-                  active ? "border-cobalt/60 bg-cobalt/[0.08]" : "border-transparent bg-transparent hover:bg-ink/[0.04]"
+                  active ? "border-mark-deep bg-mark-soft" : "border-transparent bg-transparent hover:bg-ink/[0.04]"
                 }`}
               >
                 <span className="relative aspect-[9/16] w-10 shrink-0 overflow-hidden rounded bg-media">
@@ -1297,7 +1298,7 @@ function SceneBin({
                   )}
                 </span>
               </button>
-              <div className="absolute right-1 bottom-1 hidden items-center gap-0.5 rounded-md bg-panel shadow-sm group-focus-within:flex group-hover:flex">
+              <div className="absolute right-1 bottom-1 hidden items-center gap-0.5 rounded-md bg-panel shadow-(--shadow-pop) group-focus-within:flex group-hover:flex">
                 <IconButton label="Move scene up" onClick={() => onMove(i, -1)} disabled={i === 0}>
                   <ArrowUp className="size-3.5" />
                 </IconButton>
@@ -1397,7 +1398,7 @@ function MediaBin({
                     aria-pressed={on}
                     onClick={() => (u.item ? onSelectItem(u.item) : onActive(u.uid))}
                     className={`cursor-pointer rounded border px-1.5 py-0.5 text-2xs font-semibold ${
-                      on ? "border-cobalt bg-cobalt/10 text-ink" : "border-line bg-transparent text-ink-soft hover:text-ink"
+                      on ? "border-mark-deep bg-mark-soft text-ink" : "border-line bg-transparent text-ink-soft hover:text-ink"
                     }`}
                   >
                     {u.label}

@@ -139,7 +139,7 @@ export function ClipInspector({
   return (
     <div className="grid gap-3 p-3">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="m-0 text-md font-bold">{sound ? "Sound effect" : "Graphic"} <span className="font-mono text-xs font-normal text-ink-soft">{clip.id}</span></h3>
+        <h3 className="block-title">{sound ? "Sound effect" : "Graphic"} <span className="font-mono text-xs font-normal text-ink-soft">{clip.id}</span></h3>
         {locked && <span className="text-xs text-ink-soft">Lane locked</span>}
       </div>
       <fieldset disabled={locked} className="m-0 grid gap-3 border-0 p-0">

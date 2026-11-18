@@ -390,7 +390,7 @@ export function SceneCard({
       onFocusCapture={onActivate}
       onPointerDown={onActivate}
       className={`@container group grid grid-cols-[64px_minmax(0,1fr)] gap-x-3 gap-y-3 rounded-xl border bg-panel p-3 transition-shadow ${
-        active ? "border-cobalt/60 ring-3 ring-cobalt/15" : "border-line hover:border-line-strong"
+        active ? "border-mark-deep ring-3 ring-mark/30" : "border-line hover:border-line-strong"
       }`}
     >
       <DropZone

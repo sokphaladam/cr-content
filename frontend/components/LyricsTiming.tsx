@@ -121,7 +121,7 @@ function Toggle({ pressed, onClick, icon, children, title }: { pressed: boolean;
       title={title}
       onClick={onClick}
       className={`inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-sm font-semibold whitespace-nowrap transition-colors ${
-        pressed ? "border-cobalt/40 bg-cobalt-soft text-cobalt" : "border-transparent bg-transparent text-ink-soft hover:bg-ink/[0.05] hover:text-ink"
+        pressed ? "border-mark-deep bg-mark-soft text-ink" : "border-transparent bg-transparent text-ink-soft hover:bg-ink/[0.05] hover:text-ink"
       }`}
     >
       {icon}
@@ -688,7 +688,7 @@ export function LyricsTiming({
                     {sel.words.map((w, k) => (
                       <li
                         key={k}
-                        className={`grid min-w-0 justify-items-center gap-1 rounded-md border px-1 py-1 ${w.start <= now && now < w.end ? "border-cobalt bg-cobalt/[0.08]" : "border-line bg-panel"}`}
+                        className={`grid min-w-0 justify-items-center gap-1 rounded-md border px-1 py-1 ${w.start <= now && now < w.end ? "border-mark-deep bg-mark text-on-mark" : "border-line bg-panel"}`}
                       >
                         <button
                           type="button"
@@ -808,7 +808,7 @@ export function LyricsTiming({
                           onClick={() => setSelected(line.uid)}
                           className={`group relative grid grid-cols-[1.5rem_auto_minmax(0,1fr)_auto] items-center gap-1.5 rounded-md border py-0.5 pr-1 pl-1.5 transition-colors ${
                             isSel
-                              ? "border-cobalt/50 bg-cobalt-soft"
+                              ? "border-mark-deep bg-mark-soft"
                               : line.check
                                 ? "border-warn/40 bg-warn/[0.06] hover:bg-warn/[0.1]"
                                 : "border-transparent hover:bg-ink/[0.04]"

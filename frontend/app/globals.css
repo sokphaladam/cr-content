@@ -24,6 +24,12 @@
   --color-rail-ink: #a7afc0;
   --color-media: #10141c; /* behind video frames and thumbnails: dark in both themes */
   --color-caption: #ffd60a; /* same yellow the videos use for the spoken word */
+  /* the highlighter: the app's signature. What is chosen or live (primary action, selected item, progress, the word
+     being spoken) is marked the way a caption marks the spoken word. Cobalt stays for links and keyboard focus. */
+  --color-mark: #ffd60a;
+  --color-mark-deep: var(--mark-deep); /* hover on a marked control */
+  --color-on-mark: #151a24; /* text on the highlighter: dark in both themes */
+  --color-mark-soft: var(--mark-soft); /* a selected row: a faint highlighter wash */
   --color-danger: var(--danger);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
@@ -80,6 +86,8 @@
   --danger: #c0352b;
   --ok: #1f8a4c;
   --warn: #a87f00;
+  --mark-deep: #ecc400;
+  --mark-soft: #fff3b8;
 }
 
 /* "System" resolves to light or dark in the script in layout.tsx, so one selector covers both ways of getting here */
@@ -100,6 +108,8 @@
   --danger: #f0675c;
   --ok: #43c27a;
   --warn: #e3b62e;
+  --mark-deep: #ffe14d;
+  --mark-soft: #2e2f23; /* a faint yellow tint: stronger washes turn olive on the dark panels */
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-pop: 0 16px 40px -12px rgb(0 0 0 / 0.7), 0 2px 6px rgb(0 0 0 / 0.4);
 }
@@ -125,7 +135,8 @@
     outline-offset: 2px;
   }
   ::selection {
-    background: color-mix(in srgb, var(--color-cobalt) 28%, transparent);
+    background: color-mix(in srgb, var(--color-mark) 60%, transparent);
+    color: var(--color-on-mark);
   }
   mark {
     @apply bg-caption text-media;
@@ -178,6 +189,10 @@
   .card-title {
     @apply font-display text-lg font-bold;
   }
+  /* a heading inside a pane or card: inspector sections, panels, checklists */
+  .block-title {
+    @apply m-0 font-display text-md font-bold;
+  }
   /* quiet sentence-case group headings in lists */
   .group-label {
     @apply text-sm font-semibold text-ink-soft;
@@ -205,6 +220,22 @@
   }
   select.field-input {
     @apply cursor-pointer pr-8;
+  }
+}
+
+/* A highlighter stroke behind the element: slanted ends like a marker swipe, drawn on ::before so focus outlines on
+   the element itself are not clipped. peer-checked:swipe, aria-selected:swipe and the like work as usual. */
+@utility swipe {
+  position: relative;
+  isolation: isolate;
+  color: var(--color-on-mark);
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--color-mark);
+    clip-path: polygon(0.4em 0, 100% 0, calc(100% - 0.4em) 100%, 0 100%);
   }
 }
 

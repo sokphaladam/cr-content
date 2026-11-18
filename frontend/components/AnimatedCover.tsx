@@ -16,7 +16,7 @@ export function CoverSwitch({ mode, onChange, disabled }: { mode: CoverMode; onC
     <div role="radiogroup" aria-label="Cover type" className="inline-flex rounded-lg border border-line p-0.5">
       {options.map(([m, label, icon]) => (
         <button key={m} type="button" role="radio" aria-checked={mode === m} disabled={disabled}
-          className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-semibold transition-colors ${mode === m ? "bg-cobalt text-white" : "text-ink-soft hover:text-ink"}`}
+          className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-semibold transition-colors ${mode === m ? "swipe font-bold" : "text-ink-soft hover:text-ink"}`}
           onClick={() => m !== mode && onChange(m)}>{icon}{label}</button>
       ))}
     </div>
@@ -130,7 +130,7 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
         </div>
         <div className="text-sm font-semibold">Animated <span className="font-normal text-ink-soft">loops every {state.loop_seconds}s</span></div>
         {src && state.loop_seam && (
-          <div className={`text-xs ${state.loop_seam.ok ? "text-ink-soft" : "text-amber-600"}`}
+          <div className={`text-xs ${state.loop_seam.ok ? "text-ink-soft" : "text-warn"}`}
             title={`End-to-start change ${state.loop_seam.jump} vs typical step ${state.loop_seam.step}`}>
             {state.loop_seam.ok ? "Loop seam: smooth" : "Loop seam: visible jump where it repeats. Make it again."}
           </div>
@@ -138,7 +138,7 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
         {src && state.animation_source && (
           <div className="text-xs text-ink-soft">
             From Anim Studio: {state.animation_source.title || "untitled"}, {state.animation_source.video.width}×{state.animation_source.video.height} at {state.animation_source.video.fps} fps, imported {new Date(state.animation_source.imported_at).toLocaleString()}
-            {!state.animation_source.video.loopValidated && <span className="text-amber-600"> Its loop check did not pass in Anim Studio.</span>}
+            {!state.animation_source.video.loopValidated && <span className="text-warn"> Its loop check did not pass in Anim Studio.</span>}
           </div>
         )}
         {versionUrl && !!state.loop_versions?.length && (
@@ -160,7 +160,7 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
           </details>
         )}
         {src && state.loop_motion === "character" && state.loop_changed != null && state.loop_changed > state.loop_change_max && (
-          <div className="text-xs text-amber-600">
+          <div className="text-xs text-warn">
             The video model redrew {Math.round(state.loop_changed * 100)}% of the picture instead of animating it (the best of 3 takes). Make it again, or keep the Movement text to small motions.
           </div>
         )}
@@ -185,7 +185,7 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
         {job && job.state === "running" && (
           <div role="progressbar" aria-label="Making the animated cover" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined} className="grid gap-1">
             <div className="h-2 overflow-hidden rounded-full bg-line">
-              <div className={`h-full rounded-full bg-cobalt transition-[width] duration-300 ${pct === null ? "w-1/3 animate-pulse" : ""}`} style={pct === null ? undefined : { width: `${pct}%` }} />
+              <div className={`h-full rounded-full bg-mark transition-[width] duration-300 ${pct === null ? "w-1/3 animate-pulse" : ""}`} style={pct === null ? undefined : { width: `${pct}%` }} />
             </div>
             <div className="text-xs text-ink-soft tabular-nums">{job.text || "Working…"}{pct === null ? "" : ` · ${pct}%`}</div>
           </div>
@@ -195,7 +195,7 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
           <div role="radiogroup" aria-label="What the GPU moves" className="inline-flex w-fit rounded-lg border border-line p-0.5">
             {([...(living ? [["living", "Living (mark what moves)"]] as const : []), ["parallax", "Parallax"], ["light", "Light & particles"], ["character", "Character"]] as const).map(([m, label]) => (
               <button key={m} type="button" role="radio" aria-checked={how === m} disabled={off}
-                className={`h-8 rounded-md px-3 text-sm font-semibold transition-colors ${how === m ? "bg-cobalt text-white" : "text-ink-soft hover:text-ink"}`}
+                className={`h-8 rounded-md px-3 text-sm font-semibold transition-colors ${how === m ? "swipe font-bold" : "text-ink-soft hover:text-ink"}`}
                 onClick={() => setMotion(m)}>{label}</button>
             ))}
           </div>
@@ -240,7 +240,7 @@ export function AnimatedCover<T>({ state, src, calls, onSaved, videoPrompt, disa
               const on = moving.includes(k);
               return (
                 <button key={k} type="button" aria-pressed={on} disabled={off}
-                  className={`h-8 rounded-full border px-3 text-sm transition-colors ${on ? "border-cobalt bg-cobalt/15 font-semibold text-ink" : "border-line text-ink-soft hover:text-ink"}`}
+                  className={`h-8 rounded-full border px-3 text-sm transition-colors ${on ? "border-mark-deep bg-mark-soft font-semibold text-ink" : "border-line text-ink-soft hover:text-ink"}`}
                   onClick={() => setEffects(on ? moving.filter((e) => e !== k) : [...moving, k])}>{label}</button>
               );
             })}

@@ -159,7 +159,7 @@ export function ResearchPanel({ kind, refId }: { kind: ResearchKind; refId: stri
 
       {brief && (
         <section className="grid gap-2" aria-label="Claims">
-          <h3 className="m-0 text-sm font-bold">Claims ({brief.claims.length})</h3>
+          <h3 className="block-title">Claims ({brief.claims.length})</h3>
           {brief.claims.map((c) => (
             <div key={c.id} className="grid gap-1.5 rounded-md border border-line p-2">
               <div className="flex items-center gap-2">
@@ -233,7 +233,7 @@ export function ResearchPanel({ kind, refId }: { kind: ResearchKind; refId: stri
 
       {brief && brief.contradictions.length + brief.open_questions.length > 0 && (
         <section className="grid gap-1 text-sm">
-          <h3 className="m-0 text-sm font-bold">Disagreements and open questions</h3>
+          <h3 className="block-title">Disagreements and open questions</h3>
           {brief.contradictions.map((x, i) => (
             <p key={i} className="m-0 text-warn">{brief.claims.find((c) => c.id === x.claim_id)?.claim_text ?? "General"}: {x.note}</p>
           ))}
@@ -242,7 +242,7 @@ export function ResearchPanel({ kind, refId }: { kind: ResearchKind; refId: stri
       )}
 
       <section className="grid gap-2" aria-label="Sources">
-        <h3 className="m-0 text-sm font-bold">Sources ({brief?.sources.length ?? 0})</h3>
+        <h3 className="block-title">Sources ({brief?.sources.length ?? 0})</h3>
         {brief?.sources.map((s) => (
           <details key={s.id} className="rounded-md border border-line p-2 text-sm">
             <summary className="cursor-pointer">

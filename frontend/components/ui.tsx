@@ -11,6 +11,8 @@ import {
   type ButtonHTMLAttributes,
   type ReactNode,
 } from "react";
+import { useAppearance } from "@/lib/appearance";
+import ClickSpark from "./ClickSpark";
 
 /* ---------- Buttons ---------- */
 
@@ -18,7 +20,7 @@ type Variant = "primary" | "secondary" | "ghost" | "danger";
 type Size = "sm" | "md";
 
 const VARIANTS: Record<Variant, string> = {
-  primary: "bg-cobalt text-white border-cobalt hover:bg-cobalt-deep hover:border-cobalt-deep",
+  primary: "bg-mark text-on-mark border-mark hover:bg-mark-deep hover:border-mark-deep",
   secondary: "bg-panel text-ink border-line hover:border-line-strong hover:bg-sunken",
   ghost: "bg-transparent text-ink-soft border-transparent hover:bg-ink/[0.05] hover:text-ink",
   danger: "bg-transparent text-danger border-transparent hover:bg-danger/[0.07]",
@@ -261,7 +263,7 @@ export function Segmented<T extends string>({
           <input type="radio" name={name} value={o.value} checked={value === o.value} onChange={() => onChange(o.value)} className="peer sr-only" />
           <span
             lang={o.lang}
-            className={`flex h-full items-center rounded-md px-3 font-semibold text-ink-soft transition-colors peer-checked:bg-panel peer-checked:text-ink peer-checked:shadow-sm peer-focus-visible:outline-2 peer-focus-visible:outline-cobalt ${
+            className={`flex h-full items-center rounded-md px-3 font-semibold text-ink-soft transition-colors peer-checked:swipe peer-focus-visible:outline-2 peer-focus-visible:outline-cobalt ${
               size === "sm" ? "text-sm" : "text-base"
             }`}
           >
@@ -297,12 +299,12 @@ export function Tabs<T extends string>({
             aria-selected={active}
             onClick={() => onChange(it.value)}
             className={`-mb-px flex cursor-pointer items-center gap-1.5 border-b-2 bg-transparent px-0.5 pt-1 pb-2.5 text-md font-semibold transition-colors ${
-              active ? "border-ink text-ink" : "border-transparent text-ink-soft hover:text-ink"
+              active ? "border-mark text-ink" : "border-transparent text-ink-soft hover:text-ink"
             }`}
           >
             {it.label}
             {it.count !== undefined && (
-              <span className={`rounded-full px-1.5 py-px text-xs leading-4 ${active ? "bg-ink text-on-ink" : "bg-ink/[0.07] text-ink-soft"}`}>
+              <span className={`rounded-full px-1.5 py-px text-xs leading-4 ${active ? "bg-mark text-on-mark" : "bg-ink/[0.07] text-ink-soft"}`}>
                 {it.count}
               </span>
             )}
@@ -324,6 +326,9 @@ type Toast = { id: number; text: string; tone: "info" | "success" | "error" };
 const ToastContext = createContext<(text: string, tone?: Toast["tone"]) => void>(() => {});
 export const useToast = () => useContext(ToastContext);
 
+// what counts as a control for the click sparks
+const SPARKABLE = 'button, a[href], summary, select, label:has(input), [role="button"], [role="tab"], [role="switch"], [role="menuitem"], input[type="checkbox"], input[type="radio"]';
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const nextId = useRef(0);
@@ -332,9 +337,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToasts((t) => [...t.slice(-2), { id, text, tone }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tone === "error" ? 7000 : 3500);
   }, []);
+  const { effects } = useAppearance();
   return (
     <ToastContext.Provider value={push}>
-      {children}
+      {/* sparks when a control is clicked (Settings → Appearance → Click sparks) */}
+      <ClickSpark selector={SPARKABLE} disabled={effects === "off"} sparkColor={["#6079ff", "#ffd60a"]} sparkSize={9} sparkRadius={22} sparkCount={8} duration={420}>
+        {children}
+      </ClickSpark>
       <div aria-live="polite" className="pointer-events-none fixed right-4 bottom-4 z-50 grid w-[min(380px,calc(100vw-32px))] gap-2">
         {toasts.map((t) => (
           <div
@@ -387,7 +396,7 @@ export function Drawer({
     <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={label}>
       <div className="absolute inset-0 bg-ink/40" onClick={onClose} />
       <div
-        className={`absolute top-0 bottom-0 flex w-[min(360px,90vw)] flex-col bg-paper shadow-2xl ${side === "left" ? "left-0" : "right-0"}`}
+        className={`absolute top-0 bottom-0 flex w-[min(360px,90vw)] flex-col bg-paper shadow-(--shadow-pop) ${side === "left" ? "left-0" : "right-0"}`}
       >
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-panel px-4">
           <span className="pane-title">{label}</span>

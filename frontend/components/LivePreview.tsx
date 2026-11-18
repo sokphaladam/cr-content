@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as R
 import { API_BASE, api, DEFAULT_CAPTIONS, fileUrl, keyword, type CaptionStyle, type ChannelProfile, type Clip, type Lang, type Options, type Scene, type TextOverlay, type TrackName, type TrackState } from "@/lib/api";
 import { audible, trackOf } from "@/lib/clips";
 import type { GraphicStill } from "@/lib/api";
+import { loadCaptionFonts } from "@/lib/captionFonts";
 import { isImagePath } from "@/lib/format";
 import { cutBefore, type DraftTimeline, type Segment } from "@/lib/useDraftTimeline";
 import { clock } from "./Transcript";
@@ -14,6 +15,8 @@ import { Button, IconButton, Segmented, Spinner } from "./ui";
 const LANG_CAPTION = { en: { size: 92, words: 3 }, km: { size: 100, words: 1 } } as const;
 const SIZE = { s: 0.8, m: 1, l: 1.25 } as const;
 const OVERLAY_SIZE = { s: 0.6, m: 0.85, l: 1.2 } as const;
+if (typeof window !== "undefined") void loadCaptionFonts(); // the app's own caption fonts, for the preview
+
 const cq = (px: number) => `${(px / 1080) * 100}cqw`;
 const fontOf = (style: CaptionStyle, lang: Lang) => (style.font ? `"${style.font}"` : lang === "km" ? "var(--font-khmer)" : "Arial, Helvetica, sans-serif");
 const headlineFontOf = (style: CaptionStyle, lang: Lang) => (style.headline_font ? `"${style.headline_font}"` : fontOf(style, lang));
@@ -343,7 +346,13 @@ export function LiveFrame({ timeline, lang, edit }: { timeline: DraftTimeline; l
           >
             <span style={letterStyle(style, px)}>
               {caption.words.map((w, j) => (
-                <span key={j} style={{ color: j === caption.spoken && (playing || pos.t >= w.start) ? style.highlight : keys.has(keyword(w.text)) ? style.keyword : undefined }}>
+                <span
+                  key={j}
+                  style={{
+                    color: j === caption.spoken && (playing || pos.t >= w.start) ? style.highlight : keys.has(keyword(w.text)) ? style.keyword : undefined,
+                    fontFamily: style.emphasis_font && keys.has(keyword(w.text)) ? `"${style.emphasis_font}"` : undefined,
+                  }}
+                >
                   {cased(w.caption ?? w.text, style, lang)}
                   {j < caption.words.length - 1 ? " " : ""}
                 </span>
@@ -563,7 +572,7 @@ const OUTLINE_LABELS: Record<CaptionStyle["outline"], string> = { outline: "Outl
 /** A channel profile's caption look with its first installed fonts (profiles.theme_captions). */
 export function themeCaptions(profile: ChannelProfile, fonts: string[]): Partial<CaptionStyle> {
   const pick = (prefs: string[]) => prefs.find((f) => fonts.includes(f)) ?? "";
-  return { ...profile.caption_defaults, font: pick(profile.caption_font_preferences), headline_font: pick(profile.headline_font_preferences) };
+  return { ...profile.caption_defaults, font: pick(profile.caption_font_preferences), headline_font: pick(profile.headline_font_preferences), emphasis_font: pick(profile.emphasis_font_preferences ?? []) };
 }
 
 /** `channel`: the project's channel profile id; offers to re-apply its look (only on a deliberate click). */
@@ -579,7 +588,7 @@ export function CaptionPanel({ style, onChange, options, lang, channel = "" }: {
   return (
     <section aria-labelledby="caption-style" className="grid gap-3 card p-3.5">
       <div className="flex items-center justify-between">
-        <h3 id="caption-style" className="m-0 font-display text-md font-bold">
+        <h3 id="caption-style" className="block-title">
           Captions
         </h3>
         {profile && (
@@ -634,6 +643,17 @@ export function CaptionPanel({ style, onChange, options, lang, channel = "" }: {
         <label className="grid gap-1">
           <span className="field-label">Headline font</span>
           <select className="field-input h-8 py-0 text-sm" value={style.headline_font} onChange={(e) => onChange({ headline_font: e.target.value })}>
+            <option value="">Same as captions</option>
+            {fonts.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-1">
+          <span className="field-label">Emphasis font</span>
+          <select className="field-input h-8 py-0 text-sm" value={style.emphasis_font ?? ""} onChange={(e) => onChange({ emphasis_font: e.target.value })}>
             <option value="">Same as captions</option>
             {fonts.map((f) => (
               <option key={f} value={f}>

@@ -106,7 +106,7 @@ function SongCard({
       </div>
       {versions.length > 0 && (
         <div className="grid gap-1">
-          <h3 className="m-0 text-md font-semibold">Music videos ({versions.length})</h3>
+          <h3 className="block-title">Music videos ({versions.length})</h3>
           <ul className="m-0 grid list-none gap-0.5 p-0">
             {versions.map((v, i) => (
               <li key={v.name}>
@@ -131,7 +131,7 @@ function SongCard({
           </ul>
         </div>
       )}
-      <h3 className="m-0 text-md font-semibold">Lyrics</h3>
+      <h3 className="block-title">Lyrics</h3>
       <div lang={detail.lang} className="grid max-h-[260px] gap-3 overflow-auto text-base leading-relaxed">
         {detail.song?.sections.map((s, i) => (
           <div key={i}>
@@ -360,7 +360,7 @@ function FactsCard({ detail }: { detail: VideoDetail }) {
   if (!facts.length && !comment) return null;
   return (
     <section aria-labelledby={`facts-${detail.name}`} className="grid gap-2 card p-3.5">
-      <h3 id={`facts-${detail.name}`} className="m-0 font-display text-md font-bold">
+      <h3 id={`facts-${detail.name}`} className="block-title">
         Fact check
       </h3>
       {facts.length > 0 && (
@@ -694,7 +694,7 @@ function ThumbnailCard({ detail, onChange }: { detail: VideoDetail; onChange: (s
                       <span className="absolute inset-x-0 bottom-0 bg-black/60 py-px text-center text-2xs font-semibold text-white">Photo</span>
                     )}
                     {isCurrent(idea) && (
-                      <span className="absolute top-1 right-1 grid size-4 place-items-center rounded-full bg-cobalt text-white">
+                      <span className="absolute top-1 right-1 grid size-4 place-items-center rounded-full bg-mark text-on-mark">
                         <Check className="size-3" />
                       </span>
                     )}

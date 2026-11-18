@@ -3,9 +3,10 @@
 import { CalendarClock, Copy, Download, ExternalLink, FolderOpen, KeyRound, LogOut, Monitor, Moon, Plus, Sun, Trash2, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useAppearance } from "@/lib/appearance";
+import { loadCaptionFonts } from "@/lib/captionFonts";
 import { checkNow, install, setAutoCheck, startUpdates, useAutoCheck, useUpdates } from "@/lib/updates";
 import { AddonProgress, DownloadProgress, useArtStatus } from "./ArtControls";
-import { api, ART_STYLES, type Account, getAutostart, isMac, pickFolder, setAutostart, type CleanupGroup, type GeminiUsage, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys } from "@/lib/api";
+import { api, ART_STYLES, type Account, getAutostart, isMac, pickFolder, setAutostart, type CleanupGroup, type GeminiUsage, type Locations, type Platform, type PublishAccount, type PublishAccounts, type ScheduledUpload, type ServiceKey, type ServiceKeys, type CaptionFont } from "@/lib/api";
 import { Button, IconButton, Segmented, useToast } from "./ui";
 
 export const PLATFORM_NAMES: Record<Platform, string> = { youtube: "YouTube", tiktok: "TikTok", facebook: "Facebook", instagram: "Instagram" };
@@ -266,6 +267,7 @@ const SECTIONS = [
   { id: "queue", label: "Upload queue" },
   { id: "scene-art", label: "AI features" },
   { id: "appearance", label: "Appearance" },
+  { id: "fonts", label: "Caption fonts" },
   { id: "storage", label: "Storage" },
   { id: "cleanup", label: "Clean up" },
   { id: "about", label: "About & updates" },
@@ -298,7 +300,7 @@ function SectionNav() {
             href={`#${s.id}`}
             aria-current={on ? "true" : undefined}
             className={`rounded-md px-3 py-1.5 font-semibold no-underline transition-colors ${
-              on ? "bg-cobalt-soft text-cobalt" : "text-ink-soft hover:bg-ink/[0.05] hover:text-ink"
+              on ? "bg-mark-soft text-ink" : "text-ink-soft hover:bg-ink/[0.05] hover:text-ink"
             }`}
           >
             {s.label}
@@ -382,7 +384,14 @@ function AccountRows() {
       </SettingRow>
       <SettingRow
         title="Sync"
-        hint={s.running ? (s.stage === "stopping" ? "Stopping after this file…" : s.total ? `${s.stage === "checking" ? "Checking" : "Syncing"} ${s.done} of ${s.total} files…` : "Comparing files…") : s.error ? s.error : last ? `${s.summary}. Last synced ${last}.` : "Not synced yet."}
+        hint={s.running ? (s.stage === "stopping" ? "Stopping after this file…" : s.total ? `${s.stage === "checking" ? "Checking" : "Syncing"} ${s.done.toLocaleString()} of ${s.total.toLocaleString()} files · ${Math.floor((s.done / s.total) * 100)}%` : "Comparing files…") : s.error ? s.error : last ? `${s.summary}. Last synced ${last}.` : "Not synced yet."}
+        extra={
+          s.running && (
+            <div role="progressbar" aria-label="Syncing" aria-valuemin={0} aria-valuemax={s.total || undefined} aria-valuenow={s.total ? s.done : undefined} className="mt-1.5 h-1.5 max-w-[420px] overflow-hidden rounded-full bg-ink/[0.08]">
+              <div className={`h-full rounded-full bg-mark transition-[width] duration-300 ease-linear ${s.total ? "" : "w-1/3 animate-pulse"}`} style={s.total ? { width: `${(s.done / s.total) * 100}%` } : undefined} />
+            </div>
+          )
+        }
       >
         {s.running ? (
           <Button size="sm" loading={s.stage === "stopping"} onClick={() => void act(api.stopSync)}>
@@ -394,13 +403,6 @@ function AccountRows() {
           </Button>
         )}
       </SettingRow>
-      {s.running && (
-        <div className="px-4 pb-4">
-          <div role="progressbar" aria-label="Syncing" aria-valuemin={0} aria-valuemax={s.total || undefined} aria-valuenow={s.total ? s.done : undefined} className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
-            <div className={`h-full rounded-full bg-cobalt transition-[width] duration-300 ease-linear ${s.total ? "" : "w-1/3 animate-pulse"}`} style={s.total ? { width: `${(s.done / s.total) * 100}%` } : undefined} />
-          </div>
-        </div>
-      )}
     </>
   );
 }
@@ -408,7 +410,7 @@ function AccountRows() {
 /* ---------- Appearance (theme, interface size) ---------- */
 
 function AppearanceRows() {
-  const { theme, setTheme, size, setSize } = useAppearance();
+  const { theme, setTheme, size, setSize, effects, setEffects } = useAppearance();
   return (
     <>
       <SettingRow title="Theme" hint="System follows your computer's light or dark mode.">
@@ -437,6 +439,59 @@ function AppearanceRows() {
           ]}
         />
       </SettingRow>
+      <SettingRow title="Click sparks" hint="A burst of sparks when you click a button, tab, checkbox or menu. Shorter and calmer when your computer is set to reduce motion.">
+        <Segmented
+          name="anime-fx"
+          size="sm"
+          value={effects}
+          onChange={setEffects}
+          options={[
+            { value: "on", label: "On" },
+            { value: "off", label: "Off" },
+          ]}
+        />
+      </SettingRow>
+    </>
+  );
+}
+
+function FontRows() {
+  const toast = useToast();
+  const [rows, setRows] = useState<CaptionFont[] | null>(null);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api.fonts().then(setRows).catch((e) => setError((e as Error).message));
+  }, []);
+  if (!rows) return <p className={`m-0 p-4 text-base ${error ? "text-danger" : "text-ink-soft"}`}>{error || "Checking fonts…"}</p>;
+
+  async function download(family: string) {
+    setBusy(family);
+    try {
+      await api.downloadFont(family);
+      setRows(await api.fonts());
+      void loadCaptionFonts(); // the live preview picks it up without a reload
+      toast(`Downloaded ${family}. New captions use it right away.`, "success");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <>
+      {rows.map((f) => (
+        <SettingRow key={f.family} title={`${f.family} ${f.weight}`} hint={f.used_by.length ? `Used for ${f.used_by.join(", ")}` : "Available for any caption style"}>
+          {f.installed ? (
+            <span className="text-sm font-semibold text-ok">Installed</span>
+          ) : (
+            <Button size="sm" variant={f.used_by.length ? "primary" : "secondary"} loading={busy === f.family} disabled={!!busy && busy !== f.family} icon={<Download className="size-3.5" />} onClick={() => void download(f.family)}>
+              Download
+            </Button>
+          )}
+        </SettingRow>
+      ))}
     </>
   );
 }
@@ -451,12 +506,13 @@ function IconLabel({ icon, children }: { icon: ReactNode; children: ReactNode })
 }
 
 /** One setting: title and hint on the left, its control on the right (stacked on narrow screens). */
-function SettingRow({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+function SettingRow({ title, hint, extra, children }: { title: string; hint?: string; extra?: ReactNode; children: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3.5">
       <div className="grid min-w-[200px] flex-1 gap-0.5">
         <span className="text-md font-semibold">{title}</span>
-        {hint && <span className="text-sm text-ink-soft">{hint}</span>}
+        {hint && <span className="text-sm text-ink-soft tabular-nums">{hint}</span>}
+        {extra}
       </div>
       {children}
     </div>
@@ -1530,6 +1586,9 @@ export function Settings({ onKeysChanged }: { onKeysChanged: () => void }) {
           </Section>
           <Section id="appearance" title="Appearance" intro="How the studio looks on this computer.">
             <AppearanceRows />
+          </Section>
+          <Section id="fonts" title="Caption fonts" intro="The fonts your channels' captions and headlines use. A font this computer doesn't have is replaced by a plain one in your videos until you download it.">
+            <FontRows />
           </Section>
           <Section id="storage" title="Storage" intro="Where your library is kept. Changing a folder moves the files there.">
             <Storage />

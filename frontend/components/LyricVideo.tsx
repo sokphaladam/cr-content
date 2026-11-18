@@ -101,7 +101,7 @@ function JobStatus({ job }: { job: Job }) {
           </div>
           <div role="progressbar" aria-label="Progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
             <div
-              className={`h-full rounded-full bg-cobalt transition-[width] duration-500 ${stepFrac == null && steps.length === 1 ? "w-1/3 animate-pulse" : ""}`}
+              className={`h-full rounded-full bg-mark transition-[width] duration-500 ${stepFrac == null && steps.length === 1 ? "w-1/3 animate-pulse" : ""}`}
               style={stepFrac == null && steps.length === 1 ? undefined : { width: `${Math.max(pct, 3)}%` }}
             />
           </div>

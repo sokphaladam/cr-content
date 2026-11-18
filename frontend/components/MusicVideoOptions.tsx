@@ -350,7 +350,7 @@ export function MusicVideoOptions({
                       onChange({ ...value, idea: idea.idea, look: idea.look, lyric_style: catalog ? fromPreset(catalog, idea.lyric_style) : value.lyric_style })
                     }
                     className={`grid w-full cursor-pointer gap-0.5 rounded-lg border p-2 text-left text-sm transition-colors hover:bg-ink/[0.04] ${
-                      chosen ? "border-cobalt bg-cobalt/[0.06]" : "border-line bg-transparent"
+                      chosen ? "border-mark-deep bg-mark-soft" : "border-line bg-transparent"
                     }`}
                   >
                     <span className="font-semibold text-ink">{idea.title}</span>

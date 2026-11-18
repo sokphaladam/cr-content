@@ -42,7 +42,7 @@ export function HistoryGatePanel({ draftId, refreshKey = "" }: { draftId: string
   return (
     <section className="mb-4 grid gap-2 rounded-lg border border-line p-3" aria-label="History check">
       <div className="flex items-center gap-2">
-        <h3 className="m-0 text-sm font-bold">History check</h3>
+        <h3 className="block-title">History check</h3>
         <span className={`text-sm font-bold ${STATUS[gate.status].tone}`}>{STATUS[gate.status].label}</span>
         <Button size="sm" variant="ghost" className="ml-auto" icon={<RefreshCw className="size-3.5" />} onClick={load}>
           Check again

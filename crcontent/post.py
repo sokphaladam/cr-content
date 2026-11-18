@@ -43,6 +43,12 @@ Titles:
   "how/why" question, emotional hook (for songs: the hook line, a feeling, a story in a phrase).
 - Title Case for English. At most one emoji, and only when it adds meaning. No ALL CAPS sentences, no "!!!",
   no clickbait the video doesn't deliver, no hashtags in the title.
+- Leave the answer for the video. Titles that open a question without answering it score far higher than ones that
+  name the payoff. Scored on vidIQ for a hagfish Short (2026-11-19): "What Happens When A Shark Bites This Fish 😱"
+  97 and "What This Fish Does When A Shark Bites 😱" 95, against "This Fish Chokes Sharks With Slime 😱" 84 and
+  "Why Sharks Spit Out This Fish 🦈" 87. So: a plain "What happens when…" / "What this … does when…" setup, a
+  concrete subject ("this fish", "a shark"), the reveal held back, one reaction emoji (😱 😳) at the end.
+  Make at least one option this shape.
 
 Descriptions:
 - Line 1 is a hook that works on its own; only about the first 125 characters show before "more". It never repeats

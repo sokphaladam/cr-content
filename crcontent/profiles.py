@@ -44,6 +44,7 @@ class ChannelProfile(BaseModel):
     caption_defaults: dict[str, str | int | float] = {}
     caption_font_preferences: list[str] = []  # first installed one wins; none = the language's caption font
     headline_font_preferences: list[str] = []
+    emphasis_font_preferences: list[str] = []  # the keyword words in captions
 
 
 PROFILES: dict[str, ChannelProfile] = {p.id: p for p in (
@@ -56,8 +57,9 @@ PROFILES: dict[str, ChannelProfile] = {p.id: p for p in (
         caption_defaults={"preset": "bold", "size": "l", "color": "#F8FAFC", "highlight": "#FFC857",
                           "keyword": "#42C7D9", "outline": "outline", "case": "as_is", "headline_color": "#F8FAFC",
                           "headline_background": "#10202B", "hook_fill": "#FFC857"},
-        caption_font_preferences=["Inter", "Montserrat"],
+        caption_font_preferences=["Montserrat", "Inter"],
         headline_font_preferences=["Anton", "Bebas Neue", "Montserrat"],
+        emphasis_font_preferences=["Bebas Neue", "Anton"],
         sound_design_defaults=["crisp natural ambience", "subtle impacts on meaningful actions", "restrained whooshes"],
         voice_defaults="warm, curious, quick", voice="en-US-Puck-Gemini", voice_rate="+5%",
         music_mood="curious, light",
@@ -74,8 +76,9 @@ PROFILES: dict[str, ChannelProfile] = {p.id: p for p in (
                           "keyword": "#76AFA7", "outline": "shadow", "case": "as_is", "headline_color": "#F0E8D8",
                           "headline_background": "#101419", "hook_fill": "#B99A60"},
         caption_font_preferences=["Inter", "Montserrat"],
-        headline_font_preferences=["Bebas Neue", "Anton", "Cormorant Garamond", "Montserrat"],
-        font_preferences=["Bebas Neue", "Anton", "Inter", "Montserrat", "Cormorant Garamond"],
+        headline_font_preferences=["Cinzel", "Cormorant Garamond", "Bebas Neue", "Montserrat"],
+        emphasis_font_preferences=["Oswald", "Bebas Neue"],
+        font_preferences=["Cinzel", "Inter", "Oswald", "Cormorant Garamond", "Bebas Neue", "Montserrat"],
         voice_defaults="measured, curious, authoritative; not horror-trailer delivery",
         voice="en-US-Charon-Gemini", voice_rate="+0%",
         music_mood="low restrained ambience", sound_design_defaults=["impacts only on real story beats"],
@@ -102,7 +105,7 @@ def theme_captions(profile: ChannelProfile | None, lang: str) -> CaptionStyle:
     lands on Khmer text). None -> the general CaptionStyle, unchanged."""
     if profile is None:
         return CaptionStyle()
-    known = CaptionStyle.model_fields.keys() - {"font", "headline_font"}
+    known = CaptionStyle.model_fields.keys() - {"font", "headline_font", "emphasis_font"}
     try:
         style = CaptionStyle(**{k: v for k, v in profile.caption_defaults.items() if k in known})
     except ValueError:  # a bad value in a profile never stops a project from being made
@@ -110,6 +113,7 @@ def theme_captions(profile: ChannelProfile | None, lang: str) -> CaptionStyle:
     fonts = available_fonts(lang)
     style.font = next((f for f in profile.caption_font_preferences if f in fonts), "")
     style.headline_font = next((f for f in profile.headline_font_preferences if f in fonts), "")
+    style.emphasis_font = next((f for f in profile.emphasis_font_preferences if f in fonts), "")
     return style.clean(lang)
 
 

@@ -198,7 +198,7 @@ export function QualityReportView({ report, total, onSelect, onReview, onApply, 
                 <button
                   type="button"
                   onClick={() => select(c)}
-                  className={`flex w-full cursor-pointer items-start gap-1.5 rounded-md px-1.5 py-1 text-left text-sm hover:bg-ink/[0.05] ${selected === c.id ? "bg-cobalt-soft" : ""}`}
+                  className={`flex w-full cursor-pointer items-start gap-1.5 rounded-md px-1.5 py-1 text-left text-sm hover:bg-ink/[0.05] ${selected === c.id ? "bg-mark-soft" : ""}`}
                 >
                   <S.icon className={`mt-0.5 size-3.5 shrink-0 ${S.tone}`} aria-label={S.label} />
                   <span className={`min-w-0 flex-1 ${c.disposition === "dismissed" ? "text-ink-soft line-through" : ""}`}>{c.title}</span>
@@ -298,7 +298,7 @@ export function QualityInspector({ target, src, vertical, onSeek }: {
   return (
     <section aria-label="Quality check" className="grid gap-3 card p-3.5">
       <div className="grid gap-1">
-        <h3 className="m-0 flex items-center gap-1.5 text-base font-bold">
+        <h3 className="block-title flex items-center gap-1.5">
           <ShieldCheck className="size-4 text-cobalt" aria-hidden /> Quality check
           <span className="rounded bg-sunken px-1.5 text-2xs font-semibold tracking-wide text-ink-soft uppercase">Rendered file</span>
         </h3>
@@ -311,7 +311,7 @@ export function QualityInspector({ target, src, vertical, onSeek }: {
       {jobId ? (
         <div className="grid gap-1.5" role="status">
           <div className="h-1.5 overflow-hidden rounded bg-sunken">
-            <div className="h-full bg-cobalt transition-[width]" style={{ width: `${Math.round((job?.progress ?? 0) * 100)}%` }} />
+            <div className="h-full bg-mark transition-[width]" style={{ width: `${Math.round((job?.progress ?? 0) * 100)}%` }} />
           </div>
           <div className="flex items-center justify-between gap-2">
             <span className="truncate text-sm text-ink-soft">{job?.detail || "Waiting to start…"}</span>

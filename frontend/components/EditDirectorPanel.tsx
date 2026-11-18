@@ -52,7 +52,7 @@ export function EditDirectorPanel({
 
   return (
     <section aria-label="Edit Director" className="grid gap-2 border-t border-line p-3">
-      <h3 className="m-0 text-md font-bold">Edit Director</h3>
+      <h3 className="block-title">Edit Director</h3>
       <p className="m-0 text-xs text-ink-soft">
         Turns the story beats into a few edits: calm explanations and a held payoff, graphics only where they clarify,
         sounds on the moments that matter. Your own clips and choices are never changed.

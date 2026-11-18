@@ -71,7 +71,7 @@ export function RightsChecklist({ scope, name }: { scope: "video" | "song"; name
   return (
     <section aria-label="Rights checklist" className="grid gap-3 card p-3.5">
       <div className="grid gap-1">
-        <h3 className="m-0 flex items-center gap-1.5 text-base font-bold">
+        <h3 className="block-title flex items-center gap-1.5">
           <FileCheck2 className="size-4 text-cobalt" aria-hidden /> Rights checklist
         </h3>
         <p className="m-0 text-sm text-ink-soft">
