@@ -1,1 +1,16 @@
-{"name":"shorts-studio-desktop","private":true,"scripts":{"dev":"node scripts/dev.mjs","build:engine":"python scripts/build_engine.py","build:ffmpeg":"python scripts/fetch_ffmpeg.py","build:remotion":"python scripts/build_remotion.py","build":"npm run build:engine && npm run build:ffmpeg && npm run build:remotion && tauri build --config src-tauri/tauri.bundle.json","postinstall":"cd remotion && npm install --no-audit --no-fund","tauri":"tauri"},"devDependencies":{"@tauri-apps/cli":"^2"}}
+{
+  "name": "shorts-studio-desktop",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build:engine": "python scripts/build_engine.py",
+    "build:ffmpeg": "python scripts/fetch_ffmpeg.py",
+    "build:remotion": "python scripts/build_remotion.py",
+    "build": "npm run build:engine && npm run build:ffmpeg && npm run build:remotion && tauri build --config src-tauri/tauri.bundle.json",
+    "postinstall": "cd remotion && npm install --no-audit --no-fund",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

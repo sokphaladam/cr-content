@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import (BigInteger, Column, DateTime, MetaData, String, Table, create_engine, delete, insert, select,
-                        update)
+                        make_url, update)
 
 GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
 SESSION_DAYS = 90
@@ -67,8 +67,10 @@ def _engine():
     url = os.environ["DATABASE_URL"]
     if url.startswith("mysql://"):  # the form DigitalOcean shows; use the PyMySQL driver
         url = "mysql+pymysql://" + url.removeprefix("mysql://")
+    # DigitalOcean's string ends in ?ssl-mode=REQUIRED, which PyMySQL rejects; SSL is turned on below anyway
+    url = make_url(url).difference_update_query(["ssl-mode", "ssl_mode"])
     args = {}
-    if url.startswith("mysql"):
+    if url.drivername.startswith("mysql"):
         if os.getenv("DATABASE_CA"):
             args = {"ssl": {"ca": os.environ["DATABASE_CA"]}}
         else:

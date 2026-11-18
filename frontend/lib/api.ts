@@ -1048,7 +1048,7 @@ export interface LyricsTiming {
 export interface Account {
   configured: boolean; // CLOUD_URL and GOOGLE_CLIENT_ID are set
   user: { email: string; name: string; picture: string } | null;
-  sync: { running: boolean; last: string; error: string; summary: string };
+  sync: { running: boolean; last: string; error: string; summary: string; stage: "" | "checking" | "syncing" | "stopping"; done: number; total: number }; // done/total: files in this stage
 }
 
 /** Where the library lives (crcontent/locations.py). */
@@ -1764,6 +1764,7 @@ export const api = {
   signInWithGoogle: () => request<{ url: string }>("/api/account/google", { method: "POST" }),
   signOut: () => request<Account>("/api/account/sign-out", { method: "POST" }),
   syncNow: () => request<Account>("/api/account/sync", { method: "POST" }),
+  stopSync: () => request<Account>("/api/account/sync/stop", { method: "POST" }),
   // moving a big library to another drive takes a while: no time limit
   moveLocations: (data: string, videos: string) =>
     request<Locations & { left_behind: number; restarting: boolean }>("/api/settings/locations", { method: "PUT", json: { data, videos }, timeout: 0 }),

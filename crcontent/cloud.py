@@ -191,22 +191,25 @@ def _sha(file: Path) -> str:
     return h.hexdigest()
 
 
-def scan(hashes: dict) -> dict[str, str]:
+def scan(hashes: dict, report: bool = False) -> dict[str, str]:
     """path -> sha256 of every synced file here. `hashes` (path -> [size, mtime_ns, sha]) skips re-reading files that
-    didn't change since the last scan, and is updated in place."""
+    didn't change since the last scan, and is updated in place. `report`: count the files checked in `status`."""
+    files = [(top, base, f) for top, base in _roots().items() if base.is_dir() for f in base.rglob("*")
+             if f.is_file() and not f.name.startswith(".") and not f.name.endswith(SKIP_SUFFIXES)]
+    if report:
+        status.update(stage="checking", done=0, total=len(files))
     found = {}
-    for top, base in _roots().items():
-        if not base.is_dir():
-            continue
-        for f in base.rglob("*"):
-            if not f.is_file() or f.name.startswith(".") or f.name.endswith(SKIP_SUFFIXES):
-                continue
-            path = f"{top}/{f.relative_to(base).as_posix()}"
-            st = f.stat()
-            known = hashes.get(path)
-            if not (known and known[0] == st.st_size and known[1] == st.st_mtime_ns):
-                known = hashes[path] = [st.st_size, st.st_mtime_ns, _sha(f)]
-            found[path] = known[2]
+    for top, base, f in files:
+        if report:
+            if _stop.is_set():
+                raise _Stopped
+            status["done"] += 1
+        path = f"{top}/{f.relative_to(base).as_posix()}"
+        st = f.stat()
+        known = hashes.get(path)
+        if not (known and known[0] == st.st_size and known[1] == st.st_mtime_ns):
+            known = hashes[path] = [st.st_size, st.st_mtime_ns, _sha(f)]
+        found[path] = known[2]
     for gone in set(hashes) - set(found):
         del hashes[gone]
     return found
@@ -245,7 +248,12 @@ def _conflict_name(path: str) -> str:
     return f"{stem}.{tag}.{ext}" if ext else f"{stem}.{tag}"
 
 
-status = {"running": False, "last": "", "error": "", "summary": ""}
+class _Stopped(Exception):
+    pass
+
+
+_stop = threading.Event()
+status = {"running": False, "last": "", "error": "", "summary": "", "stage": "", "done": 0, "total": 0}  # stage checking|syncing, done/total files
 
 
 def sync() -> dict:
@@ -255,10 +263,20 @@ def sync() -> dict:
         state = {"root": str(ROOT)}
     base, hashes = state.get("files", {}), state.get("hashes", {})
     remote = {f["path"]: f["sha256"] for f in _api("GET", "/files")["files"]}
-    local = scan(hashes)
+    try:
+        local = scan(hashes, report=True)
+    except _Stopped:  # keep the fingerprints made so far: the next sync skips those files
+        _write(STATE, {"root": str(ROOT), "files": base, "hashes": hashes})
+        return {}
     done = {"uploaded": 0, "downloaded": 0, "deleted": 0, "conflicts": 0, "failed": 0}
     new_base = {p: s for p, s in local.items() if remote.get(p) == s}
-    for action, path in plan(local, remote, base):
+    actions = plan(local, remote, base)
+    status.update(stage="syncing", done=0, total=len(actions))
+    for i, (action, path) in enumerate(actions):
+        if _stop.is_set():  # the rest stay as they were, so the next sync picks them up
+            new_base.update({p: base[p] for _, p in actions[i:] if p in base})
+            break
+        status["done"] += 1  # counted as it starts, so the bar moves on the first file
         try:
             if action == "upload":
                 _upload(path, local[path])
@@ -304,16 +322,26 @@ def _summary(done: dict) -> str:
     return ", ".join(parts) if parts else "Everything is up to date"
 
 
+def stop_sync() -> None:
+    """Stop the running sync after the file it is on (a file is never left half sent)."""
+    if status["running"]:
+        _stop.set()
+        status["stage"] = "stopping"
+
+
 def sync_in_background() -> bool:
     """Start a sync unless one is running. False when one already was."""
     with _lock:
         if status["running"]:
             return False
-        status.update(running=True, error="")
+        status.update(running=True, error="", stage="", done=0, total=0)
+        _stop.clear()
 
     def run():
         try:
-            status["summary"] = _summary(sync())
+            done = sync()
+            stopped = _stop.is_set()
+            status["summary"] = (f"Stopped ({_summary(done)})" if any(done.values()) else "Stopped") if stopped else _summary(done)
         except Exception as e:
             if not isinstance(e, CloudError):
                 traceback.print_exc()

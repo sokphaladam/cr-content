@@ -22,10 +22,9 @@ from pathlib import Path
 import requests
 
 URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-# A rolling alias, so it keeps working when Google retires a named model (gemini-2.5-flash already refuses new
-# accounts). Live test 2026-10-24: answers in 1-2 s with valid JSON. The regular Flash models gave better-thinking but
-# were slow or overloaded that day (up to 179 s, one 503): set LLM_MODEL=gemini-flash-latest in .env to try them.
-DEFAULT_MODEL = "gemini-flash-lite-latest"
+# A named model: pinned, so it won't change under us; update it when Google retires it (as gemini-2.5-flash was).
+# Before 2026-11-19 this was gemini-flash-lite-latest (faster, lighter); set LLM_MODEL in .env to go back.
+DEFAULT_MODEL = "gemini-3.8-flash"
 TIMEOUT = 180
 RETRIES = (2.0, 6.0)                # waits before the 2nd and 3rd attempt on 429 / 5xx
 _sleep = time.sleep

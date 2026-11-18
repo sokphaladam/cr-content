@@ -34,5 +34,7 @@ const child = spawn("npx", ["tauri", "dev", "--config", config, ...process.argv.
   shell: process.platform === "win32", // npx is npx.cmd on Windows
   env: { ...process.env, CRCONTENT_UI_PORT: String(port) },
 });
-child.on("exit", (code) => process.exit(code ?? 0));
-for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
+// the cloud sync server alongside (optional: it idles with a message when server/.env is missing)
+const cloud = spawn(process.execPath, [join(root, "frontend", "scripts", "cloud.mjs")], { cwd: root, stdio: "inherit" });
+child.on("exit", (code) => { cloud.kill(); process.exit(code ?? 0); });
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { child.kill(sig); cloud.kill(sig); });

@@ -382,12 +382,25 @@ function AccountRows() {
       </SettingRow>
       <SettingRow
         title="Sync"
-        hint={s.running ? "Syncing…" : s.error ? s.error : last ? `${s.summary}. Last synced ${last}.` : "Not synced yet."}
+        hint={s.running ? (s.stage === "stopping" ? "Stopping after this file…" : s.total ? `${s.stage === "checking" ? "Checking" : "Syncing"} ${s.done} of ${s.total} files…` : "Comparing files…") : s.error ? s.error : last ? `${s.summary}. Last synced ${last}.` : "Not synced yet."}
       >
-        <Button size="sm" loading={s.running} onClick={() => void act(api.syncNow)}>
-          Sync now
-        </Button>
+        {s.running ? (
+          <Button size="sm" loading={s.stage === "stopping"} onClick={() => void act(api.stopSync)}>
+            Stop
+          </Button>
+        ) : (
+          <Button size="sm" onClick={() => void act(api.syncNow)}>
+            Sync now
+          </Button>
+        )}
       </SettingRow>
+      {s.running && (
+        <div className="px-4 pb-4">
+          <div role="progressbar" aria-label="Syncing" aria-valuemin={0} aria-valuemax={s.total || undefined} aria-valuenow={s.total ? s.done : undefined} className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
+            <div className={`h-full rounded-full bg-cobalt transition-[width] duration-300 ease-linear ${s.total ? "" : "w-1/3 animate-pulse"}`} style={s.total ? { width: `${(s.done / s.total) * 100}%` } : undefined} />
+          </div>
+        </div>
+      )}
     </>
   );
 }

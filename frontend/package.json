@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently -k -n engine,web -c yellow,blue \"npm:dev:engine\" \"npm:dev:web\"",
+    "dev": "concurrently -k -n engine,web,cloud -c yellow,blue,magenta \"npm:dev:engine\" \"npm:dev:web\" \"npm:dev:cloud\"",
+    "dev:cloud": "node scripts/cloud.mjs",
     "dev:web": "next dev",
     "dev:engine": "node scripts/engine.mjs",
     "build": "next build",

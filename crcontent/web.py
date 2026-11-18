@@ -3788,6 +3788,12 @@ def account_sync():
     return _account_view()
 
 
+@app.post("/api/account/sync/stop")
+def account_sync_stop():
+    cloud.stop_sync()
+    return _account_view()
+
+
 # ---------- Settings (where the library is kept: crcontent/locations.py) ----------
 
 RESTART_CODE = 3  # same as app.py: under `app.py --reload` the parent process starts the new engine
