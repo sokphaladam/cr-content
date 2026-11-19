@@ -321,6 +321,31 @@ def sources(plan: DirectorPlan, cfg: dict) -> list[str]:
     return lf.sources_for(kind, cfg)
 
 
+def from_references(shot: Shot, refs: list[str], check: bool, client, history: bool, named: list[str],
+                    log) -> list[Footage]:
+    """The script's references for this shot, downloaded and checked like stock, best first (wrong subject left out)."""
+    from . import references
+
+    out = []
+    for ref in refs[:references.PER_SHOT]:
+        path = references.fetch(ref, log)
+        if not path:
+            continue
+        try:
+            v = look(path, shot, client, history) if check else None
+        except (OSError, ValueError, RuntimeError, KeyError) as e:
+            log(f"      ! {shot.id}: couldn't check reference {ref[:60]} ({type(e).__name__})")
+            v = None
+        kind = "photo" if path.suffix.lower() in IMAGE_EXTS else "video"
+        f = _scored(Footage(source="reference", kind=kind, file=str(path), page=ref if ref.startswith("http") else "",
+                            query=ref, author="from your script's references",
+                            raw={"source": "reference", "kind": kind, "id": ref}), shot, v, named)
+        if f.subject_score is None or f.subject_score >= MIN_SHOW:
+            out.append(f)
+    out.sort(key=lambda f: (TIER[f.match], -(f.subject_score or 0)))
+    return out
+
+
 def find(plan: DirectorPlan, media: Path | None, cfg: dict, shot_ids: list[str] | None = None, log=print,
          save=None, cancelled=lambda: False, client=None) -> DirectorPlan:
     """Footage for every shot (or `shot_ids`), skipping locked shots that already have some. `save(shot)` is called
@@ -339,6 +364,7 @@ def find(plan: DirectorPlan, media: Path | None, cfg: dict, shot_ids: list[str] 
     known = entities(plan) if history else []
     check = bool(cfg["footage"].get("check_subject", True)) and bool(os.getenv("GEMINI_API_KEY") or client)
     firsts = {s.scene_id: s.id for s in reversed(out.shots)}
+    scene_refs = {s.id: s.references for s in out.scenes}
     used = {f"{s.footage.source}-{s.footage.kind}-{s.footage.raw.get('id', '')}" for s in out.shots
             if s.footage and s.footage.source != "own"}
     lock = threading.Lock()
@@ -378,7 +404,12 @@ def find(plan: DirectorPlan, media: Path | None, cfg: dict, shot_ids: list[str] 
         else:
             best, tried = None, []
             named = [n for n in known if n.lower() in f"{shot.subject} {shot.visual_description}".lower()]
-            for query in (anchored(shot, queries(shot), known) if history else queries(shot)):
+            refs = from_references(shot, scene_refs.get(shot.scene_id, []), check, client, history, named, log)
+            if refs and refs[0].match in ("exact", "good", "unchecked"):  # the script's own reference shows it
+                best, tried = (None, refs[0]), refs[1:]
+            else:
+                tried = refs
+            for query in ([] if best else anchored(shot, queries(shot), known) if history else queries(shot)):
                 found = [m for m in lf.search(query, libs, width, shot.duration_seconds or 3, log, portrait)
                          if lf.key(m) not in used]
                 if history:  # the sources' priority beats size: an archive scan of the real thing over sharp stock

@@ -47,6 +47,22 @@ def _exit_with_parent(pid: int) -> None:
     os._exit(0)
 
 
+def _start_cloud_server() -> None:
+    """CLOUD_URL on this computer: run the cloud server inside the engine, so it starts and stops with the app."""
+    from urllib.parse import urlparse
+    url = urlparse(os.getenv("CLOUD_URL", "").strip())
+    if url.hostname not in ("localhost", "127.0.0.1"):
+        return
+    try:
+        from server.main import app as cloud_app  # source runs only: the installer never ships server/ or its secrets
+    except (ImportError, SystemExit) as e:
+        print(f"Cloud server not started: {e}", flush=True)
+        return
+    config = uvicorn.Config(cloud_app, host="127.0.0.1", port=url.port or 80, log_level="warning")
+    # daemon thread in the engine process: it dies with the engine, which dies with the app (--parent-pid)
+    threading.Thread(target=uvicorn.Server(config).run, daemon=True).start()
+
+
 def _serve_with_reload(port: int) -> None:
     """Run the engine in a child process and restart it whenever code in crcontent/ or web/ changes.
 
@@ -114,5 +130,6 @@ if __name__ == "__main__":
         _serve_with_reload(args.port)
     else:
         # graceful-shutdown cap: an open video stream must not block shutting down
+        _start_cloud_server()
         from crcontent.web import app
         uvicorn.run(app, host="127.0.0.1", port=args.port, timeout_graceful_shutdown=3)

@@ -27,7 +27,7 @@ from ..config import LLM_MODEL, OUTPUT_DIR
 from ..importer import _keywords
 from ..longform import footage as lf
 from ..render import duration
-from ..visuals import IMAGE_EXTS
+from ..visuals import IMAGE_EXTS, NARROW, media_size
 from . import hook, match, queries
 from .registry import Registry
 
@@ -242,6 +242,12 @@ def own_pick(path: Path, length: float, is_hook: bool, animal: str, plan: dict,
     rules (the animal moving, no logo or intro). The score is None when Gemini couldn't look at it."""
     chosen = {"source": "own", "kind": "photo" if path.suffix.lower() in IMAGE_EXTS else "video", "file": str(path),
               "page": "", "author": "you", "licence": "your own media", "licence_url": ""}
+    try:
+        w, h = media_size(path)
+        if w / h > NARROW:  # landscape or square: a 9:16 crop would cut most of it away, so show it whole
+            chosen["layout"] = "fit"
+    except Exception:
+        pass  # unreadable size: cropped as before
     flags = []
     scan = None
     if is_hook and chosen["kind"] == "video":

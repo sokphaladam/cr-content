@@ -144,8 +144,19 @@ def _api(method: str, path: str, **kw) -> dict:
     try:
         r = requests.request(method, f"{server()}{path}", headers={"Authorization": f"Bearer {token}"}, timeout=60, **kw)
     except requests.RequestException as e:
-        raise CloudError(f"Can't reach the cloud server ({type(e).__name__}).")
+        raise CloudError(_unreachable(e))
     return _reply(r)
+
+
+def _unreachable(e: Exception) -> str:
+    url = server()
+    if not url:
+        return "Cloud sync isn't set up: add CLOUD_URL to .env in the data folder."
+    if "localhost" in url or "127.0.0.1" in url:  # the desktop app never starts the server itself
+        return (f"Nothing is answering at {url}. The cloud server isn't running on this computer: start it with "
+                f"`uvicorn server.main:app --port {url.rsplit(':', 1)[-1] if url.count(':') > 1 else 80}`, "
+                f"or point CLOUD_URL at the deployed server.")
+    return f"Can't reach the cloud server at {url} ({type(e).__name__}). Check the connection and try again."
 
 
 # ---------- Sync ----------

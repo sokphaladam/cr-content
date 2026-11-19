@@ -249,7 +249,7 @@ document.addEventListener('click', async (e) => {
 });
 // your own clip for a beat: upload (or replace) it, or remove it to go back to the stock pick; the checks run again
 const busyAll = (on) => {
-  document.querySelectorAll('button.apply, button.remove, button.trimopen, button.trimcheck, button.trimuse, button.rec, button.voiceremove, button.setvoice, #approve').forEach((x) => { x.disabled = on; });
+  document.querySelectorAll('button.apply, button.remove, button.framing, button.trimopen, button.trimcheck, button.trimuse, button.rec, button.voiceremove, button.setvoice, #approve').forEach((x) => { x.disabled = on; });
   document.querySelectorAll('.mine input[type=file]').forEach((x) => { x.disabled = on; x.parentElement.classList.toggle('off', on); });
 };
 if (!live) busyAll(true);
@@ -474,6 +474,11 @@ document.querySelectorAll('.trim').forEach((box) => {
 });
 document.querySelectorAll('button.remove').forEach((b) => b.addEventListener('click', () => {
   if (live) changeClip(b.dataset.beat, 'DELETE', null, 'Going back to the stock clip');
+}));
+document.querySelectorAll('button.framing').forEach((b) => b.addEventListener('click', () => {
+  if (!live) return;
+  const form = new FormData(); form.append('layout', b.dataset.layout);
+  changeClip(b.dataset.beat, 'POST', form, 'Changing the framing', 'layout');
 }));
 btn.addEventListener('click', async () => {
   if (state !== 'ready' && !confirm(`This Short needs work (${reasons} reason(s) at the top). Render anyway?`)) return;
@@ -703,6 +708,10 @@ def page(job: Path, ep, tl, entries: list[dict], report: dict, frames: list[str]
                  f"<input class=\"clipfile\" type=\"file\" accept=\"video/*,image/*\" data-beat=\"{scene.n}\" hidden>"
                  f"{'Replace my clip' if mine else 'Upload your clip'}</label>"
                  + (f"<button class=\"remove\" data-beat=\"{scene.n}\">Remove my clip</button>" if mine else "")
+                 + ("" if c["source"] in PLACEHOLDERS else
+                    f"<button class=\"framing\" data-beat=\"{scene.n}\" data-layout=\"{'fill' if c.get('layout') == 'fit' else 'fit'}\" "
+                    f"title=\"Fit: the whole picture over a blurred copy. Fill: cropped to 9:16.\">"
+                    f"{'Fill the frame' if c.get('layout') == 'fit' else 'Fit whole picture'}</button>")
                  + "</div>")
         my_voice = recording(Path(report["media"]), scene.n)
         voice_html = (f"<div class=\"mine voicebox\">"

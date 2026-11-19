@@ -36,7 +36,7 @@ from .script import VideoScript, generate_script, suggest_queries, suggest_topic
 from .song import elevenlabs_key
 from .styles import FONTS, caption_catalog, catalog as style_catalog
 from .tts import is_voice, list_voices, synthesize
-from .visuals import IMAGE_EXTS, VIDEO_EXTS, FootagePicker, download_stock, project_path, search, stock_source
+from .visuals import IMAGE_EXTS, VIDEO_EXTS, FootagePicker, download_stock, enhance, project_path, search, stock_source
 
 addons.activate()  # the desktop app's AI add-on (torch, diffusers, Whisper), when it's installed
 WEB_DIR = CODE_DIR / "web"
@@ -496,7 +496,14 @@ def upload(file: UploadFile = File(...)):
     if ext not in IMAGE_EXTS | VIDEO_EXTS:
         raise HTTPException(400, "Use a photo (jpg, png, webp) or a video (mp4, mov, webm).")
     dest = UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}{ext}"
-    _save_upload(file, dest)
+    raw = dest.with_name(f"{dest.stem}.orig{ext}")
+    _save_upload(file, raw)
+    try:
+        dest = enhance(raw, dest)  # a low-res upload is upscaled and sharpened
+        raw.unlink()
+    except Exception as e:  # unreadable by Pillow/ffprobe: keep the upload as it came
+        print(f"Upload kept as is (couldn't enhance: {e})", flush=True)
+        raw.replace(dest)
     return _media_info(dest)
 
 
@@ -1489,6 +1496,9 @@ def script_video(req: ScriptVideoRequest):
         raise HTTPException(400, "A script written from research becomes a Short; long videos can't take it yet.")
 
     def tag(plan):  # the project remembers its channel profile (none: the general defaults, as before profiles)
+        from . import references
+
+        references.attach(plan, req.text)  # links and named sources in the script: tried as footage first
         if profile:
             plan.project.channel_profile_id, plan.project.channel_profile_version = profile.id, profile.version
         return plan
@@ -1510,7 +1520,10 @@ def script_video(req: ScriptVideoRequest):
             plan.project.target_seconds = req.target_seconds
             return _start_long(req.text, tag(plan), _choice(req)) | {"profile_note": profile_note}
     try:
-        script, lang, method = import_script(req.text, req.lang, use_claude=bool(os.getenv("GEMINI_API_KEY")))
+        from . import references
+
+        script, lang, method = import_script(references.strip(req.text), req.lang,
+                                             use_claude=bool(os.getenv("GEMINI_API_KEY")))
     except ValueError as e:
         raise HTTPException(422, str(e))
     plan = director_plan.from_scenes(script.title, req.format, lang, req.visual_style,
@@ -2627,6 +2640,20 @@ def shorts_beat_source(name: str, n: int):
     if not path.is_file():
         raise HTTPException(404, "That clip is gone.")
     return FileResponse(path)
+
+
+@app.post("/api/shorts/{name}/beats/{n}/layout")
+def shorts_beat_layout(name: str, n: int, layout: str = Form(...)):
+    """Beat `n`'s clip fills the frame (cropped) or fits whole over a blurred copy; the checks run again."""
+    from . import shorts
+
+    folder = _short_dir(name)
+    _short_idle(name)
+    try:
+        report = shorts.set_layout(folder, n, layout, log=lambda line: None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": report["status"]}
 
 
 @app.delete("/api/shorts/{name}/beats/{n}/clip")

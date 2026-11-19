@@ -970,6 +970,8 @@ export interface PostSuggestion {
   title: string;
   description: string;
   hashtags: string[];
+  score?: number; // local 0-100 check (English only), a stand-in for vidIQ's title score
+  issues?: string[]; // what lost points
 }
 
 export type ThumbStyle = "bold" | "box" | "stacked" | "designed" | "magazine"; // designed: a full layout Gemini draws; magazine: a one-cover video's character in front of huge words

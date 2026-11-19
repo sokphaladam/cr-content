@@ -294,7 +294,7 @@ def use_own_clip(job: Path, n: int, upload: Path, name: str, log=print) -> dict:
     """Beat `n` uses your clip or photo: saved as <media>/scene-NN.<ext> (replacing an earlier one), checked by the
     hook rules when it's the hook, and the pre-flight run again. The stock pick it replaces is kept, so removing your
     clip puts it back. Returns the new report."""
-    from ..visuals import IMAGE_EXTS, VIDEO_EXTS
+    from ..visuals import IMAGE_EXTS, VIDEO_EXTS, enhance
     from .footage import own_pick
 
     ext = Path(name).suffix.lower()
@@ -306,8 +306,7 @@ def use_own_clip(job: Path, n: int, upload: Path, name: str, log=print) -> dict:
         raise ValueError(f"There's no beat {n}.")
     media.mkdir(parents=True, exist_ok=True)
     _set_aside(media, n, (*VIDEO_EXTS, *IMAGE_EXTS))  # one clip per beat (your voice recording for it stays)
-    dest = media / f"scene-{n:02d}{ext}"
-    shutil.copy(upload, dest)
+    dest = enhance(upload, media / f"scene-{n:02d}{ext}")  # a low-res upload is upscaled and sharpened
     e = entries[n - 1]
     if e["chosen"]["source"] != "own":
         e["stock"] = {"chosen": e["chosen"], "match": e.get("match"), "flags": e["flags"]}
@@ -317,6 +316,20 @@ def use_own_clip(job: Path, n: int, upload: Path, name: str, log=print) -> dict:
                                                    ep.animal or ep.animal_search or "animal", shot)
     e["reuses_opening"] = False
     log(f"      beat {n}: your clip {dest.name}")
+    return _refresh(job, ep, tl, voices, entries, cfg, media, log)
+
+
+def set_layout(job: Path, n: int, layout: str, log=print) -> dict:
+    """Beat `n`'s clip "fill"s the 9:16 frame (cropped) or "fit"s whole over a blurred copy of itself. Returns the new
+    report."""
+    if layout not in ("fill", "fit"):
+        raise ValueError(f"Unknown layout {layout!r}.")
+    job = Path(job)
+    cfg, ep, tl, voices, entries, media = _load(job)
+    if not 1 <= n <= len(entries):
+        raise ValueError(f"There's no beat {n}.")
+    entries[n - 1]["chosen"]["layout"] = layout
+    log(f"      beat {n}: {layout}")
     return _refresh(job, ep, tl, voices, entries, cfg, media, log)
 
 

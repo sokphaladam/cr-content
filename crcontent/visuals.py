@@ -31,6 +31,54 @@ def is_image(path: Path) -> bool:
     return path.suffix.lower() in IMAGE_EXTS
 
 
+SHARP_SIDE = 1080  # an upload whose shorter side is under this gets upscaled and cleaned up
+NARROW = 0.7       # width / height above this is too wide for 9:16 (0.5625) to crop well: shown whole instead
+
+
+def media_size(path: Path) -> tuple[int, int]:
+    """(width, height) of a photo or a video's picture, rotation applied."""
+    if is_image(path):
+        from PIL import Image, ImageOps
+
+        with Image.open(path) as im:
+            return ImageOps.exif_transpose(im).size
+    import json
+
+    s = json.loads(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_streams", "-of", "json",
+                                   str(path)], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                  check=True).stdout)["streams"][0]
+    rot = next((abs(int(d["rotation"])) for d in s.get("side_data_list", []) if "rotation" in d), 0)
+    return (s["height"], s["width"]) if rot in (90, 270) else (s["width"], s["height"])
+
+
+def enhance(src: Path, dest: Path) -> Path:
+    """Copy an upload to `dest`; a low-resolution one is upscaled so its shorter side is SHARP_SIDE (Lanczos), lightly
+    denoised and sharpened on the way. A video comes back as .mp4 (`dest` with that suffix). Returns the file written.
+    shortcut: classic filters, not an AI upscaler; a real gain on soft footage only up to about 2x."""
+    import shutil
+
+    w, h = media_size(src)
+    scale = SHARP_SIDE / min(w, h)
+    if scale <= 1.05:
+        shutil.copy(src, dest)
+        return dest
+    W, H = round(w * scale / 2) * 2, round(h * scale / 2) * 2
+    if is_image(src):
+        from PIL import Image, ImageFilter, ImageOps
+
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            im = im.filter(ImageFilter.MedianFilter(3)) if scale > 2 else im  # very small: smooth JPEG blocks first
+            im.resize((W, H), Image.LANCZOS).filter(ImageFilter.UnsharpMask(1.4, 70, 2)).save(dest, quality=95)
+        return dest
+    dest = dest.with_suffix(".mp4")
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf",
+                    f"hqdn3d=1.5:1.5:6:6,scale={W}:{H}:flags=lanczos,cas=0.6,setsar=1,format=yuv420p",
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-c:a", "aac", "-b:a", "192k",
+                    "-movflags", "+faststart", str(dest)], stdin=subprocess.DEVNULL, capture_output=True, check=True)
+    return dest
+
+
 def pexels_key() -> str:
     return os.getenv("PEXELS_API_KEY", "").strip()
 

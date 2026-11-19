@@ -475,7 +475,15 @@ ${o.description}
               <li key={`${i}-${o.title}`} className={`grid gap-1.5 rounded-lg border p-2.5 ${isCurrent(o) ? "border-cobalt" : "border-line"}`}>
                 <span className="text-2xs font-semibold tracking-wide text-ink-soft uppercase">
                   {i === 0 ? `${o.angle} · Top pick` : o.angle}
+                  {o.score !== undefined && (
+                    <span className={o.score >= 90 ? "text-ok" : "text-warn"}> · Score {o.score}</span>
+                  )}
                 </span>
+                {!!o.issues?.length && (
+                  <ul className="m-0 list-disc pl-4 text-2xs text-ink-soft">
+                    {o.issues.map((x) => <li key={x}>{x}</li>)}
+                  </ul>
+                )}
                 <p lang={detail.lang} className="m-0 font-display text-md leading-snug font-bold">{o.title}</p>
                 <p lang={detail.lang} className="m-0 text-sm leading-snug whitespace-pre-wrap text-ink-soft">{o.description}</p>
                 <p className="m-0 text-sm leading-snug text-cobalt">{o.hashtags.map((h) => `#${h}`).join(" ")}</p>

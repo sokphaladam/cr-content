@@ -75,12 +75,26 @@ def duration(path: Path) -> float:
     return float(json.loads(out)["format"]["duration"])
 
 
+def _real_still(photo: Path) -> Path:
+    """`photo`, or a PNG copy of it when its name lies about its format (an AVIF or HEIC saved as .jpg): ffmpeg opens
+    those as a video container, which has no -framerate / -loop."""
+    fmt = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=format_name", "-of", "csv=p=0", str(photo)],
+                         stdin=subprocess.DEVNULL, capture_output=True, text=True).stdout.strip()
+    if not fmt or fmt == "image2" or fmt.endswith("_pipe"):
+        return photo
+    png = photo.with_name(f"{photo.stem}.still.png")
+    if not png.exists():
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(photo), "-frames:v", "1", str(png)],
+                       stdin=subprocess.DEVNULL, capture_output=True, check=True)
+    return png
+
+
 def _media_input(media: Path | None, length: float, start: float, size: tuple[int, int]) -> list[str]:
     """ffmpeg input args for a scene's clip (looped from `start`), photo (held for `length`) or, with no media,
     a slowly moving gradient."""
     W, H = size
     if media and media.suffix.lower() in IMAGE_EXTS:
-        return ["-framerate", str(FPS), "-loop", "1", "-t", f"{length:.3f}", "-i", str(media)]
+        return ["-framerate", str(FPS), "-loop", "1", "-t", f"{length:.3f}", "-i", str(_real_still(media))]
     if media:
         return ["-stream_loop", "-1", *(["-ss", f"{start:.3f}"] if start > 0 else []), "-i", str(media)]
     c0, c1, c2 = random.choice(GRADIENT_PALETTES)

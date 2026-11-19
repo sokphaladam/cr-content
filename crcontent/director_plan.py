@@ -102,6 +102,7 @@ class Scene(BaseModel):
     narration: str = ""  # the user's voiceover, never rewritten
     on_screen_text: str = ""
     visual_notes: str = ""
+    references: list[str] = []   # links / named sources from the pasted script (references.py), tried as footage first
     purpose: str = ""
     viewer_objective: str = ""
     emotion: str = ""

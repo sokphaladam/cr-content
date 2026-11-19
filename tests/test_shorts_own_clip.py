@@ -50,14 +50,15 @@ def test_your_clip_replaces_a_beat_and_can_be_removed(job, tmp_path):
     assert not (job / "approved.json").exists()                # a changed Short needs approving again
 
     shorts.use_own_clip(job, 1, mine, "second.mov", log=lambda m: None)   # a new upload sets the old one aside
-    assert (media / "scene-01.mov").exists() and not (media / "scene-01.mp4").exists()
+    # 640x360 is low-res: upscaled to 1080 tall and saved as .mp4, whatever it came in as
+    assert [f.name for f in media.glob("scene-01.*")] == ["scene-01.mp4"]
     assert len(list((media / "removed").iterdir())) == 1
     assert json.loads((job / "footage.json").read_text())[0]["stock"]["chosen"]["id"] == 7  # still the stock pick
 
     shorts.remove_own_clip(job, 1, log=lambda m: None)
     e = json.loads((job / "footage.json").read_text())[0]
     assert e["chosen"]["id"] == 7 and e["match"] == 5 and "stock" not in e
-    assert not (media / "scene-01.mov").exists() and len(list((media / "removed").iterdir())) == 2  # never deleted
+    assert not (media / "scene-01.mp4").exists() and len(list((media / "removed").iterdir())) == 2  # never deleted
 
 
 def test_your_voice_on_a_beat_sits_beside_your_clip(job, tmp_path, monkeypatch):

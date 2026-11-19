@@ -38,7 +38,7 @@ def beat_clip(chosen: dict, length: float, out: Path, size: tuple[int, int], loo
         from . import hook
         push = not hook.has_camera_move(path, start, length * speed)
     render_scene(path, None, length, out, start=start, size=size, look=look, bright=bright, focus=focus, push=push,
-                 speed=speed)
+                 speed=speed, layout=chosen.get("layout", "fill"))
 
 
 def frame_lengths(ends: list[float]) -> list[float]:

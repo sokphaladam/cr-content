@@ -1,5 +1,6 @@
 """Post text ideas: several polished title + description + hashtag packages for a finished video, from Gemini."""
 import json
+import re
 from pathlib import Path
 
 from . import llm
@@ -48,7 +49,10 @@ Titles:
   97 and "What This Fish Does When A Shark Bites 😱" 95, against "This Fish Chokes Sharks With Slime 😱" 84 and
   "Why Sharks Spit Out This Fish 🦈" 87. So: a plain "What happens when…" / "What this … does when…" setup, a
   concrete subject ("this fish", "a shark"), the reveal held back, one reaction emoji (😱 😳) at the end.
-  Make at least one option this shape.
+  History stories score the same way (2026-11-20, Dyatlov Pass Short): "What Happened When 9 Hikers Fled Their Tent
+  At Night 😳" 98, against "What Made 9 Hikers Cut Their Way Out Of Their Tent 😱" 89: ask what happened, never
+  what caused it ("What made…", "Why did…" score lower). Aim for 90+ on vidIQ: the FIRST option is always this
+  "What happens/happened when…" shape, with a number or a named subject in it.
 
 Descriptions:
 - Line 1 is a hook that works on its own; only about the first 125 characters show before "more". It never repeats
@@ -139,9 +143,56 @@ def suggest_posts(job: Path, lang: str, count: int = 5, idea: str = "",
         if not o["title"].strip():
             continue
         tags = [h.lstrip("#").replace(" ", "") for h in o["hashtags"] if h.strip("# ")]
-        out.append({"angle": o["angle"].strip(), "title": o["title"].strip(),
-                    "description": o["description"].strip(), "hashtags": tags})
+        p = {"angle": o["angle"].strip(), "title": o["title"].strip(), "description": o["description"].strip(),
+             "hashtags": tags}
+        if lang == "en":  # the rules are English patterns
+            p["score"], p["issues"] = check_post(p["title"], p["description"], tags)
+        out.append(p)
+    out.sort(key=lambda p: -p.get("score", 0))  # stable: unscored keeps Gemini's order
     return out[:count]
+
+
+EMOJI = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
+DEAD_TAGS = {"fyp", "viral", "foryou", "foryoupage", "trending"}
+
+
+def check_post(title: str, description: str, hashtags: list[str]) -> tuple[int, list[str]]:
+    """(0-100, what lost points): a local stand-in for vidIQ's title score, from the patterns that scored 90+ there
+    (see SYSTEM). shortcut: fixed rules, not vidIQ itself; re-check a few picks on vidIQ when the rules drift."""
+    score, issues = 100, []
+
+    def miss(points: int, why: str) -> None:
+        nonlocal score
+        score -= points
+        issues.append(why)
+
+    t = title.strip()
+    low = t.lower()
+    if not re.match(r"what (happens|happened) when|what (this|these|a|an|the) .+ (does|did|do) when", low):
+        miss(20, 'Title: no "What happens/happened when…" setup')
+    if re.match(r"(what made|why (did|do|does|is|are))\b", low):
+        miss(10, 'Title: asks for the cause ("What made…", "Why…")')
+    if not re.search(r"\d|\b(this|these)\b", low):
+        miss(10, "Title: no number or concrete subject")
+    if not 30 <= len(t) <= 60:
+        miss(10, f"Title: {len(t)} characters (30-60 reads best)")
+    emojis = EMOJI.findall(t)
+    if len(emojis) != 1 or not EMOJI.search(t[-2:]):
+        miss(10, "Title: needs exactly one reaction emoji, at the end")
+
+    lines = [line for line in description.strip().splitlines() if line.strip()]
+    first = lines[0] if lines else ""
+    title_words = set(re.findall(r"[a-z']{4,}", low))
+    first_words = set(re.findall(r"[a-z']{4,}", first.lower()))
+    if len(first) > 125 or (title_words and len(title_words & first_words) / len(title_words) >= 0.5):
+        miss(10, "Description: first line is over 125 characters or repeats the title")
+    if not 150 <= len(description.strip()) <= 400:
+        miss(10, f"Description: {len(description.strip())} characters (150-400)")
+    if not lines or "?" not in lines[-1]:
+        miss(10, "Description: doesn't end with a question")
+    if "#" in description or DEAD_TAGS & {h.lower() for h in hashtags}:
+        miss(10, "Hashtags inside the description, or dead tags (fyp, viral…)")
+    return max(score, 0), issues
 
 
 def write_post(job: Path, title: str, description: str, hashtags: list[str]) -> str:
